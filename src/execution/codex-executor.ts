@@ -39,17 +39,30 @@ export class CodexExecutor {
     child.stdout?.on("data", collect);
     child.stderr?.on("data", collect);
 
+    let timedOut = false;
+    let forceKillTimer: any;
     const exitCode = await new Promise<number>((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timeoutTimer = setTimeout(() => {
+        timedOut = true;
         child.kill("SIGTERM");
-        const killTimer = setTimeout(() => child.kill("SIGKILL"), 5000);
-        void killTimer;
-        reject(new RelayError("CODEX_TIMEOUT", "Codex execution timed out", 504));
+        forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 5000);
       }, this.timeoutMs);
-      child.on("error", (error: Error) => { clearTimeout(timer); reject(new RelayError("CODEX_FAILED", error.message, 502)); });
-      child.on("close", (code: number | null) => { clearTimeout(timer); resolve(code ?? 1); });
-    }).finally(async () => { await writeFile(outputPath, redactSensitiveText(output), { mode: 0o600 }); });
 
+      child.on("error", (error: Error) => {
+        clearTimeout(timeoutTimer);
+        if (forceKillTimer) clearTimeout(forceKillTimer);
+        reject(new RelayError("CODEX_FAILED", error.message, 502));
+      });
+      child.on("close", (code: number | null) => {
+        clearTimeout(timeoutTimer);
+        if (forceKillTimer) clearTimeout(forceKillTimer);
+        resolve(code ?? 1);
+      });
+    }).finally(async () => {
+      await writeFile(outputPath, redactSensitiveText(output), { mode: 0o600 });
+    });
+
+    if (timedOut) throw new RelayError("CODEX_TIMEOUT", "Codex execution timed out", 504);
     if (exitCode !== 0) throw new RelayError("CODEX_FAILED", `Codex exited with code ${exitCode}`, 502);
 
     let raw: string;

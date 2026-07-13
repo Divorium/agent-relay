@@ -1,0 +1,25 @@
+FROM debian:bookworm-slim
+
+ARG RUNNER_VERSION=2.325.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl git jq nodejs libicu72 libssl3 \
+  && rm -rf /var/lib/apt/lists/* \
+  && useradd --create-home --uid 10002 --shell /bin/bash runner \
+  && mkdir -p /actions-runner /runner/_work \
+  && chown -R runner:runner /actions-runner /runner
+
+USER runner
+WORKDIR /actions-runner
+
+RUN curl -fsSLo actions-runner.tar.gz \
+      "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
+  && tar -xzf actions-runner.tar.gz \
+  && rm actions-runner.tar.gz
+
+COPY --chown=runner:runner runner/entrypoint.sh /entrypoint.sh
+COPY --chown=runner:runner runner/client.mjs /runner/client.mjs
+
+ENTRYPOINT ["/entrypoint.sh"]

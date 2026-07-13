@@ -94,5 +94,6 @@ jobs:
             git --version &&
             test -x /entrypoint.sh &&
             test -x /runner/client.mjs &&
+            test -x /runner/resolve-pr.mjs &&
             test -x /runner/finalize.sh
           '

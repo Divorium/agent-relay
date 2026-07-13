@@ -69,11 +69,11 @@ The current `MAX_OUTPUT_BYTES` behavior truncates the canonical Relay log and co
 
 Keep the existing rule that secrets must not be persisted or returned by Relay. Raw output in this plan means no semantic parsing or reformatting; it does not remove the current redaction boundary.
 
-Adapt `src/security/redaction.ts` for incremental output. Secret patterns may be divided across adjacent chunks, so applying the current function independently to each chunk is insufficient. Implement a bounded overlap buffer that retains enough trailing text to recognize supported secret patterns across chunk boundaries, emits the safe prefix, and flushes the final remainder when both streams close. Do not retain the complete log in memory.
+Adapt `src/security/redaction.ts` for incremental output. Secret patterns may be divided across adjacent chunks, so applying the current function independently to each chunk is insufficient. Do not claim that a fixed overlap alone can handle the existing unbounded token patterns. Implement a bounded streaming redactor with explicit states: retain only the short prefix needed to recognize a supported secret form; when a secret prefix is recognized, emit `[REDACTED]` once and discard matching token characters until the pattern terminator; then resume ordinary output. Bound every candidate-prefix buffer and handle an unterminated token without retaining its complete value. Flush safe pending text when both streams close. Do not retain the complete log or a complete secret in memory.
 
 The persisted log, the HTTP output response, the runner archive, and the GitHub live log must all contain the same redacted byte sequence. Never stream unredacted bytes first and redact them later.
 
-If preserving arbitrary binary bytes conflicts with text redaction, treat Codex output as UTF-8 text, use a streaming `TextDecoder`, preserve incomplete multibyte sequences between chunks, and replace invalid terminal sequences deterministically. Cover this behavior with tests.
+Treat Codex output as UTF-8 text for redaction. Use one streaming `TextDecoder` per child pipe so an incomplete stdout code point is never completed with stderr bytes, preserve incomplete multibyte sequences between chunks from the same pipe, and replace invalid terminal sequences deterministically. Feed decoded text from both pipes into the single serialized redaction-and-append queue in callback arrival order. Cover this behavior with tests.
 
 ### 3. Raw output HTTP contract
 
@@ -105,7 +105,7 @@ A short poll is sufficient. Do not hold an HTTP response open indefinitely. The 
 
 ### 4. Job metadata and persistence
 
-Keep `JobRecord.outputPath` internal to Relay. Do not expose it in a new client-controlled request field.
+The client must never supply an output filesystem path. Resolve the output file from the server-owned `JobRecord.outputPath`; do not add a path field to the create-job request or the new output-read contract. Existing job-response serialization is outside this task unless it must be narrowed to preserve this boundary.
 
 The output endpoint must resolve the job through `JobService`/`JobStore`, then read only that job's known output file. Reading an output file while it is being appended must be supported. Handle a just-created job whose output file does not yet exist as an empty output, not as a server error.
 
@@ -309,6 +309,18 @@ The work is accepted only when all of these statements have code and test or liv
 - [ ] Update documentation and example workflow.
 - [ ] Complete the real Draft-to-Ready-to-Draft-to-Ready acceptance exercise.
 - [ ] Perform the final point-by-point review and resolve every finding.
+
+## Pre-publication review record
+
+The plan was reviewed before publication against the current executor, API, runner, workflow, and `.agent/PLANS.md`. The review corrected these issues:
+
+- replaced the original structured-event proposal with ordinary stdout/stderr transport;
+- removed the contradiction between a complete archive and the existing `MAX_OUTPUT_BYTES` truncation;
+- replaced an insufficient fixed-overlap redaction design with a bounded streaming state machine for unbounded token patterns;
+- required separate UTF-8 decoders for stdout and stderr before serialized redaction;
+- corrected the output-path wording so the client cannot choose a filesystem path without falsely asserting that current job responses already hide every internal path.
+
+No unresolved plan finding remains at publication time. Implementation discoveries and later review findings must still be recorded under Surprises & Discoveries and fixed before completion.
 
 ## Decision Log
 

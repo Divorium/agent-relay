@@ -1,6 +1,9 @@
 name: Agent Relay
 
 on:
+  pull_request:
+    types:
+      - ready_for_review
   workflow_dispatch:
     inputs:
       pr_number:
@@ -26,11 +29,16 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: agent-relay-${{ github.repository }}-pr-${{ inputs.pr_number }}
+  group: agent-relay-${{ github.repository }}-pr-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: false
 
 jobs:
   codex:
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        github.event.pull_request.head.repo.full_name == github.repository
+      }}
     runs-on: [self-hosted, agent-relay]
     steps:
       - name: Resolve ready pull request
@@ -39,7 +47,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ inputs.pr_number }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
         run: node /runner/resolve-pr.mjs
 
       - uses: actions/checkout@v4
@@ -55,6 +63,78 @@ jobs:
           EXPECTED_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD_SHA}"
 
+      - name: Resolve execution request
+        id: request
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PLAN_PATH: ${{ inputs.plan_path }}
+          INPUT_MODE: ${{ inputs.mode }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { access, appendFile } from "node:fs/promises";
+          import { spawnSync } from "node:child_process";
+
+          const eventName = process.env.EVENT_NAME;
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!outputPath) throw new Error("GITHUB_OUTPUT is required");
+
+          const validatePlanPath = (value) => {
+            if (
+              typeof value !== "string" ||
+              !/^docs\/exec-plans\/active\/[A-Za-z0-9._/-]+\.md$/.test(value) ||
+              value.split("/").includes("..")
+            ) {
+              throw new Error("ExecPlan must be a safe Markdown path below docs/exec-plans/active");
+            }
+            return value;
+          };
+
+          let planPath;
+          let mode;
+          if (eventName === "pull_request") {
+            const baseSha = process.env.PR_BASE_SHA ?? "";
+            const headSha = process.env.PR_HEAD_SHA ?? "";
+            if (!/^[0-9a-f]{40}$/.test(baseSha) || !/^[0-9a-f]{40}$/.test(headSha)) {
+              throw new Error("Pull request base and head SHAs are required");
+            }
+            const diff = spawnSync(
+              "git",
+              [
+                "diff",
+                "--name-only",
+                "--diff-filter=AMR",
+                baseSha,
+                headSha,
+                "--",
+                "docs/exec-plans/active/*.md",
+              ],
+              { encoding: "utf8" },
+            );
+            if (diff.status !== 0) throw new Error(diff.stderr || "Unable to inspect pull request plans");
+            const candidates = [...new Set(diff.stdout.split("\n").filter(Boolean).map(validatePlanPath))];
+            if (candidates.length !== 1) {
+              throw new Error(`Expected exactly one changed active ExecPlan, found ${candidates.length}`);
+            }
+            [planPath] = candidates;
+            mode = "implement";
+          } else if (eventName === "workflow_dispatch") {
+            planPath = validatePlanPath(process.env.INPUT_PLAN_PATH ?? "");
+            mode = process.env.INPUT_MODE ?? "";
+            if (!["implement", "revise", "finalize"].includes(mode)) {
+              throw new Error("Mode must be implement, revise, or finalize");
+            }
+          } else {
+            throw new Error(`Unsupported event: ${eventName}`);
+          }
+
+          await access(planPath);
+          await appendFile(outputPath, `plan_path=${planPath}\nmode=${mode}\n`, "utf8");
+          console.log(`Resolved ${mode} request for ${planPath}`);
+          NODE
+
       - name: Exclude relay artifact
         shell: bash
         run: |
@@ -67,8 +147,8 @@ jobs:
         continue-on-error: true
         shell: bash
         env:
-          AGENT_RELAY_PLAN_PATH: ${{ inputs.plan_path }}
-          AGENT_RELAY_MODE: ${{ inputs.mode }}
+          AGENT_RELAY_PLAN_PATH: ${{ steps.request.outputs.plan_path }}
+          AGENT_RELAY_MODE: ${{ steps.request.outputs.mode }}
           AGENT_RELAY_REQUEST_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -o pipefail

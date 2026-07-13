@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - agent/define-agent-relay-mvp
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose configuration
+        env:
+          RUNNER_TOKEN: placeholder
+          RUNNER_REPOSITORY_URL: https://github.com/owner/repository
+          RUNNER_NAME: agent-relay-ci
+          RUNNER_LABELS: agent-relay
+          AGENT_RELAY_TOKEN: placeholder-relay-token
+          HOST_CODEX_DIR: /tmp/codex
+          HOST_USER_ID: "1000"
+          HOST_GROUP_ID: "1000"
+        run: |
+          mkdir -p /tmp/codex
+          docker compose config
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Agent Relay image
+        run: docker build --tag agent-relay:ci .
+      - name: Verify required toolchain
+        run: docker run --rm --entrypoint /bin/bash agent-relay:ci /app/scripts/toolchain-smoke.sh
+      - name: Verify excluded tools
+        run: |
+          if docker run --rm --entrypoint /bin/bash agent-relay:ci -lc 'command -v ssh'; then
+            echo 'OpenSSH must not be installed' >&2
+            exit 1
+          fi
+          if docker run --rm --entrypoint /bin/bash agent-relay:ci -lc 'command -v dotnet'; then
+            echo '.NET SDK must not be installed' >&2
+            exit 1
+          fi

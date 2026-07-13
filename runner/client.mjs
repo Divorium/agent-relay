@@ -6,6 +6,7 @@ const baseUrl = process.env.AGENT_RELAY_URL ?? "http://agent-relay:8080";
 const token = process.env.AGENT_RELAY_TOKEN;
 if (!token) throw new Error("AGENT_RELAY_TOKEN is required");
 const workspace = process.env.GITHUB_WORKSPACE;
+const workspaceRoot = process.env.AGENT_RELAY_WORKSPACE_ROOT ?? "/runner/_work";
 const planPath = process.env.AGENT_RELAY_PLAN_PATH;
 const mode = process.env.AGENT_RELAY_MODE ?? "implement";
 const requestId = process.env.AGENT_RELAY_REQUEST_ID ?? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
@@ -120,7 +121,8 @@ async function fetchJson(url, options = {}) {
   }
 }
 
-const workspacePrefix = "/runner/_work/";
+const normalizedRoot = workspaceRoot.replace(/\/$/, "");
+const workspacePrefix = `${normalizedRoot}/`;
 if (!workspace.startsWith(workspacePrefix)) throw new Error(`GITHUB_WORKSPACE must be below ${workspacePrefix}`);
 const relativeWorkspace = workspace.slice(workspacePrefix.length);
 if (!relativeWorkspace) throw new Error("GITHUB_WORKSPACE does not identify a repository workspace");

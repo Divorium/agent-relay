@@ -22,6 +22,7 @@ RUN apt-get update \
     python3 python3-pip python3-venv \
     build-essential clang cmake pkg-config \
     zip unzip xz-utils zstd rsync file findutils diffutils \
+  && apt-get purge -y openssh-client \
   && rm -rf /var/lib/apt/lists/* \
   && git lfs install --system \
   && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -C /usr/local -xz \

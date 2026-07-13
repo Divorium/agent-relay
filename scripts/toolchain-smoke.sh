@@ -33,7 +33,7 @@ file --version
 find --version
 diff --version
 codex --version
-codex exec --sandbox danger-full-access --ask-for-approval never --help >/dev/null
+codex --ask-for-approval never exec --sandbox danger-full-access --help >/dev/null
 
 if command -v ssh >/dev/null 2>&1; then
   echo "OpenSSH must not be installed" >&2

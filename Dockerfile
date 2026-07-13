@@ -23,22 +23,22 @@ RUN apt-get update \
   && git lfs install --system \
   && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -C /usr/local -xz \
   && npm install --global "typescript@${TYPESCRIPT_VERSION}" @openai/codex \
-  && groupadd --gid "${GROUP_ID}" agent \
-  && useradd --create-home --uid "${USER_ID}" --gid "${GROUP_ID}" --shell /bin/bash agent \
+  && groupadd --non-unique --gid "${GROUP_ID}" agent \
+  && useradd --non-unique --create-home --uid "${USER_ID}" --gid "${GROUP_ID}" --shell /bin/bash agent \
   && mkdir -p /app /runner/_work /var/lib/agent-relay \
-  && chown -R agent:agent /app /runner /var/lib/agent-relay
+  && chown -R agent:agent /app /runner /var/lib/agent-relay /home/agent
 
 USER agent
 WORKDIR /app
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
 
-COPY --chown=agent:agent package.json tsconfig.json ./
+COPY --chown=agent:agent package.json package-lock.json tsconfig.json ./
 COPY --chown=agent:agent types ./types
 COPY --chown=agent:agent src ./src
 COPY --chown=agent:agent scripts ./scripts
 
-RUN chmod +x scripts/toolchain-smoke.sh && npm run build
+RUN chmod +x scripts/toolchain-smoke.sh && npm ci && npm run build
 
 EXPOSE 8080
 CMD ["node", "dist/src/server.js"]

@@ -39,4 +39,4 @@ Run all repository checks, including TypeScript checks, tests, Compose validatio
 
 Do not mark the work complete when tests fail. Do not weaken tests to make them pass.
 
-Bootstrap trigger: 2026-07-13T19:00:00+02:00.
+Bootstrap trigger: diagnostic retry 2.

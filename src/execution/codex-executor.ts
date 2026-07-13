@@ -25,16 +25,30 @@ export class CodexExecutor {
     await writeFile(outputPath, "", { mode: 0o600 });
 
     const prompt = buildCodexPrompt(request, ".agent-relay/result.json");
-    const child = spawn(this.command, ["exec", "--cd", workspace, prompt], {
+    const child = spawn(this.command, [
+      "exec",
+      "--sandbox",
+      "danger-full-access",
+      "--ask-for-approval",
+      "never",
+      "--cd",
+      workspace,
+      prompt,
+    ], {
       cwd: workspace,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let output = "";
+    const outputChunks: any[] = [];
+    let outputBytes = 0;
     const collect = (chunk: any): void => {
-      if (output.length >= this.maxOutputBytes) return;
-      output += String(chunk).slice(0, this.maxOutputBytes - output.length);
+      if (outputBytes >= this.maxOutputBytes) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      const remaining = this.maxOutputBytes - outputBytes;
+      const accepted = buffer.length > remaining ? buffer.subarray(0, remaining) : buffer;
+      outputChunks.push(accepted);
+      outputBytes += accepted.length;
     };
     child.stdout?.on("data", collect);
     child.stderr?.on("data", collect);
@@ -59,6 +73,7 @@ export class CodexExecutor {
         resolve(code ?? 1);
       });
     }).finally(async () => {
+      const output = Buffer.concat(outputChunks, outputBytes).toString("utf8");
       await writeFile(outputPath, redactSensitiveText(output), { mode: 0o600 });
     });
 

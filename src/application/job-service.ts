@@ -29,10 +29,14 @@ export class JobService {
   async create(request: CreateJobRequest): Promise<JobRecord> {
     const existing = await this.store.findByRequestId(request.requestId);
     if (existing) {
-      if (!sameRequest(existing.request, request)) throw new RelayError("REQUEST_ID_CONFLICT", "requestId was already used with different fields", 409);
+      if (!sameRequest(existing.request, request)) {
+        throw new RelayError("REQUEST_ID_CONFLICT", "requestId was already used with different fields", 409);
+      }
       return existing;
     }
-    if (this.activeJobId || this.acceptingJob) throw new RelayError("JOB_ALREADY_RUNNING", "Another Codex job is already running", 409);
+    if (this.activeJobId || this.acceptingJob) {
+      throw new RelayError("JOB_ALREADY_RUNNING", "Another Codex job is already running", 409);
+    }
 
     this.acceptingJob = true;
     try {
@@ -65,31 +69,39 @@ export class JobService {
   }
 
   private async execute(job: JobRecord, workspace: string): Promise<void> {
-    const started = new Date().toISOString();
-    const running: JobRecord = { ...job, status: "running", startedAt: started, updatedAt: started };
-    await this.store.save(running);
+    let current = job;
     try {
+      const started = new Date().toISOString();
+      current = { ...job, status: "running", startedAt: started, updatedAt: started };
+      await this.store.save(current);
+
       const outcome = await this.executor.run(job.request, workspace, job.outputPath);
       const finished = new Date().toISOString();
       await this.store.save({
-        ...running,
+        ...current,
         status: outcome.result.status,
         exitCode: outcome.exitCode,
         finishedAt: finished,
         updatedAt: finished,
       });
     } catch (error) {
-      const relayError = error instanceof RelayError ? error : new RelayError("INTERNAL_ERROR", "Unexpected job failure", 500);
+      const relayError = error instanceof RelayError
+        ? error
+        : new RelayError("INTERNAL_ERROR", "Unexpected job failure", 500);
       const finished = new Date().toISOString();
       const status = relayError.code === "CODEX_TIMEOUT" ? "timed_out" : "failed";
-      await this.store.save({
-        ...running,
-        status,
-        finishedAt: finished,
-        updatedAt: finished,
-        errorCode: relayError.code,
-        errorMessage: relayError.message,
-      });
+      try {
+        await this.store.save({
+          ...current,
+          status,
+          finishedAt: finished,
+          updatedAt: finished,
+          errorCode: relayError.code,
+          errorMessage: relayError.message,
+        });
+      } catch {
+        // The active lock must still be released when persistence is unavailable.
+      }
     } finally {
       if (this.activeJobId === job.id) this.activeJobId = undefined;
     }

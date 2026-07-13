@@ -22,11 +22,11 @@ test("CodexExecutor runs a real child process with explicit permissions, validat
   const executable = join(root, "fake-codex");
   await writeFile(executable, `#!/bin/sh
 set -eu
-[ "$1" = "exec" ]
-[ "$2" = "--sandbox" ]
-[ "$3" = "danger-full-access" ]
-[ "$4" = "--ask-for-approval" ]
-[ "$5" = "never" ]
+[ "$1" = "--ask-for-approval" ]
+[ "$2" = "never" ]
+[ "$3" = "exec" ]
+[ "$4" = "--sandbox" ]
+[ "$5" = "danger-full-access" ]
 [ "$6" = "--cd" ]
 [ "$7" = "${workspace}" ]
 printf '%s\n' 'authorization: Bearer abcdefghijklmnopqrstuvwxyz'

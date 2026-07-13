@@ -12,6 +12,7 @@ function sameRequest(a: CreateJobRequest, b: CreateJobRequest): boolean {
 
 export class JobService {
   private activeJobId: string | undefined;
+  private acceptingJob = false;
 
   constructor(
     private readonly workspaceRoot: string,
@@ -31,25 +32,30 @@ export class JobService {
       if (!sameRequest(existing.request, request)) throw new RelayError("REQUEST_ID_CONFLICT", "requestId was already used with different fields", 409);
       return existing;
     }
-    if (this.activeJobId) throw new RelayError("JOB_ALREADY_RUNNING", "Another Codex job is already running", 409);
+    if (this.activeJobId || this.acceptingJob) throw new RelayError("JOB_ALREADY_RUNNING", "Another Codex job is already running", 409);
 
-    const workspace = await resolveWorkspace(this.workspaceRoot, request.workspace);
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    const job: JobRecord = {
-      id,
-      request,
-      status: "accepted",
-      createdAt: now,
-      updatedAt: now,
-      resultPath: join(workspace, ".agent-relay", "result.json"),
-      outputPath: join(this.stateDir, "logs", `${id}.log`),
-    };
-    await this.store.save(job);
-    await this.store.index(job);
-    this.activeJobId = id;
-    void this.execute(job, workspace);
-    return job;
+    this.acceptingJob = true;
+    try {
+      const workspace = await resolveWorkspace(this.workspaceRoot, request.workspace);
+      const id = randomUUID();
+      const now = new Date().toISOString();
+      const job: JobRecord = {
+        id,
+        request,
+        status: "accepted",
+        createdAt: now,
+        updatedAt: now,
+        resultPath: join(workspace, ".agent-relay", "result.json"),
+        outputPath: join(this.stateDir, "logs", `${id}.log`),
+      };
+      await this.store.save(job);
+      await this.store.index(job);
+      this.activeJobId = id;
+      void this.execute(job, workspace);
+      return job;
+    } finally {
+      this.acceptingJob = false;
+    }
   }
 
   async get(id: string): Promise<JobRecord> {

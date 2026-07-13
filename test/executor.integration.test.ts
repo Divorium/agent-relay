@@ -17,16 +17,20 @@ async function createRoot(name: string) {
   return { root, workspace, outputPath };
 }
 
-test("CodexExecutor runs a real child process, validates its result and redacts output", async () => {
+test("CodexExecutor runs a real child process with explicit permissions, validates its result and redacts output", async () => {
   const { root, workspace, outputPath } = await createRoot("executor");
   const executable = join(root, "fake-codex");
   await writeFile(executable, `#!/bin/sh
 set -eu
 [ "$1" = "exec" ]
-[ "$2" = "--cd" ]
-[ "$3" = "${workspace}" ]
+[ "$2" = "--sandbox" ]
+[ "$3" = "danger-full-access" ]
+[ "$4" = "--ask-for-approval" ]
+[ "$5" = "never" ]
+[ "$6" = "--cd" ]
+[ "$7" = "${workspace}" ]
 printf '%s\n' 'authorization: Bearer abcdefghijklmnopqrstuvwxyz'
-cat > "$3/.agent-relay/result.json" <<'JSON'
+cat > "$7/.agent-relay/result.json" <<'JSON'
 {
   "schemaVersion": 1,
   "requestId": "${requestId}",

@@ -3,6 +3,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.runner
+      args:
+        USER_ID: ${HOST_UID:-1000}
+        GROUP_ID: ${HOST_GID:-1000}
     restart: unless-stopped
     environment:
       RUNNER_TOKEN: ${RUNNER_TOKEN}
@@ -23,6 +26,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        USER_ID: ${HOST_UID:-1000}
+        GROUP_ID: ${HOST_GID:-1000}
     restart: unless-stopped
     environment:
       AGENT_RELAY_TOKEN: ${AGENT_RELAY_TOKEN}

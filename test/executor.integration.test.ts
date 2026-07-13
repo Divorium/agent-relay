@@ -44,8 +44,8 @@ set -eu
 [ "$5" = "danger-full-access" ]
 [ "$6" = "--cd" ]
 [ "$7" = "${workspace}" ]
-[ -z "${AGENT_RELAY_TOKEN:-}" ]
-[ -z "${GITHUB_TOKEN:-}" ]
+[ -z "\${AGENT_RELAY_TOKEN:-}" ]
+[ -z "\${GITHUB_TOKEN:-}" ]
 printf '%s\n' 'authorization: Bearer abcdefghijklmnopqrstuvwxyz'
 cat > "$7/.agent-relay/result.json" <<'JSON'
 {

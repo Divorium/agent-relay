@@ -116,13 +116,24 @@ test("foreign head repository is rejected", async () => {
   assert.equal(result.output, "");
 });
 
-test("production workflow resolves readiness before checkout and Agent Relay", async () => {
+test("production workflow starts on plan approval and preserves manual recovery", async () => {
   const workflow = await readFile(join(process.cwd(), ".github", "workflows", "agent-relay.yml"), "utf8");
   const resolverIndex = workflow.indexOf("node /runner/resolve-pr.mjs");
   const checkoutIndex = workflow.indexOf("actions/checkout@v4");
+  const requestIndex = workflow.indexOf("Resolve execution request");
   const relayIndex = workflow.indexOf("node /runner/client.mjs");
+
+  assert.match(workflow, /pull_request:\s*\n\s*types:\s*\n\s*- ready_for_review/);
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.doesNotMatch(workflow, /\n\s*- synchronize\s*$/m);
+  assert.match(workflow, /github\.event\.pull_request\.number \|\| inputs\.pr_number/);
+  assert.match(workflow, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
+  assert.match(workflow, /Expected exactly one changed active ExecPlan/);
+  assert.match(workflow, /AGENT_RELAY_PLAN_PATH: \$\{\{ steps\.request\.outputs\.plan_path \}\}/);
+  assert.match(workflow, /AGENT_RELAY_MODE: \$\{\{ steps\.request\.outputs\.mode \}\}/);
   assert.ok(resolverIndex >= 0);
   assert.ok(checkoutIndex > resolverIndex);
-  assert.ok(relayIndex > checkoutIndex);
+  assert.ok(requestIndex > checkoutIndex);
+  assert.ok(relayIndex > requestIndex);
   assert.doesNotMatch(workflow, /inputs\.branch/);
 });

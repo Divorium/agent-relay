@@ -159,13 +159,13 @@ RUNNER_NAME=agent-relay-runner
 RUNNER_LABELS=agent-relay
 AGENT_RELAY_TOKEN=
 HOST_CODEX_DIR=/absolute/path/to/.codex
-HOST_USER_ID=1000
-HOST_GROUP_ID=1000
+HOST_UID=1000
+HOST_GID=1000
 CODEX_TIMEOUT_MS=21600000
 MAX_OUTPUT_BYTES=10000000
 ```
 
-`HOST_USER_ID` and `HOST_GROUP_ID` should match the owner of the mounted `~/.codex` directory and workspace files.
+`HOST_UID` and `HOST_GID` should match the owner of the mounted `~/.codex` directory and workspace files.
 
 ## Build and validation
 

@@ -27,13 +27,14 @@ Running separate deployments for other repositories is a future operational use 
 2. The pull request contains one active implementation plan and, later, the implementation itself.
 3. ChatGPT dispatches the repository's GitHub Actions workflow.
 4. The self-hosted runner checks out the actual pull request branch into the shared workspace.
-5. The runner sends an authenticated request to Agent Relay over the private Compose network.
+5. The runner prepares a fixed, untracked result location and sends an authenticated request to Agent Relay over the private Compose network.
 6. Agent Relay starts a fresh non-interactive `codex exec` process in that existing workspace.
 7. Codex reads the repository's `AGENTS.md` instructions and active plan, changes files, updates the plan, and runs validation available from its container.
-8. Agent Relay returns the execution result to the runner.
-9. The runner inspects the worktree, creates a commit, and pushes it to the same pull request branch using the GitHub Actions job credentials.
-10. ChatGPT reviews the updated pull request.
-11. The same workflow can be dispatched again for corrections and final plan completion.
+8. Before finishing, Codex writes a structured result file for the runner containing the proposed commit message and execution summary.
+9. Agent Relay returns the execution result and result-file location to the runner.
+10. The runner validates the result file and actual worktree, removes the result file, creates a commit, and pushes it to the same pull request branch using the GitHub Actions job credentials.
+11. ChatGPT reviews the updated pull request.
+12. The same workflow can be dispatched again for corrections and final plan completion.
 
 ```text
 ChatGPT
@@ -41,7 +42,8 @@ ChatGPT
    -> GitHub Actions workflow
    -> self-hosted runner: checkout
    -> Agent Relay: codex exec in shared workspace
-   -> self-hosted runner: commit and push
+   -> Codex: result.json
+   -> self-hosted runner: validate, commit and push
    -> ChatGPT review
 ```
 
@@ -54,10 +56,12 @@ The runner is responsible for:
 - registering with the configured target repository;
 - checking out the pull request branch;
 - exposing the checked-out repository through the shared workspace volume;
+- preparing the controlled result-file location;
 - sending the execution request to Agent Relay;
 - waiting for the terminal result;
+- validating the Codex result file and actual worktree;
 - configuring the commit author;
-- committing changed files;
+- committing changed files with the validated Codex-proposed commit message;
 - pushing to the pull request branch with the GitHub Actions job token;
 - reporting job success or failure to GitHub.
 
@@ -67,9 +71,11 @@ Agent Relay is responsible for:
 
 - exposing a private authenticated HTTP API;
 - validating that the requested workspace is inside the shared workspace root;
+- deriving a controlled result-file path for the job;
 - starting a fresh `codex exec` process in that workspace;
+- instructing Codex to write the result file before finishing;
 - streaming and retaining execution output needed by the runner;
-- returning a clear terminal status and exit information;
+- returning a clear terminal status, exit information, and result-file location;
 - preventing overlapping Codex executions inside the single deployment.
 
 Agent Relay does not clone repositories, manage branches, create commits, push changes, call the GitHub API, select SSH keys, or store GitHub credentials.
@@ -83,9 +89,55 @@ Codex is responsible for:
 - editing code and documentation;
 - updating the active plan as work progresses;
 - running tests and checks available in its execution environment;
-- leaving a coherent worktree for the runner to commit.
+- leaving a coherent worktree for the runner to commit;
+- writing the required structured result file before ending the execution.
 
 Codex does not receive a GitHub token or SSH key and does not push changes.
+
+## Codex result file
+
+Codex must write one machine-readable JSON file before completing a job. The initial contract uses:
+
+```text
+.agent-relay/result.json
+```
+
+The path is fixed by Agent Relay and is not caller-controlled. The runner creates the directory and excludes it locally through `.git/info/exclude`. The runner deletes the result file before staging repository changes, so the artifact is never committed to the target repository.
+
+The initial schema contains:
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "completed",
+  "shouldCommit": true,
+  "commitMessage": "Implement the active ExecPlan",
+  "summary": "Implemented the requested behavior and updated the active plan.",
+  "validation": [
+    {
+      "command": "npm test",
+      "status": "passed",
+      "exitCode": 0,
+      "details": "All tests passed."
+    }
+  ],
+  "blockers": [],
+  "limitations": []
+}
+```
+
+Required behavior:
+
+- `schemaVersion` identifies the contract version.
+- `status` is `completed` or `blocked`.
+- `shouldCommit` states whether Codex believes the worktree should be committed.
+- `commitMessage` is required when `status` is `completed` and `shouldCommit` is `true`.
+- `summary` explains what was done.
+- `validation` records commands and observed outcomes without embedding large raw logs.
+- `blockers` records conditions that prevent completion.
+- `limitations` records unavailable evidence, such as private application logs.
+
+The runner validates the JSON schema, status combination, commit-message format, and actual `git diff`. It never trusts the result file as proof that files changed or tests passed. A missing or invalid result file makes the relay job fail. Secrets, tokens, authentication data, and raw sensitive logs must never be written to this file.
 
 ## Docker and workspace model
 
@@ -137,9 +189,10 @@ The first implementation will provide:
 - an endpoint for reading job status and result;
 - a single active Codex job per deployment;
 - non-interactive `codex exec` execution;
+- a versioned Codex result-file contract;
 - execution logs and deterministic terminal statuses;
-- a repository workflow that performs checkout, relay invocation, commit, and push;
-- tests for request validation, workspace path validation, process execution, job state, and runner client behavior;
+- a repository workflow that performs checkout, relay invocation, result validation, commit, and push;
+- tests for request validation, workspace path validation, result-file validation, process execution, job state, and runner client behavior;
 - operating instructions for runner registration, browser-login persistence, deployment, interruption, and retry.
 
 ## Non-goals for the first version

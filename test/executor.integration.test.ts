@@ -109,7 +109,7 @@ exit 1
     await assert.rejects(
       () => executor.run({ requestId: "failed-request", workspace: "workspace", planPath: "plan.md", mode: "implement" }, workspace, outputPath),
       (error: unknown) => {
-        assert.ok(error instanceof RelayError);
+        if (!(error instanceof RelayError)) return false;
         assert.equal(error.code, "CODEX_FAILED");
         assert.match(error.message, /Codex exited with code 1/);
         assert.match(error.message, /Codex diagnostic tail:/);

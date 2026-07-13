@@ -5,7 +5,9 @@ ARG RUNNER_VERSION=2.325.0
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl git jq nodejs libicu72 libssl3 \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates curl git jq nodejs \
+    libicu72 libssl3 libkrb5-3 zlib1g liblttng-ust1 \
   && rm -rf /var/lib/apt/lists/* \
   && useradd --create-home --uid 10002 --shell /bin/bash runner \
   && mkdir -p /actions-runner /runner/_work \

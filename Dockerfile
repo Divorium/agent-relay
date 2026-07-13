@@ -38,7 +38,7 @@ COPY --chown=agent:agent types ./types
 COPY --chown=agent:agent src ./src
 COPY --chown=agent:agent scripts ./scripts
 
-RUN npm run build
+RUN chmod +x scripts/toolchain-smoke.sh && npm run build
 
 EXPOSE 8080
 CMD ["node", "dist/src/server.js"]

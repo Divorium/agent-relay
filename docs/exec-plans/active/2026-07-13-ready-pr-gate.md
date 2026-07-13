@@ -33,10 +33,26 @@ Use GitHub's native draft state as the source of truth. A pull request is allowe
 9. Update README and operational documentation with the exact trigger and readiness rule.
 10. Remove or replace obsolete example workflow behavior that accepts an arbitrary branch without PR verification.
 
+## Implementation record
+
+- Added `.github/workflows/agent-relay.yml` with `workflow_dispatch` inputs for pull request number, ExecPlan path, and mode.
+- Added `runner/resolve-pr.mjs` to retrieve the selected pull request through the GitHub API and enforce open, non-draft, same-repository state before checkout.
+- Checkout uses the API-derived head SHA; finalize pushes to the API-derived head ref.
+- Replaced the example workflow's arbitrary branch input with the same PR-number gate.
+- Separated `$GITHUB_OUTPUT` control data from runner stdout so GitHub logs and future Codex-output streaming cannot corrupt step outputs.
+- Added a live GitHub log and `agent-relay-output` artifact through `tee`.
+- Added optional `AGENT_RELAY_PUSH_TOKEN` support for plans that modify workflow files.
+- Added automated ready, draft, closed, missing, foreign-repository, workflow-order, output-channel, and API-derived-ref tests.
+- Updated README and operational documentation.
+
 ## Validation
 
 Run all repository checks, including TypeScript checks, tests, Compose validation, and workflow-specific tests. Record exact commands and results in `.agent-relay/result.json`.
 
 Do not mark the work complete when tests fail. Do not weaken tests to make them pass.
 
-Bootstrap trigger: diagnostic retry 2.
+Pending external validation:
+
+- CI for the final branch head;
+- one production workflow dispatch after the updated runner image is rebuilt;
+- a push using `AGENT_RELAY_PUSH_TOKEN` when an ExecPlan modifies `.github/workflows/`.

@@ -101,10 +101,10 @@ test("runner client submits a job, validates the result and emits a commit messa
   }
 });
 
-test("workflow template uses a valid request ID and environment-safe branch handling", async () => {
+test("workflow template uses a valid request ID, environment-safe branch handling and tested finalization", async () => {
   const workflow = await readFile(join(process.cwd(), "examples", "github-actions", "agent-relay.yml"), "utf8");
   assert.match(workflow, /AGENT_RELAY_REQUEST_ID: \$\{\{ github\.repository_id \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/);
   assert.match(workflow, /TARGET_BRANCH: \$\{\{ inputs\.branch \}\}/);
-  assert.match(workflow, /git push origin "HEAD:\$\{TARGET_BRANCH\}"/);
+  assert.match(workflow, /run: \/runner\/finalize\.sh/);
   assert.doesNotMatch(workflow, /git push[^\n]*\$\{\{ inputs\.branch \}\}/);
 });

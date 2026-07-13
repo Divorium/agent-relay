@@ -23,12 +23,14 @@ function runProcess(command: string, args: string[], options: Record<string, unk
   });
 }
 
-test("runner client submits a job, validates the result and emits a commit message", async () => {
+test("runner client submits a job, validates the result and writes the commit message to GITHUB_OUTPUT", async () => {
   const root = join(tmpdir(), `agent-relay-runner-client-${process.pid}-${Date.now()}`);
   const workspaceRoot = join(root, "workspaces");
   const workspace = join(workspaceRoot, "repository", "repository");
+  const githubOutput = join(root, "github-output");
   const requestId = "12345-67890-1";
   await mkdir(join(workspace, ".agent-relay"), { recursive: true });
+  await writeFile(githubOutput, "");
   await writeFile(join(workspace, "plan.md"), "# Plan\n");
   await writeFile(join(workspace, "tracked.txt"), "before\n");
   runGit(workspace, ["init"]);
@@ -78,6 +80,7 @@ test("runner client submits a job, validates the result and emits a commit messa
         AGENT_RELAY_REQUEST_ID: requestId,
         AGENT_RELAY_WORKSPACE_ROOT: workspaceRoot,
         GITHUB_WORKSPACE: workspace,
+        GITHUB_OUTPUT: githubOutput,
         AGENT_RELAY_REQUEST_TIMEOUT_MS: "5000",
         AGENT_RELAY_POLL_INTERVAL_MS: "10",
         AGENT_RELAY_POLL_TIMEOUT_MS: "5000",
@@ -86,7 +89,10 @@ test("runner client submits a job, validates the result and emits a commit messa
     });
 
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, "commit_message=Apply the active plan\n");
+    assert.match(result.stdout, /Agent Relay job job-1: completed/);
+    assert.match(result.stdout, /Codex summary: Completed the controlled integration test\./);
+    assert.match(result.stdout, /Validation passed: npm test - Passed\./);
+    assert.equal(await readFile(githubOutput, "utf8"), "commit_message=Apply the active plan\n");
     assert.deepEqual(submitted, {
       requestId,
       workspace: "repository/repository",
@@ -101,10 +107,15 @@ test("runner client submits a job, validates the result and emits a commit messa
   }
 });
 
-test("workflow template uses a valid request ID, environment-safe branch handling and tested finalization", async () => {
+test("workflow template resolves a specific ready pull request and keeps logs separate from GITHUB_OUTPUT", async () => {
   const workflow = await readFile(join(process.cwd(), "examples", "github-actions", "agent-relay.yml"), "utf8");
-  assert.match(workflow, /AGENT_RELAY_REQUEST_ID: \$\{\{ github\.repository_id \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/);
-  assert.match(workflow, /TARGET_BRANCH: \$\{\{ inputs\.branch \}\}/);
+  assert.match(workflow, /pr_number:/);
+  assert.doesNotMatch(workflow, /inputs\.branch/);
+  assert.match(workflow, /run: node \/runner\/resolve-pr\.mjs/);
+  assert.match(workflow, /ref: \$\{\{ steps\.pr\.outputs\.head_sha \}\}/);
+  assert.match(workflow, /TARGET_BRANCH: \$\{\{ steps\.pr\.outputs\.head_ref \}\}/);
+  assert.match(workflow, /secrets\.AGENT_RELAY_PUSH_TOKEN \|\| github\.token/);
+  assert.match(workflow, /node \/runner\/client\.mjs 2>&1 \| tee/);
+  assert.doesNotMatch(workflow, /client\.mjs[^\n]*GITHUB_OUTPUT/);
   assert.match(workflow, /run: \/runner\/finalize\.sh/);
-  assert.doesNotMatch(workflow, /git push[^\n]*\$\{\{ inputs\.branch \}\}/);
 });

@@ -33,9 +33,11 @@ test("controlled full flow runs runner client through Relay and Codex executor",
   const workspace = join(workspaceRoot, "repository", "repository");
   const stateDir = join(root, "state");
   const fakeCodex = join(root, "fake-codex");
+  const githubOutput = join(root, "github-output");
   const requestId = "repository-100-1";
 
   await mkdir(workspace, { recursive: true });
+  await writeFile(githubOutput, "");
   await writeFile(join(workspace, "plan.md"), "# Active plan\n");
   await writeFile(join(workspace, "tracked.txt"), "before\n");
   runGit(workspace, ["init"]);
@@ -106,6 +108,7 @@ JSON
         AGENT_RELAY_REQUEST_ID: requestId,
         AGENT_RELAY_WORKSPACE_ROOT: workspaceRoot,
         GITHUB_WORKSPACE: workspace,
+        GITHUB_OUTPUT: githubOutput,
         AGENT_RELAY_REQUEST_TIMEOUT_MS: "5000",
         AGENT_RELAY_POLL_INTERVAL_MS: "10",
         AGENT_RELAY_POLL_TIMEOUT_MS: "5000",
@@ -114,7 +117,10 @@ JSON
     });
 
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, "commit_message=Apply controlled full flow\n");
+    assert.match(result.stdout, /Agent Relay job .*: accepted/);
+    assert.match(result.stdout, /Agent Relay job .*: completed/);
+    assert.match(result.stdout, /Codex summary: The controlled executor changed the checked-out worktree\./);
+    assert.equal(await readFile(githubOutput, "utf8"), "commit_message=Apply controlled full flow\n");
     assert.equal(await readFile(join(workspace, "tracked.txt"), "utf8"), "after\n");
     await assert.rejects(() => stat(join(workspace, ".agent-relay")));
 

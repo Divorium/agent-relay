@@ -1,6 +1,8 @@
 FROM debian:bookworm-slim
 
 ARG RUNNER_VERSION=2.325.0
+ARG USER_ID=1000
+ARG GROUP_ID=1000
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -9,7 +11,8 @@ RUN apt-get update \
     ca-certificates curl git jq nodejs \
     libicu72 libssl3 libkrb5-3 zlib1g liblttng-ust1 \
   && rm -rf /var/lib/apt/lists/* \
-  && useradd --create-home --uid 10002 --shell /bin/bash runner \
+  && groupadd --gid "${GROUP_ID}" runner \
+  && useradd --create-home --uid "${USER_ID}" --gid "${GROUP_ID}" --shell /bin/bash runner \
   && mkdir -p /actions-runner /runner/_work \
   && chown -R runner:runner /actions-runner /runner
 

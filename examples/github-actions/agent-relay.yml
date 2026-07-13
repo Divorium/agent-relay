@@ -1,0 +1,67 @@
+name: Agent Relay
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Pull request branch to update
+        required: true
+      plan_path:
+        description: Active ExecPlan path
+        required: true
+      mode:
+        description: implement, revise, or finalize
+        required: true
+        default: implement
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agent-relay-${{ github.repository }}-${{ inputs.branch }}
+  cancel-in-progress: false
+
+jobs:
+  codex:
+    runs-on: [self-hosted, agent-relay]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+
+      - name: Exclude relay artifact
+        shell: bash
+        run: |
+          mkdir -p .agent-relay
+          printf '%s\n' '.agent-relay/' >> .git/info/exclude
+          rm -f .agent-relay/result.json
+
+      - name: Run Codex through Agent Relay
+        id: relay
+        shell: bash
+        env:
+          AGENT_RELAY_PLAN_PATH: ${{ inputs.plan_path }}
+          AGENT_RELAY_MODE: ${{ inputs.mode }}
+          AGENT_RELAY_REQUEST_ID: ${{ github.repository }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: node /runner/client.mjs >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push
+        shell: bash
+        env:
+          COMMIT_MESSAGE: ${{ steps.relay.outputs.commit_message }}
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          test -n "$COMMIT_MESSAGE"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          if git diff --cached --name-only | grep -q '^\.agent-relay/'; then
+            echo "Relay artifact must not be committed" >&2
+            exit 1
+          fi
+          git commit -m "$COMMIT_MESSAGE"
+          git push origin "HEAD:${{ inputs.branch }}"

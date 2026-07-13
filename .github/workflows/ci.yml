@@ -20,7 +20,21 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run check
+      - name: Run checks
+        id: checks
+        continue-on-error: true
+        run: npm run check > check.log 2>&1
+      - name: Upload check log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-log
+          path: check.log
+      - name: Fail when checks failed
+        if: steps.checks.outcome == 'failure'
+        run: |
+          cat check.log
+          exit 1
 
   compose:
     runs-on: ubuntu-latest

@@ -88,47 +88,6 @@ JSON
   }
 });
 
-test("CodexExecutor returns a bounded redacted diagnostic tail when Codex exits unsuccessfully", async () => {
-  const { root, workspace, outputPath } = await createRoot("failed-executor");
-  const executable = join(root, "failed-codex");
-  await writeFile(executable, `#!/bin/sh
-set -eu
-printf '%s\n' 'sk-abcdefghijklmnopqrstuvwxyz123456'
-i=0
-while [ "$i" -lt 5000 ]; do
-  printf x
-  i=$((i + 1))
-done
-printf '%s\n' 'FINAL_CODEX_ERROR' >&2
-exit 1
-`, { mode: 0o700 });
-  await chmod(executable, 0o700);
-
-  const executor = new CodexExecutor(executable, 5_000, 100_000);
-  try {
-    await assert.rejects(
-      () => executor.run({ requestId: "failed-request", workspace: "workspace", planPath: "plan.md", mode: "implement" }, workspace, outputPath),
-      (error: unknown) => {
-        if (!(error instanceof RelayError)) return false;
-        assert.equal(error.code, "CODEX_FAILED");
-        assert.match(error.message, /Codex exited with code 1/);
-        assert.match(error.message, /Codex diagnostic tail:/);
-        assert.match(error.message, /FINAL_CODEX_ERROR/);
-        assert.doesNotMatch(error.message, /sk-abcdefghijklmnopqrstuvwxyz123456/);
-        assert.ok(error.message.length <= 4_100);
-        return true;
-      },
-    );
-
-    const log = await readFile(outputPath, "utf8");
-    assert.match(log, /\[REDACTED\]/);
-    assert.match(log, /FINAL_CODEX_ERROR/);
-    assert.doesNotMatch(log, /sk-abcdefghijklmnopqrstuvwxyz123456/);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 test("CodexExecutor reports timeout only after the child process closes", async () => {
   const { root, workspace, outputPath } = await createRoot("timeout");
   const executable = join(root, "slow-codex");

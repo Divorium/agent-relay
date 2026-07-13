@@ -87,3 +87,12 @@ jobs:
           fi
       - name: Build runner image
         run: docker build --file Dockerfile.runner --tag agent-relay-runner:ci .
+      - name: Verify runner image
+        run: |
+          docker run --rm --entrypoint /bin/bash agent-relay-runner:ci -lc '
+            node --version &&
+            git --version &&
+            test -x /entrypoint.sh &&
+            test -x /runner/client.mjs &&
+            test -x /runner/finalize.sh
+          '

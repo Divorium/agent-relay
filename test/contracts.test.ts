@@ -37,7 +37,7 @@ function completedResult(overrides: Record<string, unknown> = {}) {
 
 function expectRelayError(action: () => unknown, code: string, statusCode: number): void {
   assert.throws(action, (error: unknown) => {
-    assert.ok(error instanceof RelayError);
+    if (!(error instanceof RelayError)) return false;
     assert.equal(error.code, code);
     assert.equal(error.statusCode, statusCode);
     return true;

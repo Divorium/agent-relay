@@ -26,11 +26,11 @@ export class CodexExecutor {
 
     const prompt = buildCodexPrompt(request, ".agent-relay/result.json");
     const child = spawn(this.command, [
+      "--ask-for-approval",
+      "never",
       "exec",
       "--sandbox",
       "danger-full-access",
-      "--ask-for-approval",
-      "never",
       "--cd",
       workspace,
       prompt,

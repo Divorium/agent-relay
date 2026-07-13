@@ -90,6 +90,7 @@ jobs:
       - name: Verify runner image
         run: |
           docker run --rm --entrypoint /bin/bash agent-relay-runner:ci -lc '
+            test "$(node -p "process.versions.node.split(\".\")[0]")" = "22" &&
             node --version &&
             git --version &&
             test -x /entrypoint.sh &&

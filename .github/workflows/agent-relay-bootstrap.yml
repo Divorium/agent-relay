@@ -2,7 +2,7 @@ name: Agent Relay Bootstrap
 
 on:
   pull_request:
-    types: [synchronize]
+    types: [opened, ready_for_review]
 
 permissions:
   contents: write
@@ -16,6 +16,8 @@ jobs:
   codex:
     if: >-
       github.event.pull_request.number == 1 &&
+      github.event.pull_request.state == 'open' &&
+      github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, agent-relay]
     steps:

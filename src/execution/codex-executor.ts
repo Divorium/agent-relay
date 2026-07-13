@@ -10,6 +10,16 @@ import { redactSensitiveText } from "../security/redaction.js";
 
 export interface ExecutionOutcome { exitCode: number; result: CodexResult; }
 
+const SENSITIVE_ENV_NAME = /(TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIAL|AUTHORIZATION)/i;
+
+export function createCodexEnvironment(source: Record<string, string | undefined> = process.env): Record<string, string> {
+  const environment: Record<string, string> = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (value !== undefined && !SENSITIVE_ENV_NAME.test(name)) environment[name] = value;
+  }
+  return environment;
+}
+
 export class CodexExecutor {
   constructor(
     private readonly command: string,
@@ -36,7 +46,7 @@ export class CodexExecutor {
       prompt,
     ], {
       cwd: workspace,
-      env: process.env,
+      env: createCodexEnvironment(),
       stdio: ["ignore", "pipe", "pipe"],
     });
 

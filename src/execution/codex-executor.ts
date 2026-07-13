@@ -11,7 +11,6 @@ import { redactSensitiveText } from "../security/redaction.js";
 export interface ExecutionOutcome { exitCode: number; result: CodexResult; }
 
 const CODEX_BLOCKED_ENVIRONMENT_VARIABLES = new Set(["AGENT_RELAY_TOKEN"]);
-const CODEX_DIAGNOSTIC_TAIL_CHARACTERS = 4_000;
 
 export function createCodexEnvironment(source: Record<string, string | undefined> = process.env): Record<string, string> {
   const environment: Record<string, string> = {};
@@ -19,12 +18,6 @@ export function createCodexEnvironment(source: Record<string, string | undefined
     if (value !== undefined && !CODEX_BLOCKED_ENVIRONMENT_VARIABLES.has(name)) environment[name] = value;
   }
   return environment;
-}
-
-function createDiagnosticTail(output: string): string {
-  const trimmed = output.trim();
-  if (!trimmed) return "";
-  return trimmed.slice(-CODEX_DIAGNOSTIC_TAIL_CHARACTERS);
 }
 
 export class CodexExecutor {
@@ -72,7 +65,6 @@ export class CodexExecutor {
 
     let timedOut = false;
     let forceKillTimer: any;
-    let redactedOutput = "";
     const exitCode = await new Promise<number>((resolve, reject) => {
       const timeoutTimer = setTimeout(() => {
         timedOut = true;
@@ -83,7 +75,7 @@ export class CodexExecutor {
       child.on("error", (error: Error) => {
         clearTimeout(timeoutTimer);
         if (forceKillTimer) clearTimeout(forceKillTimer);
-        reject(new RelayError("CODEX_FAILED", `Unable to start Codex: ${error.message}`, 502));
+        reject(new RelayError("CODEX_FAILED", error.message, 502));
       });
       child.on("close", (code: number | null) => {
         clearTimeout(timeoutTimer);
@@ -92,16 +84,11 @@ export class CodexExecutor {
       });
     }).finally(async () => {
       const output = Buffer.concat(outputChunks, outputBytes).toString("utf8");
-      redactedOutput = redactSensitiveText(output);
-      await writeFile(outputPath, redactedOutput, { mode: 0o600 });
+      await writeFile(outputPath, redactSensitiveText(output), { mode: 0o600 });
     });
 
     if (timedOut) throw new RelayError("CODEX_TIMEOUT", "Codex execution timed out", 504);
-    if (exitCode !== 0) {
-      const diagnosticTail = createDiagnosticTail(redactedOutput);
-      const diagnostic = diagnosticTail ? `\nCodex diagnostic tail:\n${diagnosticTail}` : "";
-      throw new RelayError("CODEX_FAILED", `Codex exited with code ${exitCode}${diagnostic}`, 502);
-    }
+    if (exitCode !== 0) throw new RelayError("CODEX_FAILED", `Codex exited with code ${exitCode}`, 502);
 
     let raw: string;
     try { raw = await readFile(resultPath, "utf8"); }

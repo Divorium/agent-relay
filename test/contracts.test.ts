@@ -4,6 +4,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { validateCodexResult, validateCreateJobRequest } from "../src/contracts/validators.js";
+import { RelayError } from "../src/contracts/errors.js";
 import { requireBearerToken } from "../src/security/auth.js";
 import { resolveWorkspace } from "../src/security/workspace.js";
 import { loadConfig } from "../src/config/config.js";
@@ -19,6 +20,30 @@ const validRequest = {
   mode: "implement" as const,
 };
 
+function completedResult(overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 1,
+    requestId: validRequest.requestId,
+    status: "completed",
+    shouldCommit: true,
+    commitMessage: "Implement contract validators",
+    summary: "Implemented validation.",
+    validation: [{ command: "npm test", status: "passed", exitCode: 0, details: "Passed." }],
+    blockers: [],
+    limitations: [],
+    ...overrides,
+  };
+}
+
+function expectRelayError(action: () => unknown, code: string, statusCode: number): void {
+  assert.throws(action, (error: unknown) => {
+    assert.ok(error instanceof RelayError);
+    assert.equal(error.code, code);
+    assert.equal(error.statusCode, statusCode);
+    return true;
+  });
+}
+
 test("accepts a valid create-job request", () => assert.deepEqual(validateCreateJobRequest(validRequest), validRequest));
 test("rejects unknown request fields", () => assert.throws(() => validateCreateJobRequest({ ...validRequest, command: "rm -rf /" }), /Unknown field/));
 test("rejects absolute and traversing workspace paths", () => {
@@ -27,12 +52,21 @@ test("rejects absolute and traversing workspace paths", () => {
 });
 test("rejects non-Markdown plan paths", () => assert.throws(() => validateCreateJobRequest({ ...validRequest, planPath: "plan.json" }), /Markdown/));
 test("accepts a valid completed result", () => {
-  const result = validateCodexResult({ schemaVersion: 1, requestId: validRequest.requestId, status: "completed", shouldCommit: true, commitMessage: "Implement contract validators", summary: "Implemented validation.", validation: [{ command: "npm test", status: "passed", exitCode: 0, details: "Passed." }], blockers: [], limitations: [] }, validRequest.requestId);
+  const result = validateCodexResult(completedResult(), validRequest.requestId);
   assert.equal(result.commitMessage, "Implement contract validators");
 });
 test("rejects mismatched result requestId", () => assert.throws(() => validateCodexResult({ schemaVersion: 1, requestId: "other", status: "blocked", shouldCommit: false, summary: "Blocked.", validation: [], blockers: ["Reason"], limitations: [] }, validRequest.requestId), /does not match/));
-test("rejects multiline commit messages", () => assert.throws(() => validateCodexResult({ schemaVersion: 1, requestId: validRequest.requestId, status: "completed", shouldCommit: true, commitMessage: "Line one\nLine two", summary: "Done.", validation: [], blockers: [], limitations: [] }, validRequest.requestId)));
+test("rejects multiline commit messages", () => assert.throws(() => validateCodexResult(completedResult({ commitMessage: "Line one\nLine two" }), validRequest.requestId)));
 test("rejects blocked results that request a commit", () => assert.throws(() => validateCodexResult({ schemaVersion: 1, requestId: validRequest.requestId, status: "blocked", shouldCommit: true, summary: "Blocked.", validation: [], blockers: ["Reason"], limitations: [] }, validRequest.requestId), /cannot be committed/));
+test("uses RESULT_INVALID and 422 for malformed result strings", () => {
+  expectRelayError(() => validateCodexResult(completedResult({ summary: "" }), validRequest.requestId), "RESULT_INVALID", 422);
+});
+test("rejects unknown fields inside validation records", () => {
+  expectRelayError(() => validateCodexResult(completedResult({ validation: [{ command: "npm test", status: "passed", details: "Passed.", output: "unexpected" }] }), validRequest.requestId), "RESULT_INVALID", 422);
+});
+test("rejects unknown top-level result fields", () => {
+  expectRelayError(() => validateCodexResult(completedResult({ filesChanged: ["src/index.ts"] }), validRequest.requestId), "RESULT_INVALID", 422);
+});
 test("accepts exact bearer token", () => assert.doesNotThrow(() => requireBearerToken("Bearer secret", "secret")));
 test("rejects missing or incorrect bearer token", () => {
   assert.throws(() => requireBearerToken(undefined, "secret"));

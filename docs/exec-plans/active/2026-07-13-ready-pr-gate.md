@@ -38,3 +38,5 @@ Use GitHub's native draft state as the source of truth. A pull request is allowe
 Run all repository checks, including TypeScript checks, tests, Compose validation, and workflow-specific tests. Record exact commands and results in `.agent-relay/result.json`.
 
 Do not mark the work complete when tests fail. Do not weaken tests to make them pass.
+
+Bootstrap trigger: 2026-07-13T19:00:00+02:00.

@@ -54,7 +54,7 @@ jobs:
           mkdir -p /tmp/codex
           docker compose config
 
-  image:
+  images:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -72,3 +72,5 @@ jobs:
             echo '.NET SDK must not be installed' >&2
             exit 1
           fi
+      - name: Build runner image
+        run: docker build --file Dockerfile.runner --tag agent-relay-runner:ci .

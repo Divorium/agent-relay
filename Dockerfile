@@ -3,6 +3,7 @@ FROM eclipse-temurin:21-jdk-jammy AS java
 FROM node:22-bookworm
 
 ARG GO_VERSION=1.24.5
+ARG TYPESCRIPT_VERSION=5.8.3
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV JAVA_HOME=/opt/java/openjdk
@@ -19,7 +20,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* \
   && git lfs install --system \
   && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -C /usr/local -xz \
-  && npm install --global @openai/codex \
+  && npm install --global "typescript@${TYPESCRIPT_VERSION}" @openai/codex \
   && useradd --create-home --uid 10001 --shell /bin/bash agent \
   && mkdir -p /app /runner/_work /var/lib/agent-relay \
   && chown -R agent:agent /app /runner /var/lib/agent-relay

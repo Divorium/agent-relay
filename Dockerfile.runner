@@ -1,0 +1,34 @@
+FROM debian:bookworm-slim
+
+ARG RUNNER_VERSION=2.325.0
+ARG USER_ID=1000
+ARG GROUP_ID=1000
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates curl git jq nodejs \
+    libicu72 libssl3 libkrb5-3 zlib1g liblttng-ust1 \
+  && rm -rf /var/lib/apt/lists/* \
+  && groupadd --gid "${GROUP_ID}" runner \
+  && useradd --create-home --uid "${USER_ID}" --gid "${GROUP_ID}" --shell /bin/bash runner \
+  && mkdir -p /actions-runner /runner/_work \
+  && chown -R runner:runner /actions-runner /runner
+
+USER runner
+WORKDIR /actions-runner
+
+RUN curl -fsSLo actions-runner.tar.gz \
+      "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
+  && tar -xzf actions-runner.tar.gz \
+  && rm actions-runner.tar.gz
+
+COPY --chown=runner:runner runner/entrypoint.sh /entrypoint.sh
+COPY --chown=runner:runner runner/client.mjs /runner/client.mjs
+COPY --chown=runner:runner runner/resolve-pr.mjs /runner/resolve-pr.mjs
+COPY --chown=runner:runner runner/finalize.sh /runner/finalize.sh
+
+RUN chmod +x /entrypoint.sh /runner/client.mjs /runner/resolve-pr.mjs /runner/finalize.sh
+
+ENTRYPOINT ["/entrypoint.sh"]

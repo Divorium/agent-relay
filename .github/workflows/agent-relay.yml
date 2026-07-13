@@ -1,0 +1,95 @@
+name: Agent Relay
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open pull request number to update
+        required: true
+        type: string
+      plan_path:
+        description: Active ExecPlan path in the pull request workspace
+        required: true
+        type: string
+      mode:
+        description: Agent Relay execution mode
+        required: true
+        default: implement
+        type: choice
+        options:
+          - implement
+          - revise
+          - finalize
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: agent-relay-${{ github.repository }}-pr-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  codex:
+    runs-on: [self-hosted, agent-relay]
+    steps:
+      - name: Resolve ready pull request
+        id: pr
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: node /runner/resolve-pr.mjs
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+          fetch-depth: 0
+          token: ${{ secrets.AGENT_RELAY_PUSH_TOKEN || github.token }}
+          persist-credentials: true
+
+      - name: Verify resolved revision
+        shell: bash
+        env:
+          EXPECTED_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD_SHA}"
+
+      - name: Exclude relay artifact
+        shell: bash
+        run: |
+          mkdir -p .agent-relay
+          printf '%s\n' '.agent-relay/' >> .git/info/exclude
+          rm -f .agent-relay/result.json
+
+      - name: Run Codex through Agent Relay
+        id: relay
+        continue-on-error: true
+        shell: bash
+        env:
+          AGENT_RELAY_PLAN_PATH: ${{ inputs.plan_path }}
+          AGENT_RELAY_MODE: ${{ inputs.mode }}
+          AGENT_RELAY_REQUEST_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -o pipefail
+          node /runner/client.mjs 2>&1 | tee "${RUNNER_TEMP}/agent-relay-output.log"
+
+      - name: Upload Agent Relay output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-relay-output
+          path: ${{ runner.temp }}/agent-relay-output.log
+          if-no-files-found: warn
+
+      - name: Fail when Agent Relay failed
+        if: steps.relay.outcome == 'failure'
+        shell: bash
+        run: exit 1
+
+      - name: Commit and push
+        shell: bash
+        env:
+          COMMIT_MESSAGE: ${{ steps.relay.outputs.commit_message }}
+          TARGET_BRANCH: ${{ steps.pr.outputs.head_ref }}
+        run: /runner/finalize.sh

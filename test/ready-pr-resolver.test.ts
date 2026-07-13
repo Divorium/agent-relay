@@ -1,0 +1,128 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
+
+const repository = "owner/repository";
+const pullRequestNumber = 42;
+const headSha = "0123456789abcdef0123456789abcdef01234567";
+
+function runProcess(command: string, args: string[], options: Record<string, unknown>): Promise<{ status: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, options);
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk: unknown) => { stdout += String(chunk); });
+    child.stderr?.on("data", (chunk: unknown) => { stderr += String(chunk); });
+    child.on("error", reject);
+    child.on("close", (code: number | null) => resolve({ status: code ?? 1, stdout, stderr }));
+  });
+}
+
+async function runResolver(statusCode: number, responseBody: Record<string, unknown>): Promise<{ status: number; stdout: string; stderr: string; output: string }> {
+  const root = join(tmpdir(), `agent-relay-pr-resolver-${process.pid}-${Date.now()}-${Math.random()}`);
+  const outputPath = join(root, "github-output");
+  await mkdir(root, { recursive: true });
+  await writeFile(outputPath, "");
+
+  const server = createServer((req: any, res: any) => {
+    assert.equal(req.method, "GET");
+    assert.equal(req.url, `/repos/${repository}/pulls/${pullRequestNumber}`);
+    assert.equal(req.headers.authorization, "Bearer github-token");
+    res.statusCode = statusCode;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(responseBody));
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  try {
+    const result = await runProcess(process.execPath, [join(process.cwd(), "runner", "resolve-pr.mjs")], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        GITHUB_API_URL: `http://127.0.0.1:${address.port}`,
+        GITHUB_TOKEN: "github-token",
+        GITHUB_REPOSITORY: repository,
+        GITHUB_OUTPUT: outputPath,
+        PR_NUMBER: String(pullRequestNumber),
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { ...result, output: await readFile(outputPath, "utf8") };
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error: Error | undefined) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+function pullRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    number: pullRequestNumber,
+    state: "open",
+    draft: false,
+    head: {
+      ref: "agent/change",
+      sha: headSha,
+      repo: { full_name: repository },
+    },
+    ...overrides,
+  };
+}
+
+test("ready open pull request is accepted and produces API-derived checkout outputs", async () => {
+  const result = await runResolver(200, pullRequest());
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Resolved ready pull request #42/);
+  assert.equal(result.output, `head_ref=agent/change\nhead_sha=${headSha}\n`);
+});
+
+test("draft pull request is rejected before checkout or Agent Relay invocation", async () => {
+  const result = await runResolver(200, pullRequest({ draft: true }));
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /not ready for review/);
+  assert.equal(result.output, "");
+});
+
+test("closed pull request is rejected", async () => {
+  const result = await runResolver(200, pullRequest({ state: "closed" }));
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /is not open/);
+  assert.equal(result.output, "");
+});
+
+test("missing pull request is rejected", async () => {
+  const result = await runResolver(404, { message: "Not Found" });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /was not found/);
+  assert.equal(result.output, "");
+});
+
+test("foreign head repository is rejected", async () => {
+  const result = await runResolver(200, pullRequest({
+    head: {
+      ref: "agent/change",
+      sha: headSha,
+      repo: { full_name: "fork/repository" },
+    },
+  }));
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /head must belong to the target repository/);
+  assert.equal(result.output, "");
+});
+
+test("production workflow resolves readiness before checkout and Agent Relay", async () => {
+  const workflow = await readFile(join(process.cwd(), ".github", "workflows", "agent-relay.yml"), "utf8");
+  const resolverIndex = workflow.indexOf("node /runner/resolve-pr.mjs");
+  const checkoutIndex = workflow.indexOf("actions/checkout@v4");
+  const relayIndex = workflow.indexOf("node /runner/client.mjs");
+  assert.ok(resolverIndex >= 0);
+  assert.ok(checkoutIndex > resolverIndex);
+  assert.ok(relayIndex > checkoutIndex);
+  assert.doesNotMatch(workflow, /inputs\.branch/);
+});

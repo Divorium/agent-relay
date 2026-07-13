@@ -1,8 +1,8 @@
 name: Agent Relay Bootstrap
 
 on:
-  pull_request_target:
-    types: [ready_for_review]
+  pull_request:
+    types: [synchronize]
 
 permissions:
   contents: write

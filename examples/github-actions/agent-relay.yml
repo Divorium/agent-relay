@@ -30,6 +30,12 @@ jobs:
           ref: ${{ inputs.branch }}
           fetch-depth: 0
 
+      - name: Validate workflow inputs
+        shell: bash
+        env:
+          TARGET_BRANCH: ${{ inputs.branch }}
+        run: git check-ref-format --branch "$TARGET_BRANCH"
+
       - name: Exclude relay artifact
         shell: bash
         run: |
@@ -43,19 +49,21 @@ jobs:
         env:
           AGENT_RELAY_PLAN_PATH: ${{ inputs.plan_path }}
           AGENT_RELAY_MODE: ${{ inputs.mode }}
-          AGENT_RELAY_REQUEST_ID: ${{ github.repository }}-${{ github.run_id }}-${{ github.run_attempt }}
+          AGENT_RELAY_REQUEST_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: node /runner/client.mjs >> "$GITHUB_OUTPUT"
 
       - name: Commit and push
         shell: bash
         env:
           COMMIT_MESSAGE: ${{ steps.relay.outputs.commit_message }}
+          TARGET_BRANCH: ${{ inputs.branch }}
         run: |
           if test -z "$(git status --porcelain)"; then
             echo "No changes to commit"
             exit 0
           fi
           test -n "$COMMIT_MESSAGE"
+          git check-ref-format --branch "$TARGET_BRANCH"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add --all
@@ -64,4 +72,4 @@ jobs:
             exit 1
           fi
           git commit -m "$COMMIT_MESSAGE"
-          git push origin "HEAD:${{ inputs.branch }}"
+          git push origin "HEAD:${TARGET_BRANCH}"

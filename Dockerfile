@@ -4,6 +4,7 @@ FROM node:22-bookworm
 
 ARG GO_VERSION=1.24.5
 ARG TYPESCRIPT_VERSION=5.8.3
+ARG CODEX_VERSION=0.144.3
 ARG USER_ID=1000
 ARG GROUP_ID=1000
 
@@ -13,6 +14,7 @@ ENV JAVA_HOME=/opt/java/openjdk
 ENV CARGO_HOME=/home/agent/.cargo
 ENV RUSTUP_HOME=/home/agent/.rustup
 ENV PATH="/opt/java/openjdk/bin:/usr/local/go/bin:/home/agent/.cargo/bin:${PATH}"
+ENV EXPECTED_CODEX_VERSION=${CODEX_VERSION}
 
 COPY --from=java /opt/java/openjdk /opt/java/openjdk
 
@@ -26,7 +28,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* \
   && git lfs install --system \
   && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -C /usr/local -xz \
-  && npm install --global "typescript@${TYPESCRIPT_VERSION}" @openai/codex \
+  && npm install --global "typescript@${TYPESCRIPT_VERSION}" "@openai/codex@${CODEX_VERSION}" \
   && groupadd --non-unique --gid "${GROUP_ID}" agent \
   && useradd --non-unique --create-home --uid "${USER_ID}" --gid "${GROUP_ID}" --shell /bin/bash agent \
   && mkdir -p /app /runner/_work /var/lib/agent-relay /home/agent/.cargo /home/agent/.rustup \

@@ -4,62 +4,64 @@
 
 Agent Relay is a self-hosted bridge between a repository-scoped GitHub Actions runner and Codex CLI.
 
-GitHub Actions checks out a pull-request branch on the self-hosted runner. The runner submits a job to Agent Relay over the shared Compose network. Agent Relay starts a fresh `codex exec` process in the same workspace. Codex implements the active plan, validates its work, and writes `.agent-relay/result.json`. The runner validates that result against the actual worktree, removes the artifact, commits with the proposed message, and pushes with GitHub Actions credentials.
+GitHub Actions checks out the requested pull-request branch. The runner submits a job to Agent Relay over the Compose network. Agent Relay starts a fresh non-interactive Codex process in the shared workspace. Codex implements the active plan, validates its work, and writes `.agent-relay/result.json`. The runner independently validates that artifact and the actual Git worktree, removes the artifact, commits with the validated message, and pushes to the same branch using GitHub Actions credentials.
 
-The MVP supports one target repository per Docker Compose deployment. Agent Relay deliberately does not clone repositories, manage branches, hold GitHub credentials, or control project containers.
+The MVP supports one target repository per Docker Compose deployment.
 
 ## Progress
 
-- [x] Defined the simplified one-repository architecture and responsibility split.
-- [x] Added repository instructions and TypeScript project foundation.
-- [x] Implemented request, job, result, and error contracts.
-- [x] Implemented contract validators and sensitive-data checks.
-- [x] Implemented bearer authentication and workspace containment.
-- [x] Implemented file-backed atomic job persistence and restart recovery.
-- [x] Implemented one-active-job exclusion and request idempotency.
-- [x] Implemented the asynchronous HTTP API.
-- [x] Implemented controlled `codex exec` execution, timeout, output limit, redaction, and result validation.
-- [x] Implemented the runner client and runner-owned commit/push workflow template.
-- [x] Added Agent Relay and runner Dockerfiles plus shared Compose deployment.
-- [x] Added the general-purpose development toolchain and explicit OpenSSH/.NET exclusions.
-- [x] Added contract and HTTP/job-lifecycle integration tests.
-- [x] Added repository CI for type checking, tests, Compose validation, image build, and toolchain verification.
-- [x] Added operational documentation.
-- [ ] Run the genuine repository-scoped runner with an operator `RUNNER_TOKEN` and authenticated mounted `~/.codex`.
-- [ ] Record a genuine Codex execution that creates a result artifact and a runner-created commit on the same pull-request branch.
-- [ ] Record the container-recreation authentication-persistence exercise in the operator environment.
+- [x] Defined the one-repository architecture and responsibility split.
+- [x] Implemented the Node.js 22 and TypeScript relay service.
+- [x] Implemented authenticated create-and-poll job APIs.
+- [x] Implemented strict request and result contracts.
+- [x] Implemented workspace containment, request idempotency, and one-active-job exclusion.
+- [x] Implemented atomic file-backed state and restart recovery.
+- [x] Implemented controlled Codex process execution, byte-based output limits, redaction, timeout, and process termination.
+- [x] Added explicit Codex automation permissions: global approval mode `never` and sandbox `danger-full-access`.
+- [x] Implemented the runner client and runner-owned Git flow.
+- [x] Fixed the workflow request ID to avoid the invalid `owner/repository` slash.
+- [x] Removed direct branch interpolation from shell commands and validate the branch with `git check-ref-format`.
+- [x] Made runner registration reusable after an ordinary container restart.
+- [x] Added Agent Relay and runner images plus Compose packaging.
+- [x] Added the required development toolchain and removed OpenSSH and .NET.
+- [x] Added contract, HTTP, lifecycle, child-process, runner-client, workflow-template, and runner-entrypoint tests.
+- [x] Added CI for TypeScript, tests, Compose, both images, Codex CLI flags, toolchain contents, and excluded tools.
+- [ ] Run the deployment with an operator-owned repository registration token and authenticated `~/.codex`.
+- [ ] Record a genuine Codex execution followed by a runner-created commit and push to the same PR branch.
+- [ ] Record Agent Relay recreation with the same mounted `~/.codex` and verify authentication remains usable.
 
-The three remaining items require external operator credentials and a running Docker deployment. They are not replaced by claims or assumptions. All behavior that can be exercised without those credentials is covered by automated checks or controlled integration executors.
+The remaining items require external credentials and a running deployment. They are not treated as proven by controlled tests.
 
 ## Decisions
 
 - One repository is supported per Compose deployment.
-- Runner and Agent Relay run in the same Compose project and share the checkout volume.
 - The runner owns checkout, GitHub credentials, commit, and push.
-- Agent Relay owns validated job submission, persistence, process execution, and result reporting.
-- Codex edits the worktree and writes the result artifact, but never commits or pushes.
-- Agent Relay mounts the operator's standard `~/.codex`; it does not use `CODEX_HOME`.
-- Agent Relay exposes a small create-and-poll HTTP API.
-- One Codex job may run at a time in one deployment.
-- Codex has no Docker socket, private application logs, or service lifecycle access.
-- Public interfaces and repository-local commands are the only application validation surfaces in the MVP.
-- The base image contains common runtimes and build tools but no OpenSSH or .NET SDK.
-- Long-running/subagent-specific Codex behavior is treated as Codex functionality and is not a separate Agent Relay acceptance condition.
+- Agent Relay owns validation, persistence, process execution, and result reporting.
+- Codex edits the shared checkout but does not commit or push.
+- The operator's standard `~/.codex` is mounted directly; `CODEX_HOME` is not set.
+- One Codex job may run at a time.
+- Agent Relay uses a fresh `codex exec` process for every job.
+- Codex receives `danger-full-access` inside the dedicated Agent Relay container so it can edit the workspace, run tests, and reach public services.
+- The container deliberately has no Docker socket, GitHub job credential, deploy key, or private application-log mount.
+- The runner uses an existing `.runner` registration after restart and only requires `RUNNER_TOKEN` for initial registration or recreation.
+- OpenSSH and .NET are excluded from the Agent Relay image.
 
 ## Implemented Architecture
 
 ### Runner
 
-The runner image and workflow are responsible for:
+The runner image and workflow provide:
 
 - repository-scoped self-hosted runner registration;
-- checkout of the actual requested branch;
+- registration reuse after restart;
+- checkout of the requested branch;
+- branch-name validation;
 - local exclusion and cleanup of `.agent-relay/`;
-- authenticated job creation and status polling;
-- complete validation of `.agent-relay/result.json`;
+- authenticated job creation and bounded polling;
+- strict independent result validation;
+- sensitive-data rejection;
 - independent `git status --porcelain` verification;
-- commit creation with the validated Codex message;
-- push using GitHub Actions credentials.
+- commit creation and push to the validated target branch.
 
 Evidence:
 
@@ -67,6 +69,8 @@ Evidence:
 - `runner/entrypoint.sh`
 - `runner/client.mjs`
 - `examples/github-actions/agent-relay.yml`
+- `test/runner-entrypoint.test.sh`
+- `test/runner-client.test.ts`
 
 ### Agent Relay
 
@@ -75,17 +79,18 @@ Agent Relay provides:
 - `GET /health`;
 - `POST /v1/jobs`;
 - `GET /v1/jobs/{jobId}`;
-- bearer-token authentication for job routes;
-- strict request validation;
+- bearer authentication for job routes;
+- fixed-shape request validation;
 - realpath-based workspace containment;
-- file-backed job records with atomic writes;
-- request-id idempotency;
-- one-active-job exclusion including submission race protection;
-- interrupted-state recovery after restart;
-- fresh `codex exec` process per job;
-- timeout and output-size limits;
-- persisted output redaction;
-- required result-file parsing and validation.
+- atomic file-backed job records;
+- request-ID idempotency;
+- submission-race protection and one-active-job exclusion;
+- interrupted-state recovery;
+- a fresh Codex process per job;
+- explicit approval and sandbox flags;
+- timeout with `SIGTERM`, `SIGKILL`, and waiting for process close;
+- byte-based output limits and persisted redaction;
+- mandatory result parsing and validation.
 
 Evidence:
 
@@ -97,198 +102,105 @@ Evidence:
 - `src/security/auth.ts`
 - `src/security/workspace.ts`
 - `src/security/redaction.ts`
+- `test/executor.integration.test.ts`
+- `test/integration.test.ts`
 
-### Codex result contract
+### Result contract
 
-The controlled artifact is `.agent-relay/result.json` and includes:
+`.agent-relay/result.json` contains:
 
 - `schemaVersion`;
 - matching `requestId`;
 - `status`;
 - `shouldCommit`;
-- conditional `commitMessage`;
+- conditional one-line `commitMessage`;
 - `summary`;
-- concise validation records;
+- validation records;
 - blockers;
 - limitations.
 
-The validators reject unknown fields, unsupported schema versions, mismatched request IDs, invalid status combinations, multiline/control-character commit messages, oversized values, malformed validation records, and likely sensitive data.
+Relay and runner validators reject unknown fields, unsupported versions, request-ID mismatches, invalid status combinations, malformed validation records, oversized values, control characters, and likely sensitive data. The runner compares `shouldCommit` with the actual worktree and removes the artifact before staging.
 
-The runner does not treat the result as proof of the actual worktree. It compares `shouldCommit` with `git status --porcelain` and deletes the result directory before staging.
+## Docker and Toolchain
 
-Evidence:
+`compose.yml` creates one runner, one Agent Relay service, one shared workspace volume, one state volume, and one network. `HOST_UID` and `HOST_GID` are forwarded to both images. `HOST_CODEX_DIR` is mounted at `/home/agent/.codex`.
 
-- `src/contracts/result.ts`
-- `src/contracts/validators.ts`
-- `runner/client.mjs`
-- `test/contracts.test.ts`
-- `test/integration.test.ts`
+The Agent Relay image includes Node.js 22, npm, TypeScript, Codex CLI, Python, Java 21, Rust, Go, Git, Git LFS, GCC/G++, Clang, Make, CMake, pkg-config, Bash, curl, wget, jq, archive tools, rsync, file, findutils, and diffutils. CI verifies the exact Codex parser form used by the executor and confirms that `ssh` and `dotnet` are absent.
 
-## Development Toolchain
+## Test Strategy
 
-The Agent Relay image includes:
+`npm run check` covers:
 
-- Node.js 22 and npm;
-- TypeScript 5.8.3;
-- Codex CLI;
-- Python 3, pip, and venv;
-- Java 21 JDK;
-- Rust through rustup, rustc, and Cargo;
-- Go;
-- Git and Git LFS;
-- GCC/G++, Clang, Make, CMake, and pkg-config;
-- Bash, curl, wget, jq;
-- zip, unzip, tar, gzip, xz, zstd;
-- rsync, file, coreutils, findutils, diffutils, and CA certificates.
+- request and result contracts;
+- error codes and strict unknown-field rejection;
+- authentication and configuration;
+- workspace containment;
+- sensitive-data handling;
+- persistence and restart recovery;
+- HTTP create-and-poll lifecycle;
+- idempotent retries and concurrent-job exclusion;
+- real child-process execution;
+- explicit Codex argument order;
+- timeout only after child termination;
+- runner-client request/result/Git integration;
+- safe workflow request ID and branch handling;
+- runner initial registration, restart reuse, and missing-token failure.
 
-The image explicitly excludes OpenSSH, .NET SDK, Docker Engine, project databases, Android SDK, and CUDA.
+Repository CI additionally covers:
 
-Evidence:
+- `docker compose config`;
+- Agent Relay image build;
+- toolchain smoke test;
+- exact Codex automation flag parsing;
+- absence of OpenSSH and .NET;
+- runner image build.
 
-- `Dockerfile`
-- `scripts/toolchain-smoke.sh`
-- `.github/workflows/ci.yml`
-
-## Docker and Identity Model
-
-`compose.yml` creates:
-
-- one runner service;
-- one Agent Relay service;
-- one shared workspace volume;
-- one relay-state volume;
-- one Compose network.
-
-The service network is not marked internal because Agent Relay needs outbound access to Codex/OpenAI and configured public interfaces. No service port needs to be published for normal runner-to-relay communication.
-
-Both images accept `USER_ID` and `GROUP_ID` build arguments. Compose forwards `HOST_USER_ID` and `HOST_GROUP_ID` so runner-created workspace files and the mounted `~/.codex` remain accessible to both services.
-
-Evidence:
-
-- `compose.yml`
-- `Dockerfile`
-- `Dockerfile.runner`
-- `.env.example`
-
-## Test Strategy and Evidence
-
-### Contract and security tests
-
-`test/contracts.test.ts` covers:
-
-- valid and invalid create-job requests;
-- unknown fields;
-- absolute and traversing paths;
-- Markdown plan-path requirement;
-- valid and invalid result combinations;
-- request-ID mismatch;
-- commit-message validation;
-- bearer authentication;
-- configuration defaults and missing values;
-- prompt requirements;
-- secret redaction and sensitive-result rejection;
-- workspace directory validation;
-- persistence, index lookup, and interrupted-job recovery.
-
-### Integration tests
-
-`test/integration.test.ts` starts the real HTTP server with real JobService and JobStore instances and controlled executor doubles. It verifies:
-
-- public health endpoint;
-- authentication on job endpoints;
-- HTTP job submission and polling to terminal state;
-- execution exactly once for an idempotent repeated request;
-- rejection of a second concurrent job while one remains active.
-
-The controlled executor is used because a genuine Codex process requires operator authentication. The integration tests exercise the relay protocol, state machine, persistence, and HTTP boundary without fabricating a successful real Codex login.
-
-### CI
-
-`.github/workflows/ci.yml` performs:
-
-1. `npm ci` and `npm run check` on Node.js 22;
-2. `docker compose config` with non-secret placeholders;
-3. Agent Relay image build;
-4. required toolchain smoke test inside the built image;
-5. assertions that `ssh` and `dotnet` are absent.
-
-A CI result is authoritative only after GitHub Actions reports a conclusion for the current head SHA.
+A CI result is authoritative only when it belongs to the current head SHA.
 
 ## Acceptance Audit
 
-| # | Requirement | Implementation evidence | Automated evidence | State |
-|---|---|---|---|---|
-| 1 | One runner and one Agent Relay service | `compose.yml` | `docker compose config` CI | Implemented |
-| 2 | `.env.example` contains `RUNNER_TOKEN`, no value | `.env.example` | repository inspection | Implemented |
-| 3 | Runner registration | `runner/entrypoint.sh` | requires live token | Implemented, live verification pending |
-| 4 | Private Compose communication | `compose.yml` | Compose CI | Implemented |
-| 5 | Shared workspace | `compose.yml` | Compose CI; integration workspace tests | Implemented |
-| 6 | Standard `~/.codex`, no `CODEX_HOME` | `compose.yml`, `Dockerfile` | image/config inspection | Implemented |
-| 7 | Login persists after recreation | bind mount in `compose.yml` | operator exercise required | Implemented, live verification pending |
-| 8 | Relay auth | `auth.ts`, `server.ts` | contract + integration tests | Verified |
-| 9 | Workspace containment | `workspace.ts` | contract tests | Verified |
-| 10 | One active job | `job-service.ts` | integration concurrency test | Verified |
-| 11 | Codex reads plan/instructions | `prompt.ts`, `codex-executor.ts` | prompt contract test | Verified structurally |
-| 12 | Shared changes visible to runner | shared volume design | genuine deployment required | Implemented, live verification pending |
-| 13 | Valid result with commit message | validators + prompt | contract tests | Verified |
-| 14 | Invalid/sensitive result rejected | validators | contract tests | Verified |
-| 15 | No GitHub token/SSH key in Codex | Compose/workflow boundary | repository inspection | Verified structurally |
-| 16 | Relay performs no Git operations | source architecture | source inspection | Verified structurally |
-| 17 | Actual PR branch checkout | workflow template | live workflow required | Implemented, live verification pending |
-| 18 | Runner independently verifies worktree | `runner/client.mjs` | code-path inspection | Implemented |
-| 19 | Result removed before staging | client + workflow | code-path inspection | Implemented |
-| 20 | Runner commits and pushes | workflow template | live workflow required | Implemented, live verification pending |
-| 21 | Same PR branch receives commit | workflow template | live workflow required | Pending live verification |
-| 22 | Workflow concurrency | workflow template | workflow syntax/inspection | Implemented |
-| 23 | Restart marks active work interrupted | `job-store.ts`, `job-service.ts` | contract test | Verified |
-| 24 | New run continues from branch and plan | GitHub workflow model | live workflow required | Implemented, live verification pending |
-| 25 | No Docker/log/lifecycle access | Compose and image | repository/image inspection | Verified structurally |
-| 26 | Public-interface access | non-internal relay network | live endpoint depends on target | Implemented |
-| 27 | Unavailable logs reported as limitations | prompt + result schema | prompt/result contract tests | Verified structurally |
-| 28 | Secrets not exposed | redaction + result validators | contract tests | Verified |
-| 29 | Complete implementation/revision/finalization loop | workflow modes and prompt | operator end-to-end exercise | Pending live verification |
-
-No item marked pending should be described as proven until its external exercise is recorded.
+| Area | Automated state | External state |
+|---|---|---|
+| API authentication and validation | Verified | None |
+| Workspace containment | Verified | None |
+| Idempotency and one active job | Verified | None |
+| Persistence and interrupted recovery | Verified | None |
+| Codex process flags and lifecycle | Verified with real child process and image parser smoke | Real authenticated model call pending |
+| Result contract and redaction | Verified in Relay and runner | None |
+| Runner registration behavior | Verified with controlled entrypoint test | Real repository registration pending |
+| Runner client and Git worktree checks | Verified with real temporary Git repository | Real GitHub job credential pending |
+| Workflow request ID and branch safety | Verified | Real workflow dispatch pending |
+| Compose and both images | Verified by CI | Host deployment pending |
+| Mounted `~/.codex` | Structurally verified | Authentication and recreation exercise pending |
+| Same-branch commit and push | Structurally verified | End-to-end push pending |
 
 ## Idempotence and Recovery
 
 - Repeating the same request ID with identical immutable fields returns the existing job.
 - Reusing it with different fields returns `REQUEST_ID_CONFLICT`.
-- A second request while another is active returns `JOB_ALREADY_RUNNING`.
-- The submission guard closes the asynchronous workspace-resolution race window.
-- Running jobs found after restart are marked interrupted.
-- Agent Relay never attempts Git recovery.
+- A second request while another job is active returns `JOB_ALREADY_RUNNING`.
+- Jobs left in `accepted` or `running` are marked `interrupted` after restart.
+- A timed-out process must close before the active-job lock is released.
 - Recovery is a new GitHub Actions run against the current branch and active plan.
-
-## Operations
-
-Operational instructions are maintained in `docs/operations/README.md` and cover:
-
-- configuration;
-- Compose startup;
-- runner registration and token rotation;
-- Codex authentication mount;
-- workspace cleanup;
-- interrupted job recovery;
-- result-artifact troubleshooting;
-- upgrades and toolchain validation.
+- An ordinary runner-container restart reuses `.runner`; container recreation requires a new registration token.
 
 ## Outcomes and Remaining External Evidence
 
-The repository implementation is complete for all behavior that can be deterministically exercised without operator credentials. Contract tests, integration tests, Compose validation, and image checks replace unavailable external flow segments.
+All behavior that can be deterministically exercised without operator credentials is implemented and covered by automated checks or controlled integration tests.
 
-The following evidence must still be collected in the deployment environment:
+The deployment owner must still record:
 
-1. self-hosted runner registers with the configured repository;
-2. mounted `~/.codex` authenticates a real `codex exec`;
-3. Codex modifies the shared checkout and writes a valid result;
-4. the runner commits and pushes those changes to the same PR branch;
-5. recreating Agent Relay preserves authentication while interrupting an in-flight process.
+1. successful self-hosted runner registration;
+2. a real authenticated `codex exec` using the mounted `~/.codex`;
+3. a valid result produced after modifying the shared checkout;
+4. a runner-created commit and push to the same PR branch;
+5. successful reuse of Codex authentication after Agent Relay recreation.
 
-Until those exercises pass, the PR should remain draft.
+The plan remains active until those deployment-specific exercises are recorded.
 
 ## Revision Notes
 
-- 2026-07-13: Defined the architecture and simplified Git ownership.
-- 2026-07-13: Added result handoff, toolchain, Docker packaging, APIs, validators, persistence, runner integration, and operations.
-- 2026-07-13: Added contract tests, HTTP/job-lifecycle integration tests, CI, and a point-by-point evidence audit.
+- 2026-07-13: Defined the architecture and responsibility boundaries.
+- 2026-07-13: Implemented Relay, runner, Docker packaging, contracts, persistence, process execution, and operations.
+- 2026-07-13: Added unit and integration coverage plus repository CI.
+- 2026-07-13: Review fixed runner restart behavior, OpenSSH inheritance, workflow request ID and branch injection, independent runner validation, polling bounds, default read-only Codex execution, Codex global-flag ordering, and byte-accurate output limiting.

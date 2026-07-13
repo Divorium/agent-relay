@@ -61,7 +61,20 @@ jobs:
       - name: Build Agent Relay image
         run: docker build --tag agent-relay:ci .
       - name: Verify required toolchain
-        run: docker run --rm --entrypoint /bin/bash agent-relay:ci /app/scripts/toolchain-smoke.sh
+        id: toolchain
+        continue-on-error: true
+        run: docker run --rm --entrypoint /bin/bash agent-relay:ci /app/scripts/toolchain-smoke.sh > toolchain.log 2>&1
+      - name: Upload toolchain log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolchain-log
+          path: toolchain.log
+      - name: Fail when toolchain verification failed
+        if: steps.toolchain.outcome == 'failure'
+        run: |
+          cat toolchain.log
+          exit 1
       - name: Verify excluded tools
         run: |
           if docker run --rm --entrypoint /bin/bash agent-relay:ci -lc 'command -v ssh'; then

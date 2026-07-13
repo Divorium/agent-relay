@@ -96,7 +96,7 @@ Codex does not receive a GitHub token or SSH key and does not push changes.
 
 ## Codex result file
 
-Codex must write one machine-readable JSON file before completing a job. The initial contract uses:
+Codex must write one machine-readable JSON file before completing a job:
 
 ```text
 .agent-relay/result.json
@@ -152,6 +152,44 @@ Agent Relay does not need a published host port. The runner reaches it by its Co
 
 The workspace path supplied in a request must resolve below the configured shared workspace root. Arbitrary host paths are rejected.
 
+## Codex development toolchain
+
+The Agent Relay image must provide a general-purpose development environment so Codex can build, test, and validate common repositories without rebuilding the image for each project.
+
+The MVP image must include:
+
+### Language runtimes and package tools
+
+- Node.js 22 and npm;
+- Python 3 with `pip` and `venv`;
+- Java 21 JDK;
+- Rust installed through `rustup`, including `rustc` and Cargo;
+- Go;
+- Git and Git LFS.
+
+### Native build tools
+
+- GCC and G++;
+- Clang;
+- Make;
+- CMake;
+- `pkg-config`.
+
+### General utilities
+
+- Bash;
+- `curl` and `wget`;
+- `jq`;
+- `zip`, `unzip`, `tar`, `gzip`, `xz`, and `zstd`;
+- `rsync`;
+- `file`;
+- GNU coreutils, findutils, and diffutils;
+- CA certificates.
+
+OpenSSH and the .NET SDK are deliberately excluded from the MVP image. Agent Relay does not perform SSH Git operations, and the currently targeted repositories do not require .NET.
+
+The base image must not include project-specific infrastructure such as Docker Engine, database servers, Android SDK, CUDA, or application services. A target repository that requires additional specialized tooling must document that requirement separately; adding it to the shared image is a deliberate later decision rather than an automatic dependency installation during a job.
+
 ## Codex authentication
 
 The container uses the standard Codex directory at the container user's `~/.codex` path. The deployment mounts the operator-provided `~/.codex` directory into that location.
@@ -181,7 +219,7 @@ If a public interface fails without exposing sufficient diagnostic information, 
 The first implementation will provide:
 
 - a Docker Compose deployment containing the runner and Agent Relay services;
-- a Docker image containing Node.js, Codex CLI, and the Agent Relay service;
+- a Docker image containing Codex CLI, the Agent Relay service, and the documented general-purpose development toolchain;
 - direct mounting of the operator's `~/.codex` directory;
 - a shared workspace volume between runner and Agent Relay;
 - a health endpoint;
@@ -216,7 +254,7 @@ The MVP will not provide:
 
 The proposed implementation uses Node.js 22 and TypeScript for the HTTP service and Codex process management. The self-hosted runner and Agent Relay are packaged as services in one Docker Compose project.
 
-The final dependency set and project layout remain subject to approval of the active plan.
+The final dependency versions and project layout remain subject to approval of the active plan. The required categories of development tools listed above are part of the approved image contract.
 
 ## Configuration
 

@@ -34,8 +34,8 @@ jobs:
           RUNNER_LABELS: agent-relay
           AGENT_RELAY_TOKEN: placeholder-relay-token
           HOST_CODEX_DIR: /tmp/codex
-          HOST_USER_ID: "1000"
-          HOST_GROUP_ID: "1000"
+          HOST_UID: "1000"
+          HOST_GID: "1000"
         run: |
           mkdir -p /tmp/codex
           docker compose config

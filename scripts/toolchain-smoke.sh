@@ -33,9 +33,7 @@ file --version
 find --version
 diff --version
 codex --version
-codex_exec_help="$(codex exec --help)"
-grep -F -- '--sandbox' <<<"$codex_exec_help"
-grep -F -- '--ask-for-approval' <<<"$codex_exec_help"
+codex exec --sandbox danger-full-access --ask-for-approval never --help >/dev/null
 
 if command -v ssh >/dev/null 2>&1; then
   echo "OpenSSH must not be installed" >&2

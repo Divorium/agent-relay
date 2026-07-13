@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile, rm } from "node:fs/promises";
+import { appendFile, readFile, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 
 const baseUrl = process.env.AGENT_RELAY_URL ?? "http://agent-relay:8080";
@@ -121,6 +121,10 @@ async function fetchJson(url, options = {}) {
   }
 }
 
+function logJobStatus(job) {
+  console.log(`Agent Relay job ${String(job.id ?? "unknown")}: ${String(job.status ?? "unknown")}`);
+}
+
 const normalizedRoot = workspaceRoot.replace(/\/$/, "");
 const workspacePrefix = `${normalizedRoot}/`;
 if (!workspace.startsWith(workspacePrefix)) throw new Error(`GITHUB_WORKSPACE must be below ${workspacePrefix}`);
@@ -133,12 +137,18 @@ let job = await fetchJson(`${baseUrl}/v1/jobs`, {
   headers,
   body: JSON.stringify({ requestId, workspace: relativeWorkspace, planPath, mode }),
 });
+logJobStatus(job);
+let previousStatus = job.status;
 
 const pollDeadline = Date.now() + pollTimeoutMs;
 while (["accepted", "running"].includes(job.status)) {
   if (Date.now() >= pollDeadline) throw new Error(`Agent Relay polling timed out after ${pollTimeoutMs}ms`);
   await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   job = await fetchJson(`${baseUrl}/v1/jobs/${job.id}`, { headers: { authorization: `Bearer ${token}` } });
+  if (job.status !== previousStatus) {
+    logJobStatus(job);
+    previousStatus = job.status;
+  }
 }
 
 if (job.status !== "completed" && job.status !== "blocked") {
@@ -152,5 +162,13 @@ if (diff.status !== 0) throw new Error(diff.stderr || "git status failed");
 const hasChanges = diff.stdout.trim().length > 0;
 if (result.shouldCommit !== hasChanges) throw new Error("Result shouldCommit does not match actual worktree");
 await rm(`${workspace}/.agent-relay`, { recursive: true, force: true });
+
+console.log(`Codex summary: ${result.summary}`);
+for (const validation of result.validation) {
+  console.log(`Validation ${validation.status}: ${validation.command} - ${validation.details}`);
+}
+
 if (!hasChanges) process.exit(0);
-process.stdout.write(`commit_message=${result.commitMessage}\n`);
+const githubOutput = process.env.GITHUB_OUTPUT;
+if (!githubOutput) throw new Error("GITHUB_OUTPUT is required when the worktree changed");
+await appendFile(githubOutput, `commit_message=${result.commitMessage}\n`, "utf8");

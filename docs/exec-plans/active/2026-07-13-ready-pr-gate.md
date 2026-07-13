@@ -44,15 +44,23 @@ Use GitHub's native draft state as the source of truth. A pull request is allowe
 - Added optional `AGENT_RELAY_PUSH_TOKEN` support for plans that modify workflow files.
 - Added automated ready, draft, closed, missing, foreign-repository, workflow-order, output-channel, and API-derived-ref tests.
 - Updated README and operational documentation.
+- Removed the temporary bootstrap workflow from `main` so it cannot recursively schedule jobs after pushes.
 
 ## Validation
 
-Run all repository checks, including TypeScript checks, tests, Compose validation, and workflow-specific tests. Record exact commands and results in `.agent-relay/result.json`.
+GitHub Actions run `29290651956` completed successfully for commit `a9dd7ba34320978206c42e247770ca3800134e03`:
 
-Do not mark the work complete when tests fail. Do not weaken tests to make them pass.
+- `npm ci`: passed;
+- `npm run check`: passed, including TypeScript, all Node tests, runner entrypoint tests, ready-PR cases, and output-channel tests;
+- `docker compose config`: passed;
+- Agent Relay image build: passed;
+- required toolchain verification: passed;
+- excluded OpenSSH and .NET checks: passed;
+- runner image build: passed;
+- runner image verification, including `/runner/resolve-pr.mjs`: passed.
 
-Pending external validation:
+Remaining external validation:
 
-- CI for the final branch head;
-- one production workflow dispatch after the updated runner image is rebuilt;
-- a push using `AGENT_RELAY_PUSH_TOKEN` when an ExecPlan modifies `.github/workflows/`.
+- rebuild the local runner image after pulling this branch;
+- after merge, dispatch `.github/workflows/agent-relay.yml` against a ready pull request;
+- configure and verify `AGENT_RELAY_PUSH_TOKEN` when an ExecPlan modifies `.github/workflows/`.

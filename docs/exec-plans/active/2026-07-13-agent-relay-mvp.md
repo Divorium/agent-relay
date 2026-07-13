@@ -2,292 +2,333 @@
 
 ## Purpose / Big Picture
 
-Agent Relay will provide a reusable, self-hosted bridge between GitHub Actions and Codex. ChatGPT will create and review a pull request in a target repository. A GitHub Actions workflow will send an authenticated request to Agent Relay. Agent Relay will prepare the requested pull request branch, run Codex with access to the target repository and its local development infrastructure, and allow Codex to commit and push implementation changes back to the same branch.
+Agent Relay will provide a small self-hosted bridge between a repository-scoped GitHub Actions runner and Codex.
 
-The operator-visible outcome is a complete plan-to-implementation loop in which GitHub remains the durable collaboration surface. ChatGPT plans and reviews work, Codex performs it, and Agent Relay supplies the stable local execution environment and transport between the self-hosted runner and Codex.
+ChatGPT creates and reviews a pull request containing one active implementation plan. A GitHub Actions workflow checks out that pull request branch on the self-hosted runner. The runner asks Agent Relay to run Codex in the same shared workspace. Codex edits and validates the checked-out files. After Codex finishes, the runner creates a commit and pushes it to the same pull request branch using GitHub Actions job credentials. ChatGPT then reviews the updated pull request and may repeat the workflow.
 
-This plan covers the first usable version. It deliberately avoids becoming a general workflow platform.
+The first usable version supports one target repository per Docker Compose deployment. The Compose project contains one runner service and one Agent Relay service with Codex CLI. The system must remain a thin execution bridge rather than becoming a Git manager, GitHub client, workflow engine, or infrastructure controller.
 
-Implementation must not begin until this plan is reviewed and approved.
+Implementation must not begin until this revised plan is reviewed and approved.
 
 ## Progress
 
-- [x] (2026-07-13) Created the Agent Relay repository and initial README.
-- [x] (2026-07-13) Recorded the proposed MVP architecture and trust model.
-- [ ] Review and approve the material design decisions in this plan.
-- [ ] Establish repository instructions, project structure, contracts, and automated validation.
-- [ ] Implement Docker packaging and persistent Codex authentication.
-- [ ] Implement the authenticated job API and durable local job state.
-- [ ] Implement repository configuration, Git workspace preparation, locking, and expected-SHA validation.
-- [ ] Integrate non-interactive Codex execution, logs, completion detection, and interruption handling.
-- [ ] Implement SSH-based commit and push behavior for the target branch.
-- [ ] Add the target-repository GitHub Actions integration example.
-- [ ] Validate the complete flow against a controlled test repository and a local service endpoint.
-- [ ] Complete operational, recovery, and security documentation.
+- [x] (2026-07-13 00:56Z) Created the initial design-only pull request with a README and active plan.
+- [x] (2026-07-13 01:20Z) Replaced the earlier multi-repository and SSH-based design with a single-repository shared-workspace model.
+- [x] (2026-07-13 01:20Z) Assigned checkout, commit, push, and GitHub credentials to the self-hosted runner.
+- [x] (2026-07-13 01:20Z) Removed Docker socket, container log, internal application network, and service lifecycle access from the MVP.
+- [x] (2026-07-13 01:20Z) Recorded direct use of the standard `~/.codex` directory and added `.env.example` with `RUNNER_TOKEN`.
+- [ ] Review and approve the revised architecture, trust boundary, configuration, and MVP scope.
+- [ ] Add repository instructions and the executable project foundation.
+- [ ] Implement the runner and Agent Relay Docker images and their shared Compose deployment.
+- [ ] Implement the authenticated relay job API and single-job lifecycle.
+- [ ] Integrate `codex exec` with the shared workspace and persistent `~/.codex` mount.
+- [ ] Add the target-repository GitHub Actions workflow for checkout, relay execution, commit, and push.
+- [ ] Validate the complete same-branch pull request flow against one controlled repository.
+- [ ] Complete operational and recovery documentation.
 
 ## Surprises & Discoveries
 
-- OpenAI supports browser-based ChatGPT authentication for Codex CLI and stores file-based credentials under `CODEX_HOME`. This allows a Docker deployment to preserve the existing login method through a persistent volume.
-- Restarting the service can preserve authentication and job metadata, but it cannot preserve a currently running Codex process. Recovery must use the Git branch and active implementation plan rather than process memory.
-- Codex App Server exists, but `codex exec` is the stable non-interactive interface and is sufficient for the MVP. Agent Relay therefore does not depend on the App Server protocol.
-- The service is intentionally privileged. Repository write credentials and local infrastructure access cannot be hidden from a Codex process that is deliberately granted full shell access. The security boundary is therefore an explicit repository allowlist and trusted deployment, not an attempt to sandbox Codex away from required capabilities.
+- The runner already receives GitHub Actions job credentials and can own checkout, commit, and push. Reimplementing Git repository preparation and SSH handling in Agent Relay would duplicate GitHub Actions capabilities and materially increase complexity.
+- A shared workspace volume allows the runner to prepare the repository while Codex edits the same files from a separate service. No repository archive, copy protocol, SSH credential, or GitHub token is required inside Agent Relay.
+- Codex uses the standard `~/.codex` directory. The MVP will mount the operator-provided directory directly and will not set or depend on `CODEX_HOME`.
+- A container restart can preserve mounted Codex authentication and configuration, but it interrupts the active `codex exec` process. Retry is a new GitHub Actions run against the current pull request branch and active plan.
+- Codex does not need Docker control for the initial objective. Publicly reachable application interfaces and repository-local validation are sufficient for the MVP. Missing private logs must be reported as unavailable rather than inferred.
+- `codex exec` is sufficient for non-interactive execution. Support for complex internal agent behavior or subagents is a Codex capability and does not require Agent Relay to implement its own orchestration layer.
 
 ## Decision Log
 
-- Decision: Keep the plan and implementation in one target-repository pull request.
-  Rationale: ChatGPT and Codex must collaborate on the same branch, and the active plan must evolve with the implementation.
+- Decision: Keep the implementation plan and code changes in one target-repository pull request.
+  Rationale: ChatGPT and Codex collaborate through the same branch, and the active plan evolves with implementation and review.
   Date/Author: 2026-07-13 / ChatGPT
 
-- Decision: Build Agent Relay as a separate reusable repository rather than copying the service into every application repository.
-  Rationale: Several systems need the same transport, Codex execution, Git, authentication, and recovery behavior. Project repositories should retain only their instructions, plans, workflow, and optional configuration.
+- Decision: Support one target repository per Docker Compose deployment in the MVP.
+  Rationale: A repository-scoped runner already defines the target. Avoiding multi-repository routing removes repository configuration, credential selection, and scheduling complexity.
   Date/Author: 2026-07-13 / ChatGPT
 
-- Decision: Deploy Agent Relay close to the infrastructure it controls.
-  Rationale: Codex must reach local application endpoints, repositories, logs, and optional Docker resources. The same image may be deployed once per host or infrastructure group.
+- Decision: Run the self-hosted runner and Agent Relay in the same Docker Compose project.
+  Rationale: They need only a private service network and one shared workspace volume. Compose provides both without a separate deployment controller.
   Date/Author: 2026-07-13 / ChatGPT
 
-- Decision: Keep Agent Relay running as a persistent Docker service, but start a fresh `codex exec` process for each job.
-  Rationale: A persistent service preserves authentication and accepts requests without making the GitHub runner manage containers. Fresh Codex executions avoid accidental context sharing between repositories and retries.
+- Decision: Let the runner own checkout, commit, and push.
+  Rationale: GitHub Actions already supplies repository context and temporary job credentials. Agent Relay should not implement Git cloning, branch management, SSH identities, expected remote SHA management, or GitHub API access.
   Date/Author: 2026-07-13 / ChatGPT
 
-- Decision: Use an asynchronous HTTP job API rather than holding one request open for the entire Codex execution.
-  Rationale: Codex work can be long-running. A create-and-poll protocol survives runner retries, proxy timeouts, and temporary network interruptions while remaining small.
+- Decision: Codex edits the shared worktree but does not commit or push.
+  Rationale: This keeps all GitHub credentials in the runner and lets Agent Relay remain independent of GitHub authentication.
   Date/Author: 2026-07-13 / ChatGPT
 
-- Decision: Use Node.js 22 and TypeScript for the service.
-  Rationale: Codex CLI already requires the Node runtime family. TypeScript provides explicit API and state contracts, and Node supports subprocess streaming and filesystem operations without another runtime in the image.
+- Decision: Use a persistent Agent Relay service and start a fresh `codex exec` process for each job.
+  Rationale: The service remains available to the runner without reusing one model conversation indefinitely or requiring the runner to create containers.
   Date/Author: 2026-07-13 / ChatGPT
 
-- Decision: Use persistent file-backed state for the MVP rather than a database.
-  Rationale: A single Agent Relay instance only needs durable job metadata, logs, locks, and recovery markers. A database or message broker would add complexity without improving the first deployment.
+- Decision: Use a small asynchronous create-and-poll HTTP API.
+  Rationale: Codex work may be long-running. Job creation and status polling avoid holding one HTTP request open while keeping the protocol minimal.
   Date/Author: 2026-07-13 / ChatGPT
 
-- Decision: Configure allowed repositories and their SSH identities on the Agent Relay host.
-  Rationale: Requests must not be able to select arbitrary Git URLs, key files, or host paths. The request identifies a repository alias or slug, and Agent Relay resolves trusted configuration.
+- Decision: Mount the operator's standard `~/.codex` directory into the Agent Relay user's `~/.codex` path.
+  Rationale: This preserves the existing browser-based ChatGPT login and avoids introducing a separate `CODEX_HOME` convention that is not used by the operator.
   Date/Author: 2026-07-13 / ChatGPT
 
-- Decision: Let Codex perform the requested Git commit and push while Agent Relay verifies the resulting remote branch state.
-  Rationale: The desired execution model gives Codex full repository access. Agent Relay still needs to verify expected starting and ending SHAs and report conflicts accurately.
+- Decision: Supply self-hosted runner registration through `RUNNER_TOKEN`.
+  Rationale: The runner entrypoint needs an explicit runtime credential to register with the one configured target repository. The value belongs in the uncommitted deployment `.env`, while `.env.example` documents the variable name.
+  Date/Author: 2026-07-13 / ChatGPT
+
+- Decision: Do not expose the Docker socket, private container logs, or application lifecycle controls to Codex in the MVP.
+  Rationale: The first version only requires repository work and public interface validation. Removing these privileges reduces scope and avoids coupling Agent Relay to each application's Compose topology.
+  Date/Author: 2026-07-13 / ChatGPT
+
+- Decision: Use Node.js 22 and TypeScript for Agent Relay.
+  Rationale: Node supports the HTTP boundary, child-process streaming, filesystem validation, and tests without adding another runtime alongside Codex CLI.
   Date/Author: 2026-07-13 / ChatGPT
 
 ## Outcomes & Retrospective
 
-No implementation exists yet. The design phase is successful when the operator accepts the architecture, trust model, MVP scope, and proposed technology. This section must be updated after every implementation milestone and at final completion.
+No executable implementation exists yet. The design phase is complete only when the operator approves this simplified responsibility split, single-repository deployment model, runner-owned Git flow, Codex authentication mount, and restricted application access.
+
+This section must be updated after each implementation milestone and at final completion.
 
 ## Context and Orientation
 
-Agent Relay is not part of any target application's business domain. It is development infrastructure shared by projects such as Monify and other systems owned by the operator.
+Agent Relay is a separate reusable repository, but the MVP deployment is scoped to one target repository. To use it with another project later, the same Compose definition can be deployed separately with different environment values. Multi-repository routing inside one running Agent Relay instance is outside the current plan.
 
-A target repository owns the pull request, active implementation plan, repository-specific `AGENTS.md`, tests, and GitHub Actions workflow. Agent Relay owns the HTTP request boundary, persistent Codex environment, repository checkout, job lifecycle, logs, and execution result.
+The target repository owns its pull request, `AGENTS.md`, active implementation plan, project tests, and GitHub Actions workflow. GitHub owns the branch, commits, pull request, reviews, checks, and temporary job credentials.
 
-The self-hosted GitHub runner is deliberately thin. It must be able to contact Agent Relay, authenticate the request, submit the repository and branch identifiers, and poll for completion. It does not need access to the target application's internal network and does not create or control Codex containers.
+The self-hosted runner checks out the actual pull request branch into its GitHub Actions workspace. That workspace is stored on a volume mounted into both the runner and Agent Relay services. The runner sends Agent Relay the workspace path and a concise execution instruction. Agent Relay validates the path and starts `codex exec` with that directory as its working directory.
 
-Agent Relay runs continuously in Docker. Its deployment joins the network or mounts the resources needed by Codex for the local projects it serves. The service starts a separate `codex exec` child process for every accepted job.
+Codex reads repository instructions and the active plan from the checked-out files. It edits the worktree and runs available validation. It does not receive a GitHub token or SSH key. After the relay job finishes, the runner inspects the worktree, commits the changes, and pushes to the same pull request branch.
 
-Codex authentication uses the operator's existing ChatGPT browser login. File-based credentials are stored under a persistent `CODEX_HOME`. The Docker image does not contain those credentials. Initial login is performed by the operator outside or interactively with the container, and the resulting credentials are placed in the persistent volume.
+The Agent Relay service uses the standard Codex configuration directory at the container user's `~/.codex`. The operator's existing `~/.codex` directory is mounted there. No `CODEX_HOME` environment variable is required.
 
-Git access uses explicit repository configuration. Each allowed repository maps to its SSH URL, SSH identity, workspace policy, and optional execution settings. SSH private keys are mounted at runtime and never committed or built into the image.
+The runner and Agent Relay communicate only over their private Compose network. Agent Relay does not require a host-published API port for normal operation.
 
 ## Boundaries and Non-Goals
 
-Agent Relay must remain a small execution bridge. It must not become a second workflow engine or duplicate GitHub pull request state.
+Agent Relay owns Codex process execution, not repository or GitHub management.
 
-The GitHub runner owns dispatch and reporting to GitHub Actions. Agent Relay owns local execution. Codex owns the implementation actions requested by the plan. GitHub owns branches, commits, pull requests, reviews, and checks.
+The runner owns:
 
-The first version supports trusted repositories only. It must reject repositories that are not configured locally. It must not execute arbitrary Git URLs or public fork pull requests.
+- registration with the configured GitHub repository;
+- pull request branch checkout;
+- GitHub Actions job credentials;
+- worktree inspection;
+- commit creation;
+- push to the pull request branch;
+- GitHub job status.
 
-Agent Relay may be granted broad local infrastructure access, including application networks, mounted source trees, host tools, credentials, or the Docker socket. These are deployment choices and must not be silently enabled by the base image. Documentation must clearly state that any capability visible to the container is also available to Codex.
+Agent Relay owns:
 
-The MVP does not include a browser UI, external user management, distributed workers, a message broker, dynamic creation of Codex containers, automatic pull request merge, multi-agent collaboration, arbitrary scheduling, or a general plugin system.
+- HTTP authentication between runner and relay;
+- shared-workspace path validation;
+- one active Codex execution per deployment;
+- starting and observing `codex exec`;
+- execution output and terminal result reporting.
 
-The MVP does not require a GitHub API token inside Agent Relay. Git operations use SSH. Pull request metadata required for execution is supplied by the trusted GitHub Actions workflow.
+Codex owns:
+
+- repository analysis;
+- implementation;
+- active plan updates;
+- tests and checks available from its container;
+- leaving a coherent worktree for the runner.
+
+The MVP does not include:
+
+- repository cloning, fetching, branch creation, commit creation, or push inside Agent Relay;
+- SSH keys, deploy keys, personal access tokens, or GitHub API tokens inside Agent Relay;
+- multi-repository routing in one deployment;
+- Docker socket access;
+- private application container networks unless they are deliberately exposed as public test interfaces;
+- container logs or application service restart controls;
+- dynamic creation of Agent Relay or Codex containers by the runner;
+- a web UI, workflow engine, message broker, distributed scheduler, or automatic pull request merge.
+
+Agent Relay must reject workspace paths outside the configured shared workspace root. The API must not accept arbitrary commands, executable paths, repository URLs, mount paths, or host paths from the caller.
+
+Codex may make outbound requests only to interfaces reachable from its container. When application internals or logs are unavailable, it must report the validation limitation explicitly.
 
 ## Plan of Work
 
-First, establish the repository operating contract. Add `AGENTS.md`, the ExecPlan lifecycle instructions, the TypeScript project, formatting and linting rules, test tooling, and a documented directory layout. Define job request, state, result, repository configuration, and error contracts before implementing behavior.
+First, establish repository instructions and project contracts. Add `AGENTS.md`, `.agent/PLANS.md`, the TypeScript project, formatting, linting, type checking, tests, and a concise directory layout. Define the relay request, job state, result, and error contracts before implementing process execution.
 
-Second, build the Docker runtime. The image will contain Node.js, Codex CLI, Git, OpenSSH, and the Agent Relay application. Compose examples will mount persistent directories for `CODEX_HOME`, job state, logs, and workspaces. The image must run as a non-root application user by default, while deployments may explicitly grant additional host capabilities when required. Add a login bootstrap procedure that preserves the operator's browser-based ChatGPT session.
+Second, create the Docker packaging. The Compose project will contain the repository-scoped self-hosted runner and Agent Relay services. Both services mount the same workspace volume. Agent Relay additionally mounts the operator's standard `~/.codex` directory into the container user's `~/.codex` path. No `CODEX_HOME` variable is set.
 
-Third, implement the HTTP service. It will expose health, create-job, and read-job endpoints. Requests will use a bearer token supplied through runtime secrets. Input validation must reject unknown repositories, invalid branch names, missing expected SHAs, invalid plan paths, duplicate request identifiers, and unsupported modes.
+Third, implement runner registration configuration. The deployment `.env` will contain `RUNNER_TOKEN` and the single target repository settings. `.env.example` will document required names without containing credentials. The runner container must register with the configured repository and expose labels used by the repository workflow.
 
-Fourth, implement durable local job state. A job record will be written atomically before execution begins and updated through accepted, preparing, running, completed, failed, conflicted, interrupted, and cancelled states. Service startup will detect jobs that were running when the process stopped and mark them interrupted. Re-submission with the same request identifier must be idempotent.
+Fourth, implement Agent Relay's HTTP boundary. It will provide a health endpoint, authenticated job creation, and job status retrieval. Input validation will accept only the supported operation and a workspace path beneath the configured shared root. The API will not accept Git URLs or GitHub credentials.
 
-Fifth, implement repository preparation. Agent Relay will keep a local mirror or cache for each allowed repository and create an isolated workspace for each job. It will fetch the requested branch, verify that the remote head equals the expected SHA, and acquire a lock for the repository and branch. A second job for the same branch must not run concurrently.
+Fifth, implement the job lifecycle. The MVP supports one active job per deployment. It records accepted, running, completed, failed, timed-out, and interrupted states, together with concise execution output. Repeating the same request identifier must not start duplicate work.
 
-Sixth, integrate Codex. Agent Relay will create a concise instruction that points Codex to the checked-out repository, applicable `AGENTS.md` files, and active plan. It will start `codex exec` in the workspace, stream structured output into the job log, capture the process exit status, and enforce a configurable maximum runtime. Codex will have the deployment-provided network, filesystem, and tool access.
+Sixth, integrate Codex. Agent Relay starts a fresh `codex exec` process in the validated workspace. The prompt points Codex to the repository's instruction chain and active plan rather than copying the plan into the request. Output is streamed to the job record, the exit status is captured, and a configurable maximum runtime is enforced.
 
-Seventh, support Git completion. The Codex instruction will require implementation, validation, plan updates, commit, and push to the current branch. After Codex exits, Agent Relay will inspect the workspace and remote branch. Completion requires a clean worktree, a changed remote head when changes were expected, and no evidence that the branch was overwritten after the job started. Conflicts and incomplete pushes must be reported distinctly from implementation failures.
+Seventh, add the target-repository GitHub Actions workflow and runner-side client. The workflow checks out the actual pull request branch, calls Agent Relay, waits for the terminal result, verifies that the worktree contains coherent changes, configures the commit author, commits changes, and pushes through GitHub Actions credentials. Workflow concurrency prevents two jobs for the same pull request from running at once.
 
-Eighth, provide target-repository integration. Add an example GitHub Actions workflow and a small portable client script that submits the job and polls until a terminal state. The workflow will pass repository slug, pull request number, branch, expected SHA, active plan path, request identifier, and execution mode. The example will document how ChatGPT or a human dispatches it.
-
-Finally, validate the entire system with a controlled repository and local endpoint. The acceptance test will create a pull request branch containing a small active plan, dispatch Agent Relay through the same protocol as GitHub Actions, let Codex change and test the repository, and confirm that a new commit appears on the same branch. Restart and conflict cases will also be demonstrated.
+Finally, validate the complete path against one controlled target repository. ChatGPT creates a plan PR, dispatches the workflow, Codex changes the checked-out worktree, the runner pushes a commit to the same branch, and ChatGPT can read and review the result. Repeat the workflow for one correction and one final-plan update.
 
 ## Milestones
 
 ### Milestone 1: Repository foundation and contracts
 
-Create the project structure, instructions, schemas, validation tooling, and tests for pure contracts. At the end of this milestone, the repository can build, lint, type-check, and test, but it does not yet execute Codex.
+Create repository instructions, the TypeScript project, schemas, validation, and tests for pure contracts.
 
-Acceptance requires documented request and result schemas, repository configuration validation, deterministic error codes, and green project checks.
+Acceptance requires build, lint, type-check, and test commands to pass. The request contract must not contain repository URLs, SSH keys, GitHub tokens, or arbitrary shell commands.
 
-### Milestone 2: Docker and authentication persistence
+### Milestone 2: Compose deployment and persistent Codex login
 
-Create the production Dockerfile and Compose example. Install Codex CLI and required Git/SSH tools. Mount `CODEX_HOME` and document browser-login bootstrap and credential copying. Add an automated smoke check that confirms Codex is installed and that file-based authentication survives container recreation without exposing credential contents.
+Create Dockerfiles and one Compose definition containing the runner and Agent Relay. Add the private network, shared workspace volume, and direct mount of the operator's `~/.codex` directory. Add `.env.example` with `RUNNER_TOKEN` and the non-secret deployment inputs.
 
-Acceptance requires starting the service container, confirming health, recreating it with the same volume, and confirming that Codex still recognizes an authenticated session.
+Acceptance requires both services to start, the runner to reach Agent Relay by service name, and Codex authentication to remain available after recreating the Agent Relay container with the same mounted `~/.codex` directory.
 
-### Milestone 3: HTTP API and durable job lifecycle
+### Milestone 3: Relay API and job lifecycle
 
-Implement authenticated job submission, status retrieval, local persistence, idempotency, and restart recovery. Use a fake executor in tests so API and state behavior do not require live Codex access.
+Implement health, authenticated job submission, status polling, single-job exclusion, idempotent request identifiers, timeout handling, and interrupted-job reporting.
 
-Acceptance requires API tests for valid submission, unauthorized access, invalid input, duplicate requests, terminal status, and interrupted-job recovery.
+Acceptance requires deterministic API tests for authorization, valid submission, invalid paths, path traversal, duplicate requests, active-job rejection, terminal results, timeout, and service interruption.
 
-### Milestone 4: Git workspace and SSH integration
+### Milestone 4: Codex execution in the shared workspace
 
-Implement repository allowlisting, SSH identity selection, fetching, expected-SHA verification, isolated workspaces, branch locks, and cleanup. Test against local bare Git repositories without requiring GitHub.
+Run `codex exec` in the runner-prepared workspace, stream output, capture exit status, and preserve the checked-out worktree.
 
-Acceptance requires deterministic tests for successful checkout, unknown repository rejection, SHA mismatch, duplicate branch execution, commit detection, and non-force push behavior.
+Acceptance requires a controlled authenticated execution that reads repository instructions and an active plan, performs a harmless file change, and leaves that change visible to the runner service.
 
-### Milestone 5: Codex execution
+### Milestone 5: GitHub Actions checkout, commit, and push
 
-Run real `codex exec` processes, stream output, enforce timeout and cancellation behavior, and preserve logs. Define the exact prompt contract for implement, revise, and finalize modes without duplicating the active plan contents in the request.
+Add the repository workflow and runner-side client. The workflow must checkout the actual pull request branch, dispatch the relay job, wait for completion, commit resulting changes, and push to that branch with the job credentials.
 
-Acceptance requires a controlled authenticated smoke execution that reads a plan from the workspace and performs a harmless local change.
+Acceptance requires a complete pull request run where Codex changes the shared worktree and a runner-created commit appears on the same pull request branch. Agent Relay must have no SSH key or GitHub token.
 
-### Milestone 6: Same-branch push and GitHub Actions integration
+### Milestone 6: Public-interface validation and review loop
 
-Allow Codex to commit and push through the configured SSH identity, verify the final remote branch, and add the reusable target-repository workflow example.
+Allow the Codex execution environment to reach only explicitly configured public test interfaces. Demonstrate implementation, ChatGPT review, a correction run, final plan completion, and another runner-created commit.
 
-Acceptance requires a complete controlled pull request branch run in which GitHub Actions submits the job, Codex pushes a new commit to the same branch, and the workflow reports the final SHA.
+Acceptance requires clear reporting when an endpoint fails but private logs are unavailable. No Docker socket, private container log mount, or container lifecycle permission may be present.
 
 ### Milestone 7: Operations and recovery
 
-Complete runbooks for deployment, login refresh, key rotation, logs, interrupted execution, workspace cleanup, upgrades, and failure diagnosis. Review the final trust model against actual mounts, networks, and secrets.
+Document runner registration, `RUNNER_TOKEN` rotation, browser-login refresh, Compose deployment, workspace cleanup, interrupted jobs, retries, upgrades, and failure diagnosis.
 
-Acceptance requires a documented restart exercise, a failed-job exercise, a branch-conflict exercise, and confirmation that logs do not contain authentication files or SSH key material.
+Acceptance requires a documented restart exercise showing that mounted `~/.codex` authentication persists while an in-flight job is reported as interrupted and retried through a new workflow run.
 
 ## Concrete Steps
 
-The implementation branch will begin by adding the repository instructions and project skeleton. Exact commands and paths will be finalized after this plan is approved, but the intended structure is:
+The intended repository structure after approval is:
 
     AGENTS.md
     .agent/PLANS.md
+    .env.example
     package.json
     tsconfig.json
     src/api/
     src/application/
     src/config/
     src/execution/
-    src/git/
     src/persistence/
     src/security/
     src/server.ts
     test/
     scripts/
+    runner/
     examples/github-actions/
     Dockerfile
-    compose.example.yml
+    Dockerfile.runner
+    compose.yml
     docs/operations/
 
-The service will expose versioned endpoints similar to:
+The initial Agent Relay API will expose:
 
     GET /health
     POST /v1/jobs
     GET /v1/jobs/{jobId}
 
-A create-job request will include a stable request identifier, configured repository slug, pull request number, branch, expected head SHA, active plan path, and execution mode. It may include concise review instructions for revision work, but it will not embed the entire repository or duplicate the plan.
+A create-job request will contain a caller-generated request identifier, a validated workspace path relative to the shared root, the active plan path, and an execution mode such as implement, revise, or finalize. It may contain concise review findings for revision work. It will not contain a repository URL, branch credential, GitHub token, SSH key, or copied repository contents.
 
-The implementation must keep the API and job contracts documented and tested before wiring them to live Codex execution.
+The runner workflow will provide the current pull request branch through checkout rather than asking Agent Relay to locate it. The runner will perform Git commit and push only after Agent Relay reaches a successful terminal state and the worktree contains changes.
 
 ## Validation and Acceptance
 
-The implementation is accepted only when all of the following behaviors are demonstrated:
+The implementation is accepted only when all of the following are demonstrated:
 
-1. The Docker image builds reproducibly and starts the Agent Relay health endpoint.
-2. Browser-based ChatGPT login can be provisioned into persistent `CODEX_HOME` without changing to API-key authentication.
-3. Recreating the service container with the same volume preserves the Codex login cache.
-4. The self-hosted runner can create a job and poll its result over the private network.
-5. Requests without the correct relay token are rejected.
-6. Requests for unconfigured repositories are rejected before any Git operation.
-7. The requested remote branch must match the supplied expected SHA before execution starts.
-8. Two jobs cannot modify the same repository branch concurrently.
-9. Codex runs in the requested workspace and can reach a configured local test endpoint.
-10. Codex reads the active plan and repository instructions rather than receiving a second copied plan in the API request.
-11. Codex can modify, validate, commit, and push to the same pull request branch through the configured SSH identity.
-12. Agent Relay verifies and reports the final remote commit SHA.
-13. A remote branch change during execution produces a conflict result and never causes a force push.
-14. Repeated submission of the same request identifier returns the same job rather than starting duplicate work.
-15. Restarting Agent Relay marks an in-flight process as interrupted while preserving its logs and job record.
-16. A later retry can continue from the current branch and active plan.
-17. Logs and API responses do not expose Codex authentication data, relay tokens, or SSH private key contents.
-18. The complete flow is demonstrated through the provided GitHub Actions example.
+1. One Compose deployment starts exactly one repository-scoped runner and one Agent Relay service.
+2. `.env.example` contains `RUNNER_TOKEN` and no real credentials.
+3. The runner registers with the configured target repository.
+4. The runner and Agent Relay communicate over a private Compose network.
+5. The runner and Agent Relay see the same checked-out workspace through a shared volume.
+6. The operator's standard `~/.codex` directory is mounted into the Agent Relay user's `~/.codex` path without setting `CODEX_HOME`.
+7. Recreating Agent Relay with the same mount preserves the existing Codex login.
+8. Requests without the correct relay token are rejected.
+9. Workspace paths outside the configured shared root are rejected.
+10. Only one Codex job runs at a time in the deployment.
+11. `codex exec` reads the active plan and repository instructions from the workspace.
+12. Codex changes and validation results remain visible to the runner after execution.
+13. Codex receives no GitHub token or SSH key.
+14. Agent Relay performs no clone, fetch, checkout, commit, push, or GitHub API operation.
+15. The runner checks out the actual pull request branch.
+16. The runner commits and pushes Codex's changes with GitHub Actions job credentials.
+17. A pushed commit appears on the same pull request branch that ChatGPT reviews.
+18. Workflow concurrency prevents overlapping executions for the same pull request.
+19. Restarting Agent Relay interrupts the active process but preserves mounted Codex authentication.
+20. A new workflow run can continue from the current branch and active plan.
+21. Codex has no Docker socket, private application logs, or service lifecycle control.
+22. Codex can reach a configured public test interface when required.
+23. Failures that require unavailable private logs are reported as limitations, not fabricated diagnoses.
+24. Logs and API responses do not expose runner registration credentials, relay tokens, GitHub job credentials, or Codex authentication files.
+25. The complete implementation, correction, and finalization loop is demonstrated on one controlled repository.
 
-Unit and integration tests must cover contract validation, state transitions, persistence, locking, Git behavior, process execution, redaction, and restart recovery. Live Codex and GitHub validation must be kept as explicit smoke or end-to-end checks because they require operator credentials and external services.
+Unit and integration tests must cover API validation, workspace containment, authentication, job state transitions, idempotency, single-job exclusion, process execution, timeout, interruption, output redaction, and runner client behavior. Live Codex and GitHub checks remain explicit smoke or end-to-end validation because they require operator credentials and external services.
 
 ## Idempotence and Recovery
 
-Every submitted request has a caller-provided request identifier. Repeating the request with identical immutable fields returns the original job. Reusing the identifier with different fields is rejected.
+Every submitted relay request has a caller-generated request identifier. Repeating the same identifier with identical immutable fields returns the existing job. Reusing the identifier with different fields is rejected.
 
-Repository workspaces are derived from job identifiers and are never shared by simultaneous jobs. Preparation can be retried after removing an incomplete workspace. The repository cache is disposable and can be rebuilt from the configured remote.
+The MVP allows one active Codex process per deployment. A second request while a job is active is rejected with a deterministic status. GitHub Actions workflow concurrency is the primary protection against duplicate runs for the same pull request.
 
-The branch lock is acquired before workspace preparation and released in a guaranteed cleanup path. Stale locks must include enough process and job metadata to distinguish an active job from an interrupted one after service restart.
+Agent Relay validates the requested workspace after resolving symbolic links and normalized paths. The resolved path must remain below the configured shared workspace root.
 
-Agent Relay never force pushes. If the remote head changes unexpectedly, the job ends as conflicted. A new job may then start from the updated expected SHA.
+A service restart cannot preserve the operating-system process. Any previously running job is marked interrupted. Recovery is a new GitHub Actions run against the current pull request branch. The active plan and Git history provide durable progress.
 
-A service restart cannot resume the same operating-system process. The active job becomes interrupted. Recovery means dispatching a new attempt against the current branch. The active plan and Git history must contain enough progress information for Codex to continue safely.
+Agent Relay never attempts Git recovery. Checkout and push failures belong to the runner workflow and are reported by GitHub Actions.
 
-Persistent Codex credentials, state, logs, and workspaces are separate mounts so each can be backed up, rotated, or cleared independently.
+The mounted `~/.codex` directory and shared runner workspace remain separate resources so authentication persistence and workspace cleanup can be managed independently.
 
 ## Artifacts and Notes
 
-The initial design is documented in `README.md` and this active plan.
+The design is documented in `README.md`, `.env.example`, and this active plan.
 
-Relevant external behavior verified during planning:
+The revised design intentionally removes the following earlier concepts:
 
-- Codex CLI supports ChatGPT browser login.
-- File-based credentials are stored in `auth.json` under `CODEX_HOME` and are refreshed during use.
-- Authentication can be copied into a Docker container or preserved through a mounted volume.
-- `codex exec` is the stable non-interactive command intended for scripted and CI-style execution.
-- Codex App Server is not required for this MVP.
+- repository allowlists and multi-repository routing inside Agent Relay;
+- repository mirrors and Git worktrees managed by Agent Relay;
+- expected remote SHA verification inside Agent Relay;
+- repository-specific SSH identities;
+- Codex-created commits and pushes;
+- Docker socket and private application log access.
 
-Implementation evidence must be added here as concise command outputs, test summaries, container checks, and end-to-end observations.
+Implementation evidence must be added here as concise test summaries, container checks, relay job results, and end-to-end observations.
 
 ## Interfaces and Dependencies
 
-The initial service runtime will use Node.js 22, TypeScript, and the stable Codex CLI package. The specific HTTP framework, schema library, test runner, logger, and package versions will be selected during the foundation milestone. Dependencies must be limited to capabilities that materially improve contract validation, HTTP handling, process control, or tests.
+The initial service runtime will use Node.js 22, TypeScript, and Codex CLI. Specific HTTP, schema-validation, logging, and test dependencies must remain minimal and will be selected during the foundation milestone.
 
 Agent Relay depends operationally on:
 
-- a persistent `CODEX_HOME` with a valid ChatGPT login;
-- Git and OpenSSH;
-- one configured SSH identity per writable repository or another explicitly configured dedicated identity;
-- network access to GitHub;
-- network and filesystem access required by each target system;
-- a shared private network with the self-hosted runner;
-- a relay authentication secret shared with the runner;
-- target repositories that contain sufficient `AGENTS.md` instructions and an active implementation plan.
+- the self-hosted runner service in the same Compose project;
+- a shared workspace volume;
+- a private Compose network;
+- the operator's mounted `~/.codex` directory with valid browser-login credentials;
+- a relay authentication token;
+- outbound access required by Codex;
+- any explicitly configured public test interfaces.
 
-The request contract must not accept raw SSH keys, arbitrary key paths, arbitrary Git URLs, Docker mount definitions, or shell commands. Those capabilities are controlled by the Agent Relay deployment configuration.
+The runner depends operationally on:
 
-## Approval Decisions
+- `RUNNER_TOKEN` for repository-scoped registration;
+- the configured repository URL, runner name, and labels;
+- GitHub Actions job credentials supplied when a workflow runs;
+- the shared workspace volume;
+- network access to the Agent Relay service.
 
-Approval of this plan confirms the following proposed choices:
-
-1. Agent Relay is a separate reusable repository.
-2. The same image may be deployed on several hosts, close to each project's local infrastructure.
-3. One deployment may serve multiple explicitly allowlisted repositories.
-4. The service is persistent, while each job uses a fresh `codex exec` process.
-5. The runner communicates through a small asynchronous HTTP API.
-6. Node.js 22 and TypeScript are used for the service.
-7. MVP state is stored in local files rather than a database.
-8. Codex retains full deployment-granted repository and infrastructure access.
-9. Browser-based ChatGPT login is persisted through `CODEX_HOME`.
-10. Repository-specific SSH identities are mounted at runtime.
-11. Codex commits and pushes to the existing pull request branch; Agent Relay verifies the result.
-12. The MVP supports trusted repositories only and does not attempt to execute arbitrary external pull requests.
-
-Any rejected decision must be revised in this plan before implementation begins.
+No GitHub credential is an Agent Relay dependency.
 
 ## Plan Revision Notes
 
-- 2026-07-13: Created the initial self-contained MVP plan from the agreed one-PR, persistent-Codex, thin-runner architecture. Added explicit decisions for multi-repository deployment, browser-login persistence, SSH pushes, job recovery, and acceptance validation.
+- 2026-07-13: Created the initial design for a reusable Agent Relay service.
+- 2026-07-13: Reworked the plan around one repository per Compose deployment. GitHub Actions now owns checkout, commit, and push; Agent Relay only runs Codex in the runner's shared workspace. Removed SSH, repository management, multi-repository routing, Docker control, and private log access from the MVP. Replaced `CODEX_HOME` with a direct mount of the operator's standard `~/.codex` directory and added `RUNNER_TOKEN` to the documented deployment configuration.

@@ -32,7 +32,16 @@ rsync --version
 file --version
 find --version
 diff --version
-codex --version
+
+codex_version="$(codex --version)"
+printf '%s\n' "$codex_version"
+case "$codex_version" in
+  *"${EXPECTED_CODEX_VERSION:?EXPECTED_CODEX_VERSION is required}"*) ;;
+  *)
+    echo "Unexpected Codex CLI version: $codex_version" >&2
+    exit 1
+    ;;
+esac
 codex --ask-for-approval never exec --sandbox danger-full-access --help >/dev/null
 
 if command -v ssh >/dev/null 2>&1; then

@@ -2,12 +2,16 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { RelayError } from "../contracts/errors.js";
 
 export async function readJson(req: IncomingMessage, maxBytes = 64_000): Promise<unknown> {
-  let body = "";
+  const chunks: any[] = [];
+  let bytes = 0;
   for await (const chunk of req) {
-    body += String(chunk);
-    if (body.length > maxBytes) throw new RelayError("INVALID_REQUEST", "Request body is too large", 413);
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    bytes += buffer.length;
+    if (bytes > maxBytes) throw new RelayError("INVALID_REQUEST", "Request body is too large", 413);
+    chunks.push(buffer);
   }
-  if (!body) throw new RelayError("INVALID_REQUEST", "Request body is required", 400);
+  if (bytes === 0) throw new RelayError("INVALID_REQUEST", "Request body is required", 400);
+  const body = Buffer.concat(chunks, bytes).toString("utf8");
   try { return JSON.parse(body); }
   catch { throw new RelayError("INVALID_REQUEST", "Request body must be valid JSON", 400); }
 }

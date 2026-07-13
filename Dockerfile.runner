@@ -11,12 +11,12 @@ RUN apt-get update \
     ca-certificates curl git jq \
     libicu72 libssl3 libkrb5-3 zlib1g liblttng-ust1 \
   && rm -rf /var/lib/apt/lists/* \
-  && groupadd --gid "${GROUP_ID}" runner \
-  && useradd --create-home --uid "${USER_ID}" --gid "${GROUP_ID}" --shell /bin/bash runner \
+  && groupmod --gid "${GROUP_ID}" node \
+  && usermod --uid "${USER_ID}" --gid "${GROUP_ID}" node \
   && mkdir -p /actions-runner /runner/_work \
-  && chown -R runner:runner /actions-runner /runner
+  && chown -R node:node /actions-runner /runner /home/node
 
-USER runner
+USER node
 WORKDIR /actions-runner
 
 RUN curl -fsSLo actions-runner.tar.gz \
@@ -24,9 +24,9 @@ RUN curl -fsSLo actions-runner.tar.gz \
   && tar -xzf actions-runner.tar.gz \
   && rm actions-runner.tar.gz
 
-COPY --chown=runner:runner runner/entrypoint.sh /entrypoint.sh
-COPY --chown=runner:runner runner/client.mjs /runner/client.mjs
-COPY --chown=runner:runner runner/finalize.sh /runner/finalize.sh
+COPY --chown=node:node runner/entrypoint.sh /entrypoint.sh
+COPY --chown=node:node runner/client.mjs /runner/client.mjs
+COPY --chown=node:node runner/finalize.sh /runner/finalize.sh
 
 RUN chmod +x /entrypoint.sh /runner/client.mjs /runner/finalize.sh
 

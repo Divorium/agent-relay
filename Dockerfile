@@ -8,7 +8,10 @@ ARG USER_ID=1000
 ARG GROUP_ID=1000
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV HOME=/home/agent
 ENV JAVA_HOME=/opt/java/openjdk
+ENV CARGO_HOME=/home/agent/.cargo
+ENV RUSTUP_HOME=/home/agent/.rustup
 ENV PATH="/opt/java/openjdk/bin:/usr/local/go/bin:/home/agent/.cargo/bin:${PATH}"
 
 COPY --from=java /opt/java/openjdk /opt/java/openjdk
@@ -25,7 +28,7 @@ RUN apt-get update \
   && npm install --global "typescript@${TYPESCRIPT_VERSION}" @openai/codex \
   && groupadd --non-unique --gid "${GROUP_ID}" agent \
   && useradd --non-unique --create-home --uid "${USER_ID}" --gid "${GROUP_ID}" --shell /bin/bash agent \
-  && mkdir -p /app /runner/_work /var/lib/agent-relay \
+  && mkdir -p /app /runner/_work /var/lib/agent-relay /home/agent/.cargo /home/agent/.rustup \
   && chown -R agent:agent /app /runner /var/lib/agent-relay /home/agent
 
 USER agent

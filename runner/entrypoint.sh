@@ -5,11 +5,6 @@ set -euo pipefail
 : "${RUNNER_REPOSITORY_URL:?RUNNER_REPOSITORY_URL is required}"
 : "${RUNNER_NAME:?RUNNER_NAME is required}"
 
-cleanup() {
-  ./config.sh remove --unattended --token "${RUNNER_TOKEN}" || true
-}
-trap cleanup EXIT INT TERM
-
 ./config.sh \
   --unattended \
   --replace \
@@ -19,4 +14,5 @@ trap cleanup EXIT INT TERM
   --labels "${RUNNER_LABELS:-agent-relay}" \
   --work /runner/_work
 
+unset RUNNER_TOKEN
 exec ./run.sh

@@ -77,10 +77,9 @@ function assertNoSensitiveData(value) {
 function validateResult(value) {
   assertNoSensitiveData(value);
   const result = asObject(value, "result");
-  strictKeys(result, new Set(["schemaVersion", "requestId", "status", "shouldCommit", "commitMessage", "summary", "validation", "blockers", "limitations"]), "result");
+  strictKeys(result, new Set(["schemaVersion", "requestId", "status", "commitMessage", "summary", "validation", "blockers", "limitations"]), "result");
   if (result.schemaVersion !== 1 || result.requestId !== requestId) throw new Error("Result contract mismatch");
   if (result.status !== "completed" && result.status !== "blocked") throw new Error("Invalid result status");
-  if (typeof result.shouldCommit !== "boolean") throw new Error("Invalid shouldCommit");
 
   const summary = requiredString(result.summary, "summary", 4000);
   if (!Array.isArray(result.validation) || result.validation.length > 100) throw new Error("Invalid validation");
@@ -88,9 +87,8 @@ function validateResult(value) {
   const blockers = stringArray(result.blockers, "blockers", 50, 2000);
   const limitations = stringArray(result.limitations, "limitations", 50, 2000);
 
-  if (result.status === "blocked" && result.shouldCommit) throw new Error("Blocked result cannot request a commit");
   let commitMessage;
-  if (result.status === "completed" && result.shouldCommit) {
+  if (result.status === "completed") {
     commitMessage = requiredString(result.commitMessage, "commitMessage", 120);
     if (commitMessage.includes("\n") || commitMessage.includes("\r")) throw new Error("Invalid commitMessage");
   } else if (result.commitMessage !== undefined) {
@@ -101,7 +99,6 @@ function validateResult(value) {
     schemaVersion: 1,
     requestId,
     status: result.status,
-    shouldCommit: result.shouldCommit,
     ...(commitMessage === undefined ? {} : { commitMessage }),
     summary,
     validation,
@@ -160,7 +157,6 @@ if (result.status === "blocked") throw new Error(`Codex blocked: ${result.blocke
 const diff = spawnSync("git", ["status", "--porcelain"], { cwd: workspace, encoding: "utf8" });
 if (diff.status !== 0) throw new Error(diff.stderr || "git status failed");
 const hasChanges = diff.stdout.trim().length > 0;
-if (result.shouldCommit !== hasChanges) throw new Error("Result shouldCommit does not match actual worktree");
 await rm(`${workspace}/.agent-relay`, { recursive: true, force: true });
 
 console.log(`Codex summary: ${result.summary}`);

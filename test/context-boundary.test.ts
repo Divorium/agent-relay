@@ -19,15 +19,14 @@ test("runtime prompt contains task context without runner-owned result decisions
   assert.match(prompt, /mark it \[blocked\]/);
   assert.match(prompt, /Do not run commands that create or publish Git commits/);
   assert.match(prompt, /\.agent-relay\/result\.json/);
-  assert.doesNotMatch(prompt, /AGENTS\.md|GitHub credentials|runner exclusively|shouldCommit|git status|git diff/i);
-  assert.match(prompt, /Do not include status, blockers, limitations, shouldCommit, or commitMessage/);
+  assert.doesNotMatch(prompt, /AGENTS\.md|GitHub credentials|runner exclusively|shouldCommit|git status|git diff|commitMessage|limitations|blockers|\bstatus\b/i);
 });
 
-test("ExecPlan rules keep blockers in living documentation rather than result state", async () => {
+test("ExecPlan rules keep blockers in living documentation", async () => {
   const rules = await readFile(".agent/PLANS.md", "utf8");
   assert.match(rules, /prefix it with `\[blocked\]`/);
   assert.match(rules, /cause, impact, evidence, and concrete unblock condition/);
-  assert.match(rules, /never a Codex result status or an Agent Relay job status/);
+  assert.match(rules, /plan documentation only/);
 });
 
 test("create-job contract has no secondary instruction channel", () => {

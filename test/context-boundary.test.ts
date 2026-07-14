@@ -59,7 +59,7 @@ test("Codex arguments use a restricted profile that hides Codex home", () => {
   const args = createCodexArgs("/work/repository", "task prompt");
   assert.ok(args.includes("default_permissions=\"relay\""));
   assert.ok(args.includes("permissions.relay.extends=\":workspace\""));
-  assert.ok(args.includes("permissions.relay.filesystem.\"/home/agent/.codex\"=\"deny\""));
+  assert.ok(args.includes("permissions.relay.filesystem={\"/home/agent/.codex\"=\"deny\"}"));
   assert.ok(args.includes("permissions.relay.network.enabled=true"));
   assert.ok(!args.includes("danger-full-access"));
 });
@@ -77,7 +77,7 @@ test("workflow removes checkout credentials and alternate instruction fields", a
     assert.match(workflow, /persist-credentials: false/);
     assert.match(workflow, /Verify credential-free checkout/);
     assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ secrets\.AGENT_RELAY_PUSH_TOKEN \|\| github\.token \}\}/);
-    assert.doesNotMatch(workflow, /persist-credentials: true|AGENT_RELAY_REQUEST_ID|AGENT_RELAY_MODE|\bmode:/);
+    assert.doesNotMatch(workflow, /persist-credentials: true|AGENT_RELAY_REQUEST_ID|AGENT_RELAY_MODE|AGENT_RELAY_OUTPUT_ARCHIVE_PATH|\bmode:/);
   }
 });
 

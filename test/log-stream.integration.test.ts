@@ -16,7 +16,7 @@ test("Codex output reaches Docker stdout and the job log before process completi
 set -eu
 args="$*"
 case "$args" in *'default_permissions="relay"'*) ;; *) exit 41 ;; esac
-case "$args" in *'permissions.relay.filesystem."/home/agent/.codex"="deny"'*) ;; *) exit 42 ;; esac
+case "$args" in *'permissions.relay.filesystem={"/home/agent/.codex"="deny"}'*) ;; *) exit 42 ;; esac
 case "$args" in *'danger-full-access'*) exit 43 ;; esac
 while [ "$1" != "--cd" ]; do shift; done
 workspace="$2"

@@ -35,7 +35,7 @@ test("Codex arguments select the restricted Relay permission profile", () => {
   assert.deepEqual(args.slice(0, 2), ["--ask-for-approval", "never"]);
   assert.ok(args.includes("default_permissions=\"relay\""));
   assert.ok(args.includes("permissions.relay.extends=\":workspace\""));
-  assert.ok(args.includes("permissions.relay.filesystem.\"/home/agent/.codex\"=\"deny\""));
+  assert.ok(args.includes("permissions.relay.filesystem={\"/home/agent/.codex\"=\"deny\"}"));
   assert.ok(args.includes("permissions.relay.network.enabled=true"));
   assert.notDeepEqual(args.slice(args.indexOf("exec") + 1, args.indexOf("exec") + 3), ["--sandbox", "danger-full-access"]);
 });
@@ -48,7 +48,7 @@ set -eu
 args="$*"
 case "$args" in *'default_permissions="relay"'*) ;; *) exit 21 ;; esac
 case "$args" in *'permissions.relay.extends=":workspace"'*) ;; *) exit 22 ;; esac
-case "$args" in *'permissions.relay.filesystem."/home/agent/.codex"="deny"'*) ;; *) exit 23 ;; esac
+case "$args" in *'permissions.relay.filesystem={"/home/agent/.codex"="deny"}'*) ;; *) exit 23 ;; esac
 case "$args" in *'danger-full-access'*) exit 24 ;; esac
 while [ "$1" != "--cd" ]; do shift; done
 workspace="$2"

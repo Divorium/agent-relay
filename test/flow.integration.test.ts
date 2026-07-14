@@ -50,7 +50,7 @@ test("controlled full flow preserves work and derives commit metadata from the a
 set -eu
 args="$*"
 case "$args" in *'default_permissions="relay"'*) ;; *) exit 31 ;; esac
-case "$args" in *'permissions.relay.filesystem."/home/agent/.codex"="deny"'*) ;; *) exit 32 ;; esac
+case "$args" in *'permissions.relay.filesystem={"/home/agent/.codex"="deny"}'*) ;; *) exit 32 ;; esac
 case "$args" in *'danger-full-access'*) exit 33 ;; esac
 while [ "$1" != "--cd" ]; do shift; done
 workspace="$2"

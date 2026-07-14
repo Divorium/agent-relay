@@ -45,7 +45,7 @@ const CODEX_CONFIG_OVERRIDES = [
   "features.memories=false",
   "default_permissions=\"relay\"",
   "permissions.relay.extends=\":workspace\"",
-  `permissions.relay.filesystem.\"${ISOLATED_CODEX_HOME}\"=\"deny\"`,
+  `permissions.relay.filesystem={\"${ISOLATED_CODEX_HOME}\"=\"deny\"}`,
   "permissions.relay.network.enabled=true",
 ] as const;
 

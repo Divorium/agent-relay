@@ -40,7 +40,7 @@ test("Codex arguments select the restricted Relay permission profile", () => {
   assert.notDeepEqual(args.slice(args.indexOf("exec") + 1, args.indexOf("exec") + 3), ["--sandbox", "danger-full-access"]);
 });
 
-test("CodexExecutor runs a real child process with filtered context and validates its minimal result", async () => {
+test("CodexExecutor runs a real child process with filtered context and no result artifact", async () => {
   const { root, workspace, outputPath } = await createRoot("executor");
   const executable = join(root, "fake-codex");
   await writeFile(executable, `#!/bin/sh
@@ -50,19 +50,14 @@ case "$args" in *'default_permissions="relay"'*) ;; *) exit 21 ;; esac
 case "$args" in *'permissions.relay.extends=":workspace"'*) ;; *) exit 22 ;; esac
 case "$args" in *'permissions.relay.filesystem={"/home/agent/.codex"="deny"}'*) ;; *) exit 23 ;; esac
 case "$args" in *'danger-full-access'*) exit 24 ;; esac
+case "$args" in *'result.json'*) exit 25 ;; esac
 while [ "$1" != "--cd" ]; do shift; done
 workspace="$2"
 [ "$workspace" = "${workspace}" ]
 [ -z "\${AGENT_RELAY_TOKEN:-}" ]
 [ -z "\${APPLICATION_MODE:-}" ]
 printf '%s\n' 'authorization: Bearer abcdefghijklmnopqrstuvwxyz'
-cat > "$workspace/.agent-relay/result.json" <<'JSON'
-{
-  "schemaVersion": 1,
-  "summary": "Controlled child process completed.",
-  "validation": []
-}
-JSON
+printf 'changed\n' > "$workspace/changed.txt"
 `, { mode: 0o700 });
   await chmod(executable, 0o700);
 
@@ -74,7 +69,7 @@ JSON
   try {
     const outcome = await executor.run({ requestId: "executor-request", workspace: "workspace", planPath: "plan.md" }, workspace, outputPath);
     assert.equal(outcome.exitCode, 0);
-    assert.equal(outcome.result.summary, "Controlled child process completed.");
+    assert.equal(await readFile(join(workspace, "changed.txt"), "utf8"), "changed\n");
     const log = await readFile(outputPath, "utf8");
     assert.doesNotMatch(log, /abcdefghijklmnopqrstuvwxyz/);
     assert.match(log, /\[REDACTED\]/);

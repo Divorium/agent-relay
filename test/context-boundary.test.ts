@@ -11,13 +11,14 @@ const request = {
   planPath: "docs/exec-plans/active/task.md",
 };
 
-test("runtime prompt contains task context without alternate instruction or result channels", () => {
-  const prompt = buildCodexPrompt(request, ".agent-relay/result.json");
-  assert.match(prompt, /docs\/exec-plans\/active\/task\.md/);
-  assert.match(prompt, /mark it \[blocked\]/);
-  assert.match(prompt, /Do not run commands that create or publish Git commits/);
-  assert.match(prompt, /\.agent-relay\/result\.json/);
-  assert.doesNotMatch(prompt, /Execution mode|requestId|AGENTS\.md|GitHub credentials|runner exclusively|shouldCommit|git status|git diff|commitMessage|limitations|blockers|\bstatus\b/i);
+test("runtime prompt contains only the active-plan execution contract", () => {
+  const prompt = buildCodexPrompt(request);
+  assert.equal(prompt, [
+    "Implement the active ExecPlan at docs/exec-plans/active/task.md in the current checked-out repository.",
+    "Maintain it according to .agent/PLANS.md.",
+    "Run the validation required by the active plan.",
+    "Do not run commands that create or publish Git commits.",
+  ].join("\n"));
 });
 
 test("repository instructions contain only durable code rules", async () => {
@@ -97,13 +98,13 @@ test("packaged execution uses an isolated local user", () => {
   });
 });
 
-test("workflow removes checkout credentials and alternate instruction fields", async () => {
+test("workflow removes checkout credentials and model-artifact instructions", async () => {
   for (const path of [".github/workflows/agent-relay.yml", "examples/github-actions/agent-relay.yml"]) {
     const workflow = await readFile(path, "utf8");
     assert.match(workflow, /persist-credentials: false/);
     assert.match(workflow, /Verify credential-free checkout/);
     assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ secrets\.AGENT_RELAY_PUSH_TOKEN \|\| github\.token \}\}/);
-    assert.doesNotMatch(workflow, /persist-credentials: true|AGENT_RELAY_REQUEST_ID|AGENT_RELAY_MODE|AGENT_RELAY_OUTPUT_ARCHIVE_PATH|\bmode:/);
+    assert.doesNotMatch(workflow, /persist-credentials: true|AGENT_RELAY_REQUEST_ID|AGENT_RELAY_MODE|AGENT_RELAY_OUTPUT_ARCHIVE_PATH|\.agent-relay|result\.json|\bmode:/);
   }
 });
 

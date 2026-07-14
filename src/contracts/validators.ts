@@ -88,11 +88,10 @@ function validateValidation(value: unknown, index: number): ValidationResult {
 export function validateCodexResult(value: unknown, expectedRequestId: string): CodexResult {
   try { assertNoSensitiveResult(value); } catch { throw invalid("result", "Result contains sensitive data"); }
   const object = asObject(value, "result", "result");
-  rejectUnknownFields(object, ["schemaVersion", "requestId", "status", "shouldCommit", "commitMessage", "summary", "validation", "blockers", "limitations"], "result", "result ");
+  rejectUnknownFields(object, ["schemaVersion", "requestId", "status", "commitMessage", "summary", "validation", "blockers", "limitations"], "result", "result ");
   if (object.schemaVersion !== 1) throw invalid("result", "Unsupported schemaVersion");
   if (object.requestId !== expectedRequestId) throw invalid("result", "Result requestId does not match the job");
   if (object.status !== "completed" && object.status !== "blocked") throw invalid("result", "Invalid result status");
-  if (typeof object.shouldCommit !== "boolean") throw invalid("result", "shouldCommit must be boolean");
 
   const summary = requiredString(object.summary, "summary", 4000, "result");
   const validation = Array.isArray(object.validation) && object.validation.length <= 100
@@ -105,20 +104,18 @@ export function validateCodexResult(value: unknown, expectedRequestId: string): 
     schemaVersion: 1,
     requestId: expectedRequestId,
     status: object.status,
-    shouldCommit: object.shouldCommit,
     summary,
     validation,
     blockers,
     limitations,
   };
 
-  if (object.status === "blocked" && object.shouldCommit) throw invalid("result", "Blocked work cannot be committed");
-  if (object.status === "completed" && object.shouldCommit) {
+  if (object.status === "completed") {
     const commitMessage = requiredString(object.commitMessage, "commitMessage", 120, "result");
     if (commitMessage.includes("\n") || commitMessage.includes("\r")) throw invalid("result", "commitMessage must be one line");
     result.commitMessage = commitMessage;
   } else if (object.commitMessage !== undefined) {
-    throw invalid("result", "commitMessage is only allowed when a commit is requested");
+    throw invalid("result", "commitMessage is not allowed for blocked work");
   }
   return result;
 }

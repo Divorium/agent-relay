@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$(id -un)" != "agent" ]]; then
+  echo "codex-run must execute as the isolated agent user" >&2
+  exit 1
+fi
+
+umask 0027
+mkdir -p .agent-relay
+rm -f .agent-relay/result.json
+
+exec /usr/bin/env -i \
+  HOME=/home/agent \
+  USER=agent \
+  LOGNAME=agent \
+  SHELL=/bin/bash \
+  LANG=C.UTF-8 \
+  LC_ALL=C.UTF-8 \
+  JAVA_HOME=/opt/java/openjdk \
+  CARGO_HOME=/home/agent/.cargo \
+  RUSTUP_HOME=/home/agent/.rustup \
+  PATH=/opt/java/openjdk/bin:/usr/local/go/bin:/home/agent/.cargo/bin:/usr/local/bin:/usr/bin:/bin \
+  /usr/local/bin/codex "$@"

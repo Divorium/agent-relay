@@ -34,12 +34,14 @@ services:
       AGENT_RELAY_TOKEN: ${AGENT_RELAY_TOKEN}
       SHARED_WORKSPACE_ROOT: /runner/_work
       AGENT_RELAY_STATE_DIR: /var/lib/agent-relay
+      CODEX_COMMAND: /usr/local/bin/codex-run
+      CODEX_RUN_AS_USER: agent
       CODEX_TIMEOUT_MS: ${CODEX_TIMEOUT_MS:-21600000}
       MAX_OUTPUT_BYTES: ${MAX_OUTPUT_BYTES:-10000000}
     volumes:
       - workspace:/runner/_work
       - relay-state:/var/lib/agent-relay
-      - ${HOST_CODEX_DIR}:/home/agent/.codex
+      - ${HOST_CODEX_AUTH_FILE}:/home/agent/.codex/auth.json
     networks:
       - relay
     expose:

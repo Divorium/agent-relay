@@ -41,6 +41,7 @@ test("runner finalize script commits and pushes to the requested branch", async 
       GITHUB_WORKSPACE: workspace,
       TARGET_BRANCH: branch,
       COMMIT_MESSAGE: "Apply controlled runner changes",
+      GITHUB_PUSH_TOKEN: "unused-for-local-remote",
     });
 
     run(root, "git", ["clone", "--branch", branch, remote, verification]);
@@ -72,6 +73,7 @@ test("runner finalize script refuses to commit relay artifacts", async () => {
         GITHUB_WORKSPACE: workspace,
         TARGET_BRANCH: "agent/test-artifact",
         COMMIT_MESSAGE: "Must not commit artifact",
+        GITHUB_PUSH_TOKEN: "unused-for-artifact-check",
       },
     });
     assert.notEqual(result.status, 0);

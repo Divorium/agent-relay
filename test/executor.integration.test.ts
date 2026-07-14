@@ -39,7 +39,7 @@ test("Codex arguments select the restricted Relay permission profile", () => {
   assert.ok(args.includes("permissions.relay.extends=\":workspace\""));
   assert.ok(args.includes("permissions.relay.filesystem.\"/home/agent/.codex\"=\"deny\""));
   assert.ok(args.includes("permissions.relay.network.enabled=true"));
-  assert.doesNotDeepEqual(args.slice(args.indexOf("exec") + 1, args.indexOf("exec") + 3), ["--sandbox", "danger-full-access"]);
+  assert.notDeepEqual(args.slice(args.indexOf("exec") + 1, args.indexOf("exec") + 3), ["--sandbox", "danger-full-access"]);
 });
 
 test("CodexExecutor runs a real child process with filtered context and validates its minimal result", async () => {

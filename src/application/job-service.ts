@@ -49,7 +49,6 @@ export class JobService {
         status: "accepted",
         createdAt: now,
         updatedAt: now,
-        resultPath: join(workspace, ".agent-relay", "result.json"),
         outputPath: join(this.stateDir, "logs", `${id}.log`),
       };
       await this.store.save(job);

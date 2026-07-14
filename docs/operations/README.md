@@ -13,21 +13,12 @@ Copy `.env.example` to `.env` and provide:
 
 Only `auth.json` is mounted into the Codex home directory, read-only. Do not mount the complete host `~/.codex` directory.
 
-`RUNNER_TOKEN` is a short-lived registration token. A recreated runner container needs a current token unless its registration files are persisted separately.
-
-## Start
+## Start and verify
 
 ```bash
 docker compose build
 docker compose up -d
 docker compose ps
-```
-
-The Relay API is not published to the host. The runner reaches `http://agent-relay:8080` over the Compose network.
-
-## Verify
-
-```bash
 docker compose exec agent-relay /app/scripts/toolchain-smoke.sh
 docker compose exec --user agent agent-relay /usr/local/bin/codex --version
 docker compose exec --user agent agent-relay /usr/local/bin/codex login status
@@ -47,52 +38,45 @@ sudo -H -u agent -- test ! -e /home/agent/.codex/config.toml
 '
 ```
 
-The `relay` user owns `/app` and `/var/lib/agent-relay`. The isolated `agent` user owns the workspace-facing Codex home and cannot read Relay state.
-
-## Install the workflow
+## Install and dispatch the workflow
 
 Use `.github/workflows/agent-relay.yml` in this repository or copy `examples/github-actions/agent-relay.yml` into another target repository.
-
-The workflow requires:
-
-```yaml
-permissions:
-  contents: write
-  pull-requests: read
-```
-
-For normal source changes it uses the job's `github.token`. When the plan may change `.github/workflows/`, configure `AGENT_RELAY_PUSH_TOKEN` with permission to update repository contents and workflow files.
-
-Checkout uses the selected token with `persist-credentials: false`. The workflow verifies that no authorization header, credential helper, or credential-bearing remote remains before invoking Relay. The push token is supplied again only to finalization.
-
-## Dispatch
 
 Manual dispatch requires:
 
 - `pr_number`: the selected pull request number;
 - `plan_path`: the active ExecPlan path in that pull request.
 
-There is no branch input and no execution-mode input. The active plan is the sole task instruction.
+There is no branch input, execution-mode input, or model result contract. The active plan is the sole task instruction.
 
 Before checkout, `/runner/resolve-pr.mjs` rejects the pull request unless it exists, is open, is not a draft, belongs to the target repository, and has valid head ref and SHA values. Checkout uses the API-derived head SHA. Commit and push target the API-derived head ref.
 
-The runner generates an opaque request ID for API idempotency. It is not included in the Codex prompt or result.
+The runner generates an opaque request ID for API idempotency. It is not included in the Codex prompt.
 
-## GitHub logs
+## Credentials
+
+Checkout uses the selected token with `persist-credentials: false`. The workflow verifies that no authorization header, credential helper, or credential-bearing remote remains before invoking Relay. The push token is supplied again only to finalization.
+
+For normal source changes the workflow uses the job's `github.token`. When the plan may change `.github/workflows/`, configure `AGENT_RELAY_PUSH_TOKEN` with permission to update repository contents and workflow files.
+
+## Logs and outcomes
 
 The `Run Codex through Agent Relay` step pipes runner-client stdout and stderr through `tee`:
 
 - output is visible in the live GitHub Actions log;
 - the same output is uploaded as the `agent-relay-output` artifact;
-- `$GITHUB_OUTPUT` is reserved for derived control values such as `commit_message`.
+- `$GITHUB_OUTPUT` is reserved for the runner-derived commit message.
 
-The client prints Relay job-state transitions, the validated Codex summary, and validation evidence. The full redacted Codex process log remains under the Relay-only state volume until Relay-side output streaming is implemented.
+The complete redacted Codex process log is stored under the Relay-only state volume.
 
-## Blockers and incomplete work
+Codex does not write a result file. Relay sets the technical outcome from the process:
 
-A task-level blocker is recorded only in the active ExecPlan. The blocked item remains unchecked and includes its cause, impact, evidence, and unblock condition. Codex continues unaffected work and exits normally with the minimal evidence result. The plan remains active until every item is completed.
+- exit code `0` → `completed`;
+- non-zero exit or spawn failure → `failed`;
+- deadline exceeded → `timed_out`;
+- in-flight job recovered after restart → `interrupted`.
 
-Technical process failure, timeout, invalid result, persistence failure, and interruption remain Relay job failures.
+A task-level blocker is recorded only in the active ExecPlan. The item remains unchecked and includes cause, impact, evidence, and unblock condition. Codex continues unaffected work. The plan remains active until every item is completed.
 
 ## Recovery
 

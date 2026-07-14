@@ -6,7 +6,6 @@ export interface CreateJobRequest {
   workspace: string;
   planPath: string;
   mode: ExecutionMode;
-  reviewFindings?: string[];
 }
 
 export type JobStatus =

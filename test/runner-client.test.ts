@@ -172,14 +172,17 @@ test("runner client leaves GITHUB_OUTPUT empty when Git reports a clean worktree
   }
 });
 
-test("workflow template resolves a specific ready pull request and keeps logs separate from GITHUB_OUTPUT", async () => {
+test("workflow template keeps checkout credentials away from Codex and injects push credentials only into finalization", async () => {
   const workflow = await readFile(join(process.cwd(), "examples", "github-actions", "agent-relay.yml"), "utf8");
   assert.match(workflow, /pr_number:/);
   assert.doesNotMatch(workflow, /inputs\.branch/);
   assert.match(workflow, /run: node \/runner\/resolve-pr\.mjs/);
   assert.match(workflow, /ref: \$\{\{ steps\.pr\.outputs\.head_sha \}\}/);
   assert.match(workflow, /TARGET_BRANCH: \$\{\{ steps\.pr\.outputs\.head_ref \}\}/);
-  assert.match(workflow, /secrets\.AGENT_RELAY_PUSH_TOKEN \|\| github\.token/);
+  assert.match(workflow, /persist-credentials: false/);
+  assert.match(workflow, /Verify credential-free checkout/);
+  assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ secrets\.AGENT_RELAY_PUSH_TOKEN \|\| github\.token \}\}/);
+  assert.doesNotMatch(workflow, /AGENT_RELAY_REQUEST_ID/);
   assert.match(workflow, /node \/runner\/client\.mjs 2>&1 \| tee/);
   assert.doesNotMatch(workflow, /client\.mjs[^\n]*GITHUB_OUTPUT/);
   assert.match(workflow, /run: \/runner\/finalize\.sh/);

@@ -45,7 +45,7 @@ function stringArray(value: unknown, name: string, maxItems: number, maxLength: 
 
 export function validateCreateJobRequest(value: unknown): CreateJobRequest {
   const object = asObject(value, "request", "request");
-  rejectUnknownFields(object, ["requestId", "workspace", "planPath", "mode", "reviewFindings"], "request", "");
+  rejectUnknownFields(object, ["requestId", "workspace", "planPath", "mode"], "request", "");
 
   const requestId = requiredString(object.requestId, "requestId", 128, "request");
   if (!REQUEST_ID.test(requestId)) throw invalid("request", "requestId has invalid format");
@@ -62,16 +62,14 @@ export function validateCreateJobRequest(value: unknown): CreateJobRequest {
     throw invalid("request", "mode must be implement, revise, or finalize");
   }
 
-  const request: CreateJobRequest = { requestId, workspace, planPath, mode: object.mode as CreateJobRequest["mode"] };
-  if (object.reviewFindings !== undefined) request.reviewFindings = stringArray(object.reviewFindings, "reviewFindings", 50, 2000, "request");
-  return request;
+  return { requestId, workspace, planPath, mode: object.mode as CreateJobRequest["mode"] };
 }
 
 function validateValidation(value: unknown, index: number): ValidationResult {
   const object = asObject(value, `validation[${index}]`, "result");
   rejectUnknownFields(object, ["command", "status", "exitCode", "details"], "result", `validation[${index}].`);
   const command = requiredString(object.command, `validation[${index}].command`, 500, "result");
-  if (!(["passed", "failed", "skipped"] as const).includes(object.status as never)) {
+  if (!( ["passed", "failed", "skipped"] as const).includes(object.status as never)) {
     throw invalid("result", `validation[${index}].status is invalid`);
   }
   const details = requiredString(object.details, `validation[${index}].details`, 2000, "result");

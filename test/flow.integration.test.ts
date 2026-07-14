@@ -34,7 +34,7 @@ test("controlled full flow runs runner client through Relay and Codex executor",
   const stateDir = join(root, "state");
   const fakeCodex = join(root, "fake-codex");
   const githubOutput = join(root, "github-output");
-  const requestId = "repository-100-1";
+  const requestId = "controlled-request-id";
 
   await mkdir(workspace, { recursive: true });
   await writeFile(githubOutput, "");
@@ -48,16 +48,13 @@ test("controlled full flow runs runner client through Relay and Codex executor",
 
   await writeFile(fakeCodex, `#!/bin/sh
 set -eu
-[ "$1" = "--ask-for-approval" ]
-[ "$2" = "never" ]
-[ "$3" = "-c" ]
-[ "$4" = "features.memories=false" ]
-[ "$5" = "exec" ]
-[ "$6" = "--sandbox" ]
-[ "$7" = "danger-full-access" ]
-[ "$8" = "--cd" ]
-workspace="$9"
-printf 'after\\n' > "$workspace/tracked.txt"
+args="$*"
+case "$args" in *'default_permissions="relay"'*) ;; *) exit 31 ;; esac
+case "$args" in *'permissions.relay.filesystem."/home/agent/.codex"="deny"'*) ;; *) exit 32 ;; esac
+case "$args" in *'danger-full-access'*) exit 33 ;; esac
+while [ "$1" != "--cd" ]; do shift; done
+workspace="$2"
+printf 'after\n' > "$workspace/tracked.txt"
 cat > "$workspace/.agent-relay/result.json" <<'JSON'
 {
   "schemaVersion": 1,
@@ -72,7 +69,7 @@ cat > "$workspace/.agent-relay/result.json" <<'JSON'
     "details": "Runner, HTTP API, job lifecycle, process execution and result handoff completed."
   }],
   "blockers": [],
-  "limitations": ["Codex authentication and GitHub push are replaced by controlled boundaries."]
+  "limitations": ["Authentication and push are replaced by controlled boundaries."]
 }
 JSON
 `, { mode: 0o700 });

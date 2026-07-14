@@ -10,14 +10,70 @@ import { redactSensitiveText } from "../security/redaction.js";
 
 export interface ExecutionOutcome { exitCode: number; result: CodexResult; }
 
-const CODEX_BLOCKED_ENVIRONMENT_VARIABLES = new Set(["AGENT_RELAY_TOKEN"]);
+const CODEX_ENVIRONMENT_VARIABLES = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "LANG",
+  "LANGUAGE",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TERM",
+  "COLORTERM",
+  "NO_COLOR",
+  "FORCE_COLOR",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "JAVA_HOME",
+  "CARGO_HOME",
+  "RUSTUP_HOME",
+  "GOROOT",
+  "GOPATH",
+  "PYTHONHOME",
+  "PYTHONPATH",
+  "VIRTUAL_ENV",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+] as const;
+
+const ISOLATED_CODEX_HOME = join("/home", "agent", ".codex");
+const CODEX_CONFIG_OVERRIDES = [
+  "features.memories=false",
+  "default_permissions=\"relay\"",
+  "permissions.relay.extends=\":workspace\"",
+  `permissions.relay.filesystem.\"${ISOLATED_CODEX_HOME}\"=\"deny\"`,
+  "permissions.relay.network.enabled=true",
+] as const;
 
 export function createCodexEnvironment(source: Record<string, string | undefined> = process.env): Record<string, string> {
   const environment: Record<string, string> = {};
-  for (const [name, value] of Object.entries(source)) {
-    if (value !== undefined && !CODEX_BLOCKED_ENVIRONMENT_VARIABLES.has(name)) environment[name] = value;
+  for (const name of CODEX_ENVIRONMENT_VARIABLES) {
+    const value = source[name];
+    if (value !== undefined) environment[name] = value;
   }
   return environment;
+}
+
+export function createCodexArgs(workspace: string, prompt: string): string[] {
+  return [
+    "--ask-for-approval",
+    "never",
+    ...CODEX_CONFIG_OVERRIDES.flatMap((value) => ["-c", value]),
+    "exec",
+    "--cd",
+    workspace,
+    prompt,
+  ];
+}
+
+export function createCodexInvocation(command: string, args: string[], runAsUser?: string): { command: string; args: string[] } {
+  return runAsUser
+    ? { command: "/usr/bin/sudo", args: ["-H", "-u", runAsUser, "--", command, ...args] }
+    : { command, args };
 }
 
 export class CodexExecutor {
@@ -25,28 +81,21 @@ export class CodexExecutor {
     private readonly command: string,
     private readonly timeoutMs: number,
     private readonly maxOutputBytes: number,
+    private readonly runAsUser?: string,
   ) {}
 
   async run(request: CreateJobRequest, workspace: string, outputPath: string): Promise<ExecutionOutcome> {
     const resultPath = join(workspace, ".agent-relay", "result.json");
-    await mkdir(dirname(resultPath), { recursive: true });
-    await rm(resultPath, { force: true });
+    if (!this.runAsUser) {
+      await mkdir(dirname(resultPath), { recursive: true });
+      await rm(resultPath, { force: true });
+    }
     await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(outputPath, "", { mode: 0o600 });
 
     const prompt = buildCodexPrompt(request, ".agent-relay/result.json");
-    const child = spawn(this.command, [
-      "--ask-for-approval",
-      "never",
-      "-c",
-      "features.memories=false",
-      "exec",
-      "--sandbox",
-      "danger-full-access",
-      "--cd",
-      workspace,
-      prompt,
-    ], {
+    const invocation = createCodexInvocation(this.command, createCodexArgs(workspace, prompt), this.runAsUser);
+    const child = spawn(invocation.command, invocation.args, {
       cwd: workspace,
       env: createCodexEnvironment(),
       stdio: ["ignore", "pipe", "pipe"],
@@ -68,7 +117,7 @@ export class CodexExecutor {
     child.stderr?.on("data", collect);
 
     let timedOut = false;
-    let forceKillTimer: any;
+    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
     const exitCode = await new Promise<number>((resolve, reject) => {
       const timeoutTimer = setTimeout(() => {
         timedOut = true;

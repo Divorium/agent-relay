@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { appendFile, readFile, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
 const baseUrl = process.env.AGENT_RELAY_URL ?? "http://agent-relay:8080";
 const token = process.env.AGENT_RELAY_TOKEN;
@@ -9,7 +10,7 @@ const workspace = process.env.GITHUB_WORKSPACE;
 const workspaceRoot = process.env.AGENT_RELAY_WORKSPACE_ROOT ?? "/runner/_work";
 const planPath = process.env.AGENT_RELAY_PLAN_PATH;
 const mode = process.env.AGENT_RELAY_MODE ?? "implement";
-const requestId = process.env.AGENT_RELAY_REQUEST_ID ?? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
+const requestId = process.env.AGENT_RELAY_REQUEST_ID ?? randomUUID();
 if (!workspace || !planPath) throw new Error("GITHUB_WORKSPACE and AGENT_RELAY_PLAN_PATH are required");
 
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;

@@ -16,17 +16,15 @@ test("Codex output reaches Docker stdout and the job log before process completi
   await writeFile(join(workspace, "plan.md"), "# Plan\n");
   await writeFile(executable, `#!/bin/sh
 set -eu
-[ "$1" = "--ask-for-approval" ]
-[ "$2" = "never" ]
-[ "$3" = "-c" ]
-[ "$4" = "features.memories=false" ]
-[ "$5" = "exec" ]
-[ "$6" = "--sandbox" ]
-[ "$7" = "danger-full-access" ]
-[ "$8" = "--cd" ]
-printf 'first live line\\n'
+args="$*"
+case "$args" in *'default_permissions="relay"'*) ;; *) exit 41 ;; esac
+case "$args" in *'permissions.relay.filesystem."/home/agent/.codex"="deny"'*) ;; *) exit 42 ;; esac
+case "$args" in *'danger-full-access'*) exit 43 ;; esac
+while [ "$1" != "--cd" ]; do shift; done
+workspace="$2"
+printf 'first live line\n'
 sleep 1
-cat > "$9/.agent-relay/result.json" <<'JSON'
+cat > "$workspace/.agent-relay/result.json" <<'JSON'
 {
   "schemaVersion": 1,
   "requestId": "${requestId}",

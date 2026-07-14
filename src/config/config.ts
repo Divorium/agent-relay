@@ -8,6 +8,7 @@ export interface AppConfig {
   workspaceRoot: string;
   stateDir: string;
   codexCommand: string;
+  codexRunAsUser?: string;
   codexTimeoutMs: number;
   maxOutputBytes: number;
 }
@@ -23,6 +24,14 @@ function positiveInteger(name: string, value: string | undefined, fallback: numb
   return parsed;
 }
 
+function optionalUser(name: string, value: string | undefined): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(value)) {
+    throw new RelayError("INTERNAL_ERROR", `${name} must be a valid local user name`, 500);
+  }
+  return value;
+}
+
 export function loadConfig(env: Record<string, string | undefined> = process.env): AppConfig {
   return {
     host: env.AGENT_RELAY_HOST ?? "0.0.0.0",
@@ -31,6 +40,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     workspaceRoot: resolve(required("SHARED_WORKSPACE_ROOT", env.SHARED_WORKSPACE_ROOT)),
     stateDir: resolve(env.AGENT_RELAY_STATE_DIR ?? "/var/lib/agent-relay"),
     codexCommand: env.CODEX_COMMAND ?? "codex",
+    codexRunAsUser: optionalUser("CODEX_RUN_AS_USER", env.CODEX_RUN_AS_USER),
     codexTimeoutMs: positiveInteger("CODEX_TIMEOUT_MS", env.CODEX_TIMEOUT_MS, 21_600_000),
     maxOutputBytes: positiveInteger("MAX_OUTPUT_BYTES", env.MAX_OUTPUT_BYTES, 10_000_000),
   };

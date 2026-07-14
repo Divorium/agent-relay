@@ -4,94 +4,166 @@ This ExecPlan is a living document and must remain current while the work procee
 
 ## Purpose / Big Picture
 
-Codex should receive only the repository instructions and task context required to implement the requested change. The repository must not give Codex conflicting commands, duplicate the same rule across multiple sources, assign runner or operator responsibilities to Codex, or expose operational and security details that are not necessary for implementation.
+Codex should receive only the repository instructions and task context required to implement the requested change. The repository must not give Codex conflicting commands, duplicate the same rule across multiple sources, assign runner or operator responsibilities to Codex, or expose operational and security data that is not required by the Codex CLI.
 
-After this work, every source that can influence Codex execution has a clear owner and narrow purpose. `AGENTS.md` contains durable repository-level engineering rules. `.agent/PLANS.md` contains only reusable ExecPlan structure and execution guidance that is compatible with the repository rules. `src/execution/prompt.ts` contains only the runtime contract required for one Relay job. The active plan contains only task-specific implementation context.
+After this work, each context source has one narrow owner. `AGENTS.md` contains durable engineering constraints. `.agent/PLANS.md` contains reusable ExecPlan lifecycle rules. `src/execution/prompt.ts` contains the task location, execution mode, commit-creation prohibition, and structured result contract. GitHub authentication, Relay authentication, runner registration, Relay state, host Codex history, and workflow metadata remain outside the Codex task boundary.
 
 ## Progress
 
-- [x] (2026-07-15) Created this plan before making implementation changes.
-- [ ] Inventory every file, workflow value, environment variable, prompt fragment, generated artifact, and mounted path that can become visible to Codex.
-- [ ] Classify each item as required task context, durable repository instruction, runner-owned control, operator-only information, duplicate instruction, or conflicting instruction.
-- [ ] Remove conflicts, duplicates, runner-owned procedures, and information that Codex does not need.
-- [ ] Keep each remaining instruction in one canonical source and replace duplicated detail with a narrow reference only where the reference is required.
-- [ ] Add focused tests for the runtime prompt and context boundary without making Codex responsible for auditing that boundary.
-- [ ] Repeat the repository audit from a clean inventory until no additional conflicting, unnecessary, or inappropriate Codex context is found.
-- [ ] Run the full repository validation and record the results.
-- [ ] Move this plan to `docs/exec-plans/completed/` only after the final audit finds no remaining issues.
+- [x] (2026-07-15) Created this plan before implementation changes.
+- [x] (2026-07-15) Inventoried repository instructions, prompt construction, job request fields, child environment, workflow inputs, checkout authentication, finalization authentication, Compose mounts, container users, Relay state, runner files, and operations documentation.
+- [x] (2026-07-15) Classified each discovered item as required task context, durable repository rule, runner-owned control, operator-only information, duplicate instruction, or inappropriate exposure.
+- [x] (2026-07-15) Prepared a reduced runtime prompt and removed the unused `reviewFindings` instruction channel.
+- [x] (2026-07-15) Replaced inherited process environment with an explicit Codex tool-runtime allowlist.
+- [x] (2026-07-15) Prepared checkout and finalization changes so GitHub credentials are absent while Codex runs and supplied only to the push step.
+- [x] (2026-07-15) Prepared separate `relay` and `agent` users, a fixed sanitized Codex launcher, a Relay-only state directory, and an `auth.json`-only host mount.
+- [x] (2026-07-15) Added focused tests for prompt contents, request shape, environment filtering, isolated invocation, workflow credential lifetime, packaging mounts, Relay state ownership, and push authentication.
+- [ ] Apply the prepared implementation tree to the branch and run automated validation.
+- [ ] Perform a second audit from process launch to result finalization without relying on the first findings list.
+- [ ] Fix every additional finding from the second pass and repeat until a full pass produces no new issues.
+- [ ] Run the full repository and image validation and record exact results.
+- [ ] Move this plan to `docs/exec-plans/completed/` only after the final audit and validation are complete.
 
 ## Surprises & Discoveries
 
-No discoveries have been recorded yet.
+- Observation: telling Codex not to access GitHub credentials did not create a security boundary.
+  Evidence: both workflow copies used `persist-credentials: true`, leaving checkout authentication in local Git configuration inside the shared workspace.
+
+- Observation: the complete host `.codex` directory was mounted into the execution container.
+  Evidence: `compose.yml` mounted `HOST_CODEX_DIR` at `/home/agent/.codex`, exposing host configuration, history, sessions, logs, rules, and any other files beside the required authentication file.
+
+- Observation: Relay and Codex ran as the same Unix user.
+  Evidence: the image used `USER agent` for both the HTTP service and spawned Codex process, while `/var/lib/agent-relay` was available in the same container. Environment filtering alone could not prevent access to Relay process and state data.
+
+- Observation: the environment boundary was a one-item denylist.
+  Evidence: `createCodexEnvironment()` removed only `AGENT_RELAY_TOKEN` and inherited every other service, workflow, credential, and operator variable present in the parent process.
+
+- Observation: the prompt repeated repository governance and described unavailable credentials.
+  Evidence: it explicitly told Codex to read the complete instruction chain, explained runner ownership, mentioned GitHub credentials, allowed Git inspection commands, and referenced the removed `shouldCommit` field.
+
+- Observation: `reviewFindings` was an unused secondary instruction channel.
+  Evidence: the HTTP contract and prompt accepted it, but the runner client and workflow never supplied it. Keeping it increased instruction ambiguity without supporting a real execution path.
+
+- Observation: production request IDs exposed GitHub repository and workflow-run metadata to the result prompt.
+  Evidence: the workflow constructed `AGENT_RELAY_REQUEST_ID` from repository ID, run ID, and attempt. The client can generate an opaque UUID instead.
+
+- Observation: push authentication depended on checkout credential persistence.
+  Evidence: `runner/finalize.sh` ran `git push` without its own credential source. Removing checkout credentials therefore required a finalization-only token and temporary askpass helper.
 
 ## Decision Log
 
-- Decision: audit the complete context boundary rather than only `AGENTS.md`, `.agent/PLANS.md`, and `src/execution/prompt.ts`.
-  Rationale: Codex context can also be affected by workflow inputs, mounted files, environment variables, generated prompts, active plans, and repository documentation that the agent is instructed to read.
+- Decision: keep each instruction in one canonical context layer.
+  Rationale: durable engineering constraints belong in `AGENTS.md`; plan lifecycle belongs in `.agent/PLANS.md`; task execution and result shape belong in the runtime prompt. The prompt must not restate repository architecture or operational procedures.
   Date/Author: 2026-07-15 / repository audit.
 
-- Decision: tests may validate the application-owned prompt and context construction, but Codex must not receive instructions to audit its own permissions or Git ownership model.
-  Rationale: context governance belongs to the Relay implementation and repository maintainers, not to the task-executing model.
+- Decision: enforce credential absence structurally rather than through model instructions.
+  Rationale: checkout uses `persist-credentials: false`, the workflow verifies local Git configuration before Relay invocation, and the push token is scoped to finalization. The prompt no longer mentions GitHub credentials.
+  Date/Author: 2026-07-15 / repository audit.
+
+- Decision: run Relay and Codex as different local users.
+  Rationale: Relay secrets and state cannot be isolated from a same-UID child with `danger-full-access`. The Relay process runs as `relay`; a fixed sudo rule starts only `/usr/local/bin/codex-run` as `agent`; Relay state is mode `0700`.
+  Date/Author: 2026-07-15 / repository audit.
+
+- Decision: use an explicit environment allowlist and a final `env -i` launcher.
+  Rationale: denylisting known secrets cannot cover future service variables. The executor passes only tool-runtime variables, and the launcher reconstructs the final environment from fixed values.
+  Date/Author: 2026-07-15 / repository audit.
+
+- Decision: mount only the required Codex authentication file.
+  Rationale: the CLI requires authentication, but it does not require host history, sessions, logs, rules, or arbitrary configuration. `HOST_CODEX_AUTH_FILE` replaces the complete directory mount.
+  Date/Author: 2026-07-15 / repository audit.
+
+- Decision: retain `auth.json` as an explicit necessary exposure.
+  Rationale: the Codex CLI must read its authentication material. This PR minimizes the mount to that one file but cannot make the file unreadable to the same process that authenticates with it.
+  Date/Author: 2026-07-15 / repository audit.
+
+- Decision: remove `reviewFindings` and use opaque request IDs by default.
+  Rationale: the active plan is the task authority, and the current workflow has no review-findings input. GitHub repository and run identifiers are not needed by Codex; the runner can generate a UUID while tests retain an explicit override.
   Date/Author: 2026-07-15 / repository audit.
 
 ## Outcomes & Retrospective
 
-The audit has not started. Completion requires a documented inventory, implementation changes, focused regression tests, a second independent pass over the repository, and full validation.
+The first audit produced a concrete boundary redesign rather than additional warnings for Codex. The prepared changes remove persisted GitHub credentials from the workspace, limit push credentials to finalization, separate Relay and Codex users, protect Relay state, replace the full host `.codex` mount with `auth.json`, sanitize the child environment twice, remove an unused instruction channel, reduce the prompt, and use opaque production request IDs.
+
+The work is not complete until the implementation is committed, CI and image builds pass, and a fresh second audit finds no additional conflict, duplicate instruction, runner-owned responsibility, or unnecessary exposure.
 
 ## Context and Orientation
 
-Agent Relay launches `codex exec` from `src/execution/codex-executor.ts`. The task prompt is built in `src/execution/prompt.ts`. Codex can also read repository files available in the checked-out workspace, including `AGENTS.md`, `.agent/PLANS.md`, active ExecPlans, source code, tests, workflows, and documentation. The GitHub runner owns checkout, commit, and push. Agent Relay owns authenticated process execution and result validation.
+The GitHub runner checks out a pull-request revision into a named workspace volume. Agent Relay mounts the same volume and launches Codex in that repository. The runtime prompt is created in `src/execution/prompt.ts`; the child process is created in `src/execution/codex-executor.ts`; the runner request is created in `runner/client.mjs`; checkout and finalization are defined in the production and example workflow files.
 
-The audit must examine both explicit instructions and incidental exposure. Explicit instructions are prose that tells Codex what to do. Incidental exposure includes environment variables, mounted credentials, generated files, workflow metadata, paths, logs, and operational details available in the Codex process even when they are not mentioned in the prompt.
+Codex needs the repository, active plan, execution mode, result contract, development toolchain, and its own authentication file. It does not need GitHub tokens, runner registration, Relay authentication, Relay state and logs, host Codex history or sessions, GitHub run metadata, or detailed descriptions of runner-owned finalization.
 
 ## Plan of Work
 
-First, produce a complete inventory of the Codex context boundary from the current repository. Trace the process launch from workflow and Compose configuration through `src/server.ts`, configuration loading, environment construction, prompt construction, workspace mounting, result-file creation, and runner finalization. Search all repository text for instructions addressed to Codex, agents, implementers, or ExecPlan executors.
+Apply the prepared file set as one implementation commit. The runtime prompt will be reduced to task context and one commit-creation prohibition. The create-job contract will remove `reviewFindings`. The child environment will change from inheritance to an allowlist.
 
-Second, classify every discovered item. Preserve only information needed for implementation, validation, and the structured result contract. Move durable rules to the narrowest canonical source. Remove duplicate wording when a lower-level runtime guarantee already enforces it. Remove runner-owned Git, publication, artifact, credential, and orchestration procedures from Codex-facing instructions unless Codex must know a single prohibition to avoid interfering with them.
+The container will create two users. The Relay service will run as `relay`. A fixed sudo rule will allow it to launch only the sanitized Codex wrapper as `agent`. The wrapper will clear the environment and reconstruct only stable toolchain variables. Relay state will be owned by `relay` with mode `0700`. Compose will mount only the host `auth.json` into the agent home.
 
-Third, implement the context reduction. Keep the runtime prompt short and task-specific. Keep `.agent/PLANS.md` generic and compatible with `AGENTS.md`. Keep operational procedures in the operations runbook and do not instruct Codex to inspect them unless the active task changes operations. Ensure the Codex child environment excludes Relay credentials and any other control or publication credentials that are not required by the child process.
+Both workflow copies will disable persisted checkout credentials and verify the local repository configuration before Codex starts. The finalization step will receive the push token and use a temporary askpass helper. The workflow will stop constructing request IDs from GitHub metadata; the runner client will generate an opaque UUID by default.
 
-Fourth, add focused tests around prompt construction and environment filtering. Tests must assert application behavior directly. Do not add plan steps or runtime instructions telling Codex to grep, validate, or reason about its own instruction boundary.
-
-Finally, restart the inventory from the process launch and repeat all searches without relying on the first findings list. Record each additional finding. Continue until a full pass produces no new conflicts, duplicates, runner-owned instructions, or unnecessary exposed information.
+After CI, start a second audit from `.github/workflows/agent-relay.yml` and `compose.yml`, then trace into the runner, Relay configuration, process creation, prompt, filesystem permissions, result handling, and documentation. Record and fix any new finding before completion.
 
 ## Concrete Steps
 
-Run all commands from the repository root.
-
-Inspect the complete repository tree and all text files. Trace the Codex launch, prompt, environment, workspace, workflow inputs, mounted paths, and result handling. Use repository searches as maintainer audit tools; do not add those searches to the instructions sent to Codex.
-
-Run focused tests while changing prompt construction and environment filtering, then run:
+Run from the repository root:
 
     npm ci
     npm run check
     docker compose config
     docker build --tag agent-relay:local .
     docker build --file Dockerfile.runner --tag agent-relay-runner:local .
+    docker run --rm --entrypoint /bin/bash agent-relay:local /app/scripts/toolchain-smoke.sh
 
-Record exact outcomes in `Artifacts and Notes` before completion.
+The audit itself is a maintainer review. Do not add repository instructions that tell task-executing Codex to inspect or certify its own permissions, credentials, or Git ownership model.
 
 ## Validation and Acceptance
 
-A final clean audit pass must find no contradictory instructions, no duplicate detailed procedures in multiple Codex-readable instruction sources, no runner-owned tasks assigned to Codex, and no exposed credential or control values that the Codex process does not need.
+The runtime prompt contains the active plan, execution mode, validation requirement, commit-creation prohibition, and structured result contract. It does not mention the AGENTS instruction chain, GitHub credentials, runner ownership details, `shouldCommit`, or permission to inspect Git state.
 
-The runtime prompt must contain only the active plan location, execution mode, required result contract, workspace constraints needed by the task, and narrowly stated prohibitions necessary to protect runner-owned operations. Repository-level engineering rules must not be duplicated in the runtime prompt.
+The create-job request has no unused free-form instruction field. Production request IDs are opaque UUIDs.
 
-The Codex child environment must exclude Relay authentication, GitHub publication credentials, and other runner or operator control values unless a specific implementation task demonstrably requires them. Tests must prove the filtering behavior.
+The Codex process receives only the environment allowlist and then starts through an `env -i` wrapper as the `agent` user. The Relay service runs as `relay`; `/var/lib/agent-relay` is mode `0700`; the agent user cannot read it.
 
-All repository checks and image builds must pass. The plan remains active until a repeated audit produces no new findings.
+The shared worktree contains no persisted checkout credential. A push credential exists only in the finalization step and is consumed through a temporary askpass helper without changing the remote URL or local credential configuration.
+
+Only `auth.json` is mounted under `/home/agent/.codex`. No host Codex configuration, history, session, log, or rule directory is mounted.
+
+All automated checks and image builds pass. A second audit produces no new finding.
 
 ## Idempotence and Recovery
 
-The audit is read-only until a finding is classified. Each implementation change must be small and reversible. Repeating the inventory and searches must not change repository state. Prompt and environment tests must use controlled fixtures and must not require real credentials.
+The audit can be repeated without changing repository state. The implementation uses fixed file paths and declarative Compose configuration. Rebuilding containers recreates the user and permission boundary. The temporary askpass file is removed on exit. Failed runs do not persist GitHub credentials in the repository configuration.
 
 ## Artifacts and Notes
 
-No audit evidence has been recorded yet.
+Prepared implementation paths:
+
+- `AGENTS.md`
+- `src/execution/prompt.ts`
+- `src/contracts/job.ts`
+- `src/contracts/validators.ts`
+- `src/execution/codex-executor.ts`
+- `src/config/config.ts`
+- `src/server.ts`
+- `scripts/codex-run`
+- `Dockerfile`
+- `compose.yml`
+- `.env.example`
+- `.github/workflows/agent-relay.yml`
+- `examples/github-actions/agent-relay.yml`
+- `runner/client.mjs`
+- `runner/finalize.sh`
+- `README.md`
+- `docs/operations/README.md`
+- focused tests under `test/`
+
+Validation evidence will be added after CI and image verification.
 
 ## Interfaces and Dependencies
 
-Do not add an external dependency for this work. Use the existing TypeScript and Node.js test infrastructure.
+No external application dependency is added. The image adds the Debian `sudo` package as the privilege-separation mechanism.
 
-The final context boundary must be represented by explicit application interfaces around prompt construction and child environment construction. Tests should consume those interfaces rather than parse unrelated documentation or make the task-executing Codex verify repository governance.
+`CodexExecutor` accepts an optional `runAsUser` constructor argument. `createCodexInvocation()` produces a direct invocation in tests and a fixed `/usr/bin/sudo -H -u <user> -- <command>` invocation in packaged execution.
+
+`createCodexEnvironment()` returns only approved tool-runtime variables. `/usr/local/bin/codex-run` then uses `env -i` to define the final Codex environment.
+
+`AppConfig` gains optional `codexRunAsUser`, loaded from `CODEX_RUN_AS_USER`. Packaged Compose sets it to `agent` and uses `/usr/local/bin/codex-run` as `CODEX_COMMAND`.

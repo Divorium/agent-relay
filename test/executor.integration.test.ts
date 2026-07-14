@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { CodexExecutor, createCodexEnvironment } from "../src/execution/codex-executor.js";
+import { CodexExecutor, createCodexArgs, createCodexEnvironment } from "../src/execution/codex-executor.js";
 import { RelayError } from "../src/contracts/errors.js";
 
 const requestId = "executor-integration-request";
@@ -17,37 +17,48 @@ async function createRoot(name: string) {
   return { root, workspace, outputPath };
 }
 
-test("Codex environment removes only the Agent Relay API token", () => {
+test("Codex environment contains only approved tool runtime variables", () => {
   assert.deepEqual(createCodexEnvironment({
     PATH: "/usr/bin",
-    HOME: "/home/agent",
+    HOME: "/home/relay",
+    JAVA_HOME: "/opt/java/openjdk",
     AGENT_RELAY_TOKEN: "relay-secret",
     APPLICATION_MODE: "test",
+    GITHUB_TOKEN: "github-secret",
   }), {
     PATH: "/usr/bin",
-    HOME: "/home/agent",
-    APPLICATION_MODE: "test",
+    HOME: "/home/relay",
+    JAVA_HOME: "/opt/java/openjdk",
   });
 });
 
-test("CodexExecutor runs a real child process without the Relay token, validates its result and redacts output", async () => {
+test("Codex arguments select the restricted Relay permission profile", () => {
+  const args = createCodexArgs("/work/repository", "prompt");
+  assert.deepEqual(args.slice(0, 2), ["--ask-for-approval", "never"]);
+  assert.ok(args.includes("default_permissions=\"relay\""));
+  assert.ok(args.includes("permissions.relay.extends=\":workspace\""));
+  assert.ok(args.includes("permissions.relay.filesystem.\"/home/agent/.codex\"=\"deny\""));
+  assert.ok(args.includes("permissions.relay.network.enabled=true"));
+  assert.doesNotDeepEqual(args.slice(args.indexOf("exec") + 1, args.indexOf("exec") + 3), ["--sandbox", "danger-full-access"]);
+});
+
+test("CodexExecutor runs a real child process with filtered context and validates its result", async () => {
   const { root, workspace, outputPath } = await createRoot("executor");
   const executable = join(root, "fake-codex");
   await writeFile(executable, `#!/bin/sh
 set -eu
-[ "$1" = "--ask-for-approval" ]
-[ "$2" = "never" ]
-[ "$3" = "-c" ]
-[ "$4" = "features.memories=false" ]
-[ "$5" = "exec" ]
-[ "$6" = "--sandbox" ]
-[ "$7" = "danger-full-access" ]
-[ "$8" = "--cd" ]
-[ "$9" = "${workspace}" ]
+args="$*"
+case "$args" in *'default_permissions="relay"'*) ;; *) exit 21 ;; esac
+case "$args" in *'permissions.relay.extends=":workspace"'*) ;; *) exit 22 ;; esac
+case "$args" in *'permissions.relay.filesystem."/home/agent/.codex"="deny"'*) ;; *) exit 23 ;; esac
+case "$args" in *'danger-full-access'*) exit 24 ;; esac
+while [ "$1" != "--cd" ]; do shift; done
+workspace="$2"
+[ "$workspace" = "${workspace}" ]
 [ -z "\${AGENT_RELAY_TOKEN:-}" ]
-[ "\${APPLICATION_MODE:-}" = "test" ]
+[ -z "\${APPLICATION_MODE:-}" ]
 printf '%s\n' 'authorization: Bearer abcdefghijklmnopqrstuvwxyz'
-cat > "$9/.agent-relay/result.json" <<'JSON'
+cat > "$workspace/.agent-relay/result.json" <<'JSON'
 {
   "schemaVersion": 1,
   "requestId": "${requestId}",

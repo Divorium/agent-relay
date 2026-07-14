@@ -79,15 +79,21 @@ test("loads required configuration and defaults", () => {
   const config = loadConfig({ AGENT_RELAY_TOKEN: "secret", SHARED_WORKSPACE_ROOT: "/work" });
   assert.equal(config.port, 8080);
   assert.equal(config.codexTimeoutMs, 21_600_000);
+  assert.equal(config.codexRunAsUser, undefined);
 });
+test("loads the isolated Codex user", () => {
+  const config = loadConfig({ AGENT_RELAY_TOKEN: "secret", SHARED_WORKSPACE_ROOT: "/work", CODEX_RUN_AS_USER: "agent" });
+  assert.equal(config.codexRunAsUser, "agent");
+});
+test("rejects invalid Codex user names", () => assert.throws(() => loadConfig({ AGENT_RELAY_TOKEN: "secret", SHARED_WORKSPACE_ROOT: "/work", CODEX_RUN_AS_USER: "../root" }), /valid local user/));
 test("rejects missing configuration", () => assert.throws(() => loadConfig({ SHARED_WORKSPACE_ROOT: "/work" }), /AGENT_RELAY_TOKEN/));
-test("prompt includes plan, mode, result contract, and runner-owned Git rules", () => {
-  const prompt = buildCodexPrompt({ ...validRequest, mode: "revise", reviewFindings: ["Fix validation"] }, ".agent-relay/result.json");
+test("prompt includes task context and the result contract", () => {
+  const prompt = buildCodexPrompt({ ...validRequest, mode: "revise" }, ".agent-relay/result.json");
   assert.match(prompt, /docs\/exec-plans/);
-  assert.match(prompt, /Never run git commit, git push/);
-  assert.match(prompt, /runner exclusively owns commit and push/);
-  assert.match(prompt, /Do not include shouldCommit/);
+  assert.match(prompt, /Execution mode: revise/);
+  assert.match(prompt, /Do not run commands that create or publish Git commits/);
   assert.match(prompt, /result\.json/);
+  assert.doesNotMatch(prompt, /GitHub credentials|runner exclusively|shouldCommit/i);
 });
 test("redacts common token formats", () => {
   const output = redactSensitiveText("authorization: Bearer abcdefghijklmnopqrstuvwxyz token=super-secret-value");

@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - agent/define-agent-relay-mvp
 
 permissions:
   contents: read
@@ -76,9 +75,11 @@ jobs:
           cat toolchain.log
           exit 1
       - name: Verify isolated Codex boundary
+        id: isolation
+        continue-on-error: true
         run: |
           docker run --rm --user root --entrypoint /bin/bash agent-relay:ci -lc '
-            set -euo pipefail
+            set -euxo pipefail
             mkdir -p /tmp/codex-work
             chown agent:agent /tmp/codex-work
             printf private > /home/agent/.codex/sentinel
@@ -93,7 +94,18 @@ jobs:
               /bin/bash -lc "test ! -r /home/agent/.codex/sentinel && touch sandbox-write-ok"
             test -f /tmp/codex-work/sandbox-write-ok
             su -s /bin/bash relay -c "cd /tmp/codex-work && sudo -H -u agent -- /usr/local/bin/codex-run --version"
-          '
+          ' > isolation.log 2>&1
+      - name: Upload isolation log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: isolation-log
+          path: isolation.log
+      - name: Fail when isolation verification failed
+        if: steps.isolation.outcome == 'failure'
+        run: |
+          cat isolation.log
+          exit 1
       - name: Verify excluded tools
         run: |
           if docker run --rm --entrypoint /bin/bash agent-relay:ci -lc 'command -v ssh'; then

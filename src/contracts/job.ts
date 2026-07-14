@@ -23,6 +23,5 @@ export interface JobRecord {
   exitCode?: number;
   errorCode?: string;
   errorMessage?: string;
-  resultPath: string;
   outputPath: string;
 }

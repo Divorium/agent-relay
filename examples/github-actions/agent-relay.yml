@@ -141,13 +141,6 @@ jobs:
 
           printf 'plan_path=%s\n' "${plan_path}" >> "${GITHUB_OUTPUT}"
 
-      - name: Exclude relay artifact
-        shell: bash
-        run: |
-          mkdir -p .agent-relay
-          printf '%s\n' '.agent-relay/' >> .git/info/exclude
-          rm -f .agent-relay/result.json
-
       - name: Run Codex through Agent Relay
         id: relay
         continue-on-error: true

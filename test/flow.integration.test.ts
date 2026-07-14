@@ -50,18 +50,19 @@ test("controlled full flow runs runner client through Relay and Codex executor",
 set -eu
 [ "$1" = "--ask-for-approval" ]
 [ "$2" = "never" ]
-[ "$3" = "exec" ]
-[ "$4" = "--sandbox" ]
-[ "$5" = "danger-full-access" ]
-[ "$6" = "--cd" ]
-workspace="$7"
+[ "$3" = "-c" ]
+[ "$4" = "features.memories=false" ]
+[ "$5" = "exec" ]
+[ "$6" = "--sandbox" ]
+[ "$7" = "danger-full-access" ]
+[ "$8" = "--cd" ]
+workspace="$9"
 printf 'after\\n' > "$workspace/tracked.txt"
 cat > "$workspace/.agent-relay/result.json" <<'JSON'
 {
   "schemaVersion": 1,
   "requestId": "${requestId}",
   "status": "completed",
-  "shouldCommit": true,
   "commitMessage": "Apply controlled full flow",
   "summary": "The controlled executor changed the checked-out worktree.",
   "validation": [{

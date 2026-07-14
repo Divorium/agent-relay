@@ -10,15 +10,16 @@ test("Codex output reaches Docker stdout and the job log before process completi
   const workspace = join(root, "workspace");
   const outputPath = join(root, "state", "job.log");
   const executable = join(root, "fake-codex");
-  await mkdir(workspace, { recursive: true });
+  await mkdir(join(workspace, ".git"), { recursive: true });
   await writeFile(join(workspace, "plan.md"), "# Plan\n");
   await writeFile(executable, `#!/bin/sh
 set -eu
 args="$*"
 case "$args" in *'default_permissions="relay"'*) ;; *) exit 41 ;; esac
-case "$args" in *'permissions.relay.filesystem={"/home/agent/.codex"="deny"}'*) ;; *) exit 42 ;; esac
-case "$args" in *'danger-full-access'*) exit 43 ;; esac
-case "$args" in *'result.json'*) exit 44 ;; esac
+case "$args" in *'"/home/agent/.codex"="deny"'*) ;; *) exit 42 ;; esac
+case "$args" in *'"${workspace}/.git"="read"'*) ;; *) exit 43 ;; esac
+case "$args" in *'danger-full-access'*) exit 44 ;; esac
+case "$args" in *'result.json'*) exit 45 ;; esac
 while [ "$1" != "--cd" ]; do shift; done
 workspace="$2"
 printf 'first live line\n'

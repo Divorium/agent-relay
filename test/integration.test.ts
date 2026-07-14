@@ -65,12 +65,8 @@ async function waitForTerminal(baseUrl: string, id: string) {
   throw new Error("Job did not reach a terminal state");
 }
 
-function result(summary: string): ExecutionOutcome {
-  return { exitCode: 0, result: { schemaVersion: 1, summary, validation: [] } };
-}
-
 test("health is public while job endpoints require authentication", async () => {
-  const fixture = await createFixture(async () => result("No changes required."));
+  const fixture = await createFixture(async () => ({ exitCode: 0 }));
   try {
     const health = await fetch(`${fixture.baseUrl}/health`);
     assert.equal(health.status, 200);
@@ -88,14 +84,7 @@ test("HTTP create and poll derives completed state and preserves idempotency", a
   let executions = 0;
   const fixture = await createFixture(async () => {
     executions += 1;
-    return {
-      exitCode: 0,
-      result: {
-        schemaVersion: 1,
-        summary: "Completed through the integration executor.",
-        validation: [{ command: "npm test", status: "passed", exitCode: 0, details: "Passed." }],
-      },
-    };
+    return { exitCode: 0 };
   });
   try {
     const body = request("integration-request-1");
@@ -106,8 +95,9 @@ test("HTTP create and poll derives completed state and preserves idempotency", a
     });
     assert.equal(first.status, 202);
     const accepted = await first.json() as { id: string };
-    const terminal = await waitForTerminal(fixture.baseUrl, accepted.id) as { status: string };
+    const terminal = await waitForTerminal(fixture.baseUrl, accepted.id) as { status: string; exitCode?: number };
     assert.equal(terminal.status, "completed");
+    assert.equal(terminal.exitCode, 0);
 
     const repeated = await fetch(`${fixture.baseUrl}/v1/jobs`, {
       method: "POST",
@@ -127,7 +117,7 @@ test("parallel job submission allows only one active job", async () => {
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const fixture = await createFixture(async () => {
     await gate;
-    return result("Completed.");
+    return { exitCode: 0 };
   });
   try {
     const post = (body: CreateJobRequest) => fetch(`${fixture.baseUrl}/v1/jobs`, {

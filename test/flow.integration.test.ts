@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
@@ -27,7 +27,7 @@ function runProcess(command: string, args: string[], options: Record<string, unk
   });
 }
 
-test("controlled full flow preserves work and derives commit metadata from the active plan", async () => {
+test("controlled full flow preserves work and an active-plan blocker without a result artifact", async () => {
   const root = join(tmpdir(), `agent-relay-full-flow-${process.pid}-${Date.now()}`);
   const workspaceRoot = join(root, "workspaces");
   const workspace = join(workspaceRoot, "repository", "repository");
@@ -52,21 +52,10 @@ args="$*"
 case "$args" in *'default_permissions="relay"'*) ;; *) exit 31 ;; esac
 case "$args" in *'permissions.relay.filesystem={"/home/agent/.codex"="deny"}'*) ;; *) exit 32 ;; esac
 case "$args" in *'danger-full-access'*) exit 33 ;; esac
+case "$args" in *'result.json'*) exit 34 ;; esac
 while [ "$1" != "--cd" ]; do shift; done
 workspace="$2"
 printf 'after\n' > "$workspace/tracked.txt"
-cat > "$workspace/.agent-relay/result.json" <<'JSON'
-{
-  "schemaVersion": 1,
-  "summary": "The controlled executor changed the checked-out worktree and retained the documented blocker.",
-  "validation": [{
-    "command": "controlled-flow",
-    "status": "passed",
-    "exitCode": 0,
-    "details": "Runner, HTTP API, job lifecycle, process execution and result handoff completed."
-  }]
-}
-JSON
 `, { mode: 0o700 });
   await chmod(fakeCodex, 0o700);
 
@@ -110,17 +99,17 @@ JSON
 
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Agent Relay job .*: completed/);
-    assert.match(result.stdout, /Codex summary: The controlled executor changed the checked-out worktree/);
+    assert.doesNotMatch(result.stdout, /Codex summary|Validation passed/);
     assert.equal(await readFile(githubOutput, "utf8"), "commit_message=Active plan\n");
     assert.equal(await readFile(join(workspace, "tracked.txt"), "utf8"), "after\n");
     assert.match(await readFile(join(workspace, "plan.md"), "utf8"), /\[blocked\]/);
-    await assert.rejects(() => stat(join(workspace, ".agent-relay")));
 
     const persistedJobs = await readFile(join(stateDir, "request-index.json"), "utf8");
     const requestIndex = JSON.parse(persistedJobs) as Record<string, string>;
     const job = await jobs.get(requestIndex[requestId]!);
     assert.equal(job.status, "completed");
     assert.equal(job.exitCode, 0);
+    assert.equal(job.outputPath, join(stateDir, "logs", `${job.id}.log`));
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error: Error | undefined) => error ? reject(error) : resolve()));
     await rm(root, { recursive: true, force: true });

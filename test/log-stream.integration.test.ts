@@ -5,8 +5,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CodexExecutor } from "../src/execution/codex-executor.js";
 
-const requestId = "live-log-request";
-
 test("Codex output reaches Docker stdout and the job log before process completion", async () => {
   const root = join(tmpdir(), `agent-relay-live-log-${process.pid}-${Date.now()}`);
   const workspace = join(root, "workspace");
@@ -27,7 +25,6 @@ sleep 1
 cat > "$workspace/.agent-relay/result.json" <<'JSON'
 {
   "schemaVersion": 1,
-  "requestId": "${requestId}",
   "summary": "Completed.",
   "validation": []
 }
@@ -44,10 +41,9 @@ JSON
 
   try {
     const execution = new CodexExecutor(executable, 5_000, 100_000).run({
-      requestId,
+      requestId: "live-log-request",
       workspace: "workspace",
       planPath: "plan.md",
-      mode: "implement",
     }, workspace, outputPath);
 
     await new Promise((resolve) => setTimeout(resolve, 200));

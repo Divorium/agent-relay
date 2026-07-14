@@ -41,7 +41,7 @@ services:
     volumes:
       - workspace:/runner/_work
       - relay-state:/var/lib/agent-relay
-      - ${HOST_CODEX_AUTH_FILE}:/home/agent/.codex/auth.json
+      - ${HOST_CODEX_AUTH_FILE}:/home/agent/.codex/auth.json:ro
     networks:
       - relay
     expose:

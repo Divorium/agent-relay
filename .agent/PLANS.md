@@ -10,12 +10,11 @@ When an item cannot be completed:
 - continue every other item that is not affected;
 - remove `[blocked]` as soon as the condition is resolved.
 
-A blocker is plan documentation only and must not prevent completed work from being preserved.
+A blocker is plan documentation only and must not prevent completed work from being preserved. A plan with an unchecked or `[blocked]` item remains active.
 
-A plan is complete only when every acceptance item has one of:
+A plan is complete only when every item is checked and supported by one of:
 
 - a code reference and passing automated test;
-- a reproducible command with captured outcome;
-- an explicit `[blocked]` entry that follows the rule above.
+- a reproducible command with captured outcome.
 
 Do not infer completion from intended design. Review the plan point by point against the repository state. Keep incomplete plans active. After all acceptance criteria and review work are complete, update Outcomes & Retrospective and move the same plan file to `docs/exec-plans/completed/`.

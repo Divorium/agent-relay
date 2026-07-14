@@ -9,7 +9,6 @@ if (!token) throw new Error("AGENT_RELAY_TOKEN is required");
 const workspace = process.env.GITHUB_WORKSPACE;
 const workspaceRoot = process.env.AGENT_RELAY_WORKSPACE_ROOT ?? "/runner/_work";
 const planPath = process.env.AGENT_RELAY_PLAN_PATH;
-const mode = process.env.AGENT_RELAY_MODE ?? "implement";
 const requestId = process.env.AGENT_RELAY_REQUEST_ID ?? randomUUID();
 if (!workspace || !planPath) throw new Error("GITHUB_WORKSPACE and AGENT_RELAY_PLAN_PATH are required");
 
@@ -56,14 +55,14 @@ function validateValidation(value, index) {
 
 function validateResult(value) {
   const result = asObject(value, "result");
-  strictKeys(result, new Set(["schemaVersion", "requestId", "summary", "validation"]), "result");
-  if (result.schemaVersion !== 1 || result.requestId !== requestId) throw new Error("Result contract mismatch");
+  strictKeys(result, new Set(["schemaVersion", "summary", "validation"]), "result");
+  if (result.schemaVersion !== 1) throw new Error("Result contract mismatch");
 
   const summary = requiredString(result.summary, "summary", 4000);
   if (!Array.isArray(result.validation) || result.validation.length > 100) throw new Error("Invalid validation");
   const validation = result.validation.map(validateValidation);
 
-  return { schemaVersion: 1, requestId, summary, validation };
+  return { schemaVersion: 1, summary, validation };
 }
 
 function deriveCommitMessage(plan) {
@@ -98,7 +97,7 @@ const headers = { authorization: `Bearer ${token}`, "content-type": "application
 let job = await fetchJson(`${baseUrl}/v1/jobs`, {
   method: "POST",
   headers,
-  body: JSON.stringify({ requestId, workspace: relativeWorkspace, planPath, mode }),
+  body: JSON.stringify({ requestId, workspace: relativeWorkspace, planPath }),
 });
 logJobStatus(job);
 let previousStatus = job.status;

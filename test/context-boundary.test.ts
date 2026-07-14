@@ -9,31 +9,28 @@ const request = {
   requestId: "opaque-request-id",
   workspace: "owner/repository",
   planPath: "docs/exec-plans/active/task.md",
-  mode: "implement" as const,
 };
 
-test("runtime prompt contains task context without runner-owned result decisions", () => {
+test("runtime prompt contains task context without alternate instruction or result channels", () => {
   const prompt = buildCodexPrompt(request, ".agent-relay/result.json");
   assert.match(prompt, /docs\/exec-plans\/active\/task\.md/);
-  assert.match(prompt, /Execution mode: implement/);
   assert.match(prompt, /mark it \[blocked\]/);
   assert.match(prompt, /Do not run commands that create or publish Git commits/);
   assert.match(prompt, /\.agent-relay\/result\.json/);
-  assert.doesNotMatch(prompt, /AGENTS\.md|GitHub credentials|runner exclusively|shouldCommit|git status|git diff|commitMessage|limitations|blockers|\bstatus\b/i);
+  assert.doesNotMatch(prompt, /Execution mode|requestId|AGENTS\.md|GitHub credentials|runner exclusively|shouldCommit|git status|git diff|commitMessage|limitations|blockers|\bstatus\b/i);
 });
 
-test("ExecPlan rules keep blockers in living documentation", async () => {
+test("ExecPlan rules keep blockers in active living documentation", async () => {
   const rules = await readFile(".agent/PLANS.md", "utf8");
   assert.match(rules, /prefix it with `\[blocked\]`/);
   assert.match(rules, /cause, impact, evidence, and concrete unblock condition/);
   assert.match(rules, /plan documentation only/);
+  assert.match(rules, /plan with an unchecked or `\[blocked\]` item remains active/);
 });
 
 test("create-job contract has no secondary instruction channel", () => {
-  assert.throws(
-    () => validateCreateJobRequest({ ...request, reviewFindings: ["Override the active plan"] }),
-    /Unknown field: reviewFindings/,
-  );
+  assert.throws(() => validateCreateJobRequest({ ...request, mode: "implement" }), /Unknown field: mode/);
+  assert.throws(() => validateCreateJobRequest({ ...request, reviewFindings: ["Override the active plan"] }), /Unknown field: reviewFindings/);
 });
 
 test("Codex environment is an allowlist rather than inherited service state", () => {
@@ -74,25 +71,24 @@ test("packaged execution uses an isolated local user", () => {
   });
 });
 
-test("workflow removes checkout credentials before Codex and scopes the push token to finalization", async () => {
+test("workflow removes checkout credentials and alternate instruction fields", async () => {
   for (const path of [".github/workflows/agent-relay.yml", "examples/github-actions/agent-relay.yml"]) {
     const workflow = await readFile(path, "utf8");
     assert.match(workflow, /persist-credentials: false/);
     assert.match(workflow, /Verify credential-free checkout/);
     assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ secrets\.AGENT_RELAY_PUSH_TOKEN \|\| github\.token \}\}/);
-    assert.doesNotMatch(workflow, /persist-credentials: true/);
-    assert.doesNotMatch(workflow, /AGENT_RELAY_REQUEST_ID/);
+    assert.doesNotMatch(workflow, /persist-credentials: true|AGENT_RELAY_REQUEST_ID|AGENT_RELAY_MODE|\bmode:/);
   }
 });
 
-test("packaging exposes only the required Codex credential file and keeps Relay state isolated", async () => {
+test("packaging exposes only a read-only Codex credential file and keeps Relay state isolated", async () => {
   const compose = await readFile("compose.yml", "utf8");
   const dockerfile = await readFile("Dockerfile", "utf8");
   const launcher = await readFile("scripts/codex-run", "utf8");
   const finalizer = await readFile("runner/finalize.sh", "utf8");
   const ci = await readFile(".github/workflows/ci.yml", "utf8");
 
-  assert.match(compose, /HOST_CODEX_AUTH_FILE.*:\/home\/agent\/\.codex\/auth\.json/);
+  assert.match(compose, /HOST_CODEX_AUTH_FILE.*:\/home\/agent\/\.codex\/auth\.json:ro/);
   assert.doesNotMatch(compose, /HOST_CODEX_DIR|:\/home\/agent\/\.codex\s*$/m);
   assert.match(compose, /CODEX_RUN_AS_USER: agent/);
 

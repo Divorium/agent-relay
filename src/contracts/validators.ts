@@ -1,5 +1,5 @@
 import { RelayError } from "./errors.js";
-import { EXECUTION_MODES, type CreateJobRequest } from "./job.js";
+import type { CreateJobRequest } from "./job.js";
 import type { CodexResult, ValidationResult } from "./result.js";
 import { assertNoSensitiveResult } from "../security/redaction.js";
 
@@ -38,7 +38,7 @@ function requiredString(value: unknown, name: string, max: number, context: Erro
 
 export function validateCreateJobRequest(value: unknown): CreateJobRequest {
   const object = asObject(value, "request", "request");
-  rejectUnknownFields(object, ["requestId", "workspace", "planPath", "mode"], "request", "");
+  rejectUnknownFields(object, ["requestId", "workspace", "planPath"], "request", "");
 
   const requestId = requiredString(object.requestId, "requestId", 128, "request");
   if (!REQUEST_ID.test(requestId)) throw invalid("request", "requestId has invalid format");
@@ -51,11 +51,7 @@ export function validateCreateJobRequest(value: unknown): CreateJobRequest {
     throw invalid("request", "planPath must be a safe relative Markdown path");
   }
 
-  if (typeof object.mode !== "string" || !EXECUTION_MODES.includes(object.mode as never)) {
-    throw invalid("request", "mode must be implement, revise, or finalize");
-  }
-
-  return { requestId, workspace, planPath, mode: object.mode as CreateJobRequest["mode"] };
+  return { requestId, workspace, planPath };
 }
 
 function validateValidation(value: unknown, index: number): ValidationResult {
@@ -76,22 +72,16 @@ function validateValidation(value: unknown, index: number): ValidationResult {
   return result;
 }
 
-export function validateCodexResult(value: unknown, expectedRequestId: string): CodexResult {
+export function validateCodexResult(value: unknown): CodexResult {
   try { assertNoSensitiveResult(value); } catch { throw invalid("result", "Result contains sensitive data"); }
   const object = asObject(value, "result", "result");
-  rejectUnknownFields(object, ["schemaVersion", "requestId", "summary", "validation"], "result", "result ");
+  rejectUnknownFields(object, ["schemaVersion", "summary", "validation"], "result", "result ");
   if (object.schemaVersion !== 1) throw invalid("result", "Unsupported schemaVersion");
-  if (object.requestId !== expectedRequestId) throw invalid("result", "Result requestId does not match the job");
 
   const summary = requiredString(object.summary, "summary", 4000, "result");
   const validation = Array.isArray(object.validation) && object.validation.length <= 100
     ? object.validation.map(validateValidation)
     : (() => { throw invalid("result", "validation must be an array with at most 100 items"); })();
 
-  return {
-    schemaVersion: 1,
-    requestId: expectedRequestId,
-    summary,
-    validation,
-  };
+  return { schemaVersion: 1, summary, validation };
 }

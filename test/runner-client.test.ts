@@ -35,10 +35,9 @@ async function initializeRepository(workspace: string, plan = "# Plan\n"): Promi
   runGit(workspace, ["commit", "-m", "Initial state"]);
 }
 
-function minimalResult(requestId: string, summary: string) {
+function minimalResult(summary: string) {
   return {
     schemaVersion: 1,
-    requestId,
     summary,
     validation: [{ command: "npm test", status: "passed", exitCode: 0, details: "Passed." }],
   };
@@ -52,7 +51,6 @@ async function runClient(workspaceRoot: string, workspace: string, githubOutput:
       AGENT_RELAY_URL: serverUrl,
       AGENT_RELAY_TOKEN: "relay-token",
       AGENT_RELAY_PLAN_PATH: "plan.md",
-      AGENT_RELAY_MODE: "implement",
       AGENT_RELAY_REQUEST_ID: requestId,
       AGENT_RELAY_WORKSPACE_ROOT: workspaceRoot,
       GITHUB_WORKSPACE: workspace,
@@ -75,7 +73,7 @@ test("runner client derives the commit message from the active plan title", asyn
   await writeFile(githubOutput, "");
   await initializeRepository(workspace, "# Implement controlled change\n");
   await writeFile(join(workspace, "tracked.txt"), "after\n");
-  await writeFile(join(workspace, ".agent-relay", "result.json"), `${JSON.stringify(minimalResult(requestId, "Completed the controlled integration test."))}\n`);
+  await writeFile(join(workspace, ".agent-relay", "result.json"), `${JSON.stringify(minimalResult("Completed the controlled integration test."))}\n`);
 
   let submitted: Record<string, unknown> | undefined;
   const server = createServer(async (req: any, res: any) => {
@@ -105,7 +103,6 @@ test("runner client derives the commit message from the active plan title", asyn
       requestId,
       workspace: "repository/repository",
       planPath: "plan.md",
-      mode: "implement",
     });
     await assert.rejects(() => stat(join(workspace, ".agent-relay")));
   } finally {
@@ -124,7 +121,7 @@ test("runner client uses a fixed commit-message fallback when the plan has no ti
   await writeFile(githubOutput, "");
   await initializeRepository(workspace, "No heading\n");
   await writeFile(join(workspace, "tracked.txt"), "after\n");
-  await writeFile(join(workspace, ".agent-relay", "result.json"), `${JSON.stringify(minimalResult(requestId, "Completed."))}\n`);
+  await writeFile(join(workspace, ".agent-relay", "result.json"), `${JSON.stringify(minimalResult("Completed."))}\n`);
 
   const server = createServer((_req: any, res: any) => {
     res.statusCode = 202;
@@ -154,7 +151,7 @@ test("runner client leaves GITHUB_OUTPUT empty when Git reports a clean worktree
   await mkdir(workspace, { recursive: true });
   await writeFile(githubOutput, "");
   await initializeRepository(workspace);
-  await writeFile(join(workspace, ".agent-relay", "result.json"), `${JSON.stringify(minimalResult(requestId, "No repository files required changes."))}\n`);
+  await writeFile(join(workspace, ".agent-relay", "result.json"), `${JSON.stringify(minimalResult("No repository files required changes."))}\n`);
 
   const server = createServer((_req: any, res: any) => {
     res.statusCode = 202;
@@ -181,14 +178,14 @@ test("runner client leaves GITHUB_OUTPUT empty when Git reports a clean worktree
 test("workflow template keeps checkout credentials away from Codex and injects push credentials only into finalization", async () => {
   const workflow = await readFile(join(process.cwd(), "examples", "github-actions", "agent-relay.yml"), "utf8");
   assert.match(workflow, /pr_number:/);
-  assert.doesNotMatch(workflow, /inputs\.branch/);
+  assert.doesNotMatch(workflow, /inputs\.branch|\bmode:/);
   assert.match(workflow, /run: node \/runner\/resolve-pr\.mjs/);
   assert.match(workflow, /ref: \$\{\{ steps\.pr\.outputs\.head_sha \}\}/);
   assert.match(workflow, /TARGET_BRANCH: \$\{\{ steps\.pr\.outputs\.head_ref \}\}/);
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /Verify credential-free checkout/);
   assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ secrets\.AGENT_RELAY_PUSH_TOKEN \|\| github\.token \}\}/);
-  assert.doesNotMatch(workflow, /AGENT_RELAY_REQUEST_ID/);
+  assert.doesNotMatch(workflow, /AGENT_RELAY_REQUEST_ID|AGENT_RELAY_MODE/);
   assert.match(workflow, /node \/runner\/client\.mjs 2>&1 \| tee/);
   assert.doesNotMatch(workflow, /client\.mjs[^\n]*GITHUB_OUTPUT/);
   assert.match(workflow, /run: \/runner\/finalize\.sh/);

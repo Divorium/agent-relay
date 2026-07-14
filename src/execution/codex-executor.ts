@@ -147,6 +147,6 @@ export class CodexExecutor {
     let parsed: unknown;
     try { parsed = JSON.parse(raw); }
     catch { throw new RelayError("RESULT_INVALID", "Codex result is not valid JSON", 422); }
-    return { exitCode, result: validateCodexResult(parsed, request.requestId) };
+    return { exitCode, result: validateCodexResult(parsed) };
   }
 }

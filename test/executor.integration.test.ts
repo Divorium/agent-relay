@@ -6,8 +6,6 @@ import { tmpdir } from "node:os";
 import { CodexExecutor, createCodexArgs, createCodexEnvironment } from "../src/execution/codex-executor.js";
 import { RelayError } from "../src/contracts/errors.js";
 
-const requestId = "executor-integration-request";
-
 async function createRoot(name: string) {
   const root = join(tmpdir(), `agent-relay-${name}-${process.pid}-${Date.now()}`);
   const workspace = join(root, "workspace");
@@ -61,7 +59,6 @@ printf '%s\n' 'authorization: Bearer abcdefghijklmnopqrstuvwxyz'
 cat > "$workspace/.agent-relay/result.json" <<'JSON'
 {
   "schemaVersion": 1,
-  "requestId": "${requestId}",
   "summary": "Controlled child process completed.",
   "validation": []
 }
@@ -75,15 +72,8 @@ JSON
   process.env.APPLICATION_MODE = "test";
   const executor = new CodexExecutor(executable, 5_000, 100_000);
   try {
-    const outcome = await executor.run({
-      requestId,
-      workspace: "workspace",
-      planPath: "plan.md",
-      mode: "implement",
-    }, workspace, outputPath);
-
+    const outcome = await executor.run({ requestId: "executor-request", workspace: "workspace", planPath: "plan.md" }, workspace, outputPath);
     assert.equal(outcome.exitCode, 0);
-    assert.equal(outcome.result.requestId, requestId);
     assert.equal(outcome.result.summary, "Controlled child process completed.");
     const log = await readFile(outputPath, "utf8");
     assert.doesNotMatch(log, /abcdefghijklmnopqrstuvwxyz/);
@@ -111,7 +101,7 @@ while true; do sleep 1; done
   const executor = new CodexExecutor(executable, 50, 100_000);
   try {
     await assert.rejects(
-      () => executor.run({ requestId: "timeout-request", workspace: "workspace", planPath: "plan.md", mode: "implement" }, workspace, outputPath),
+      () => executor.run({ requestId: "timeout-request", workspace: "workspace", planPath: "plan.md" }, workspace, outputPath),
       (error: unknown) => error instanceof RelayError && error.code === "CODEX_TIMEOUT",
     );
     assert.equal(await readFile(marker, "utf8"), "terminated");

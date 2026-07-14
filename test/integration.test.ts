@@ -49,12 +49,7 @@ async function createFixture(run: (request: CreateJobRequest) => Promise<Executi
 }
 
 function request(requestId: string): CreateJobRequest {
-  return {
-    requestId,
-    workspace: "owner/repo",
-    planPath: "docs/plan.md",
-    mode: "implement",
-  };
+  return { requestId, workspace: "owner/repo", planPath: "docs/plan.md" };
 }
 
 async function waitForTerminal(baseUrl: string, id: string) {
@@ -70,20 +65,12 @@ async function waitForTerminal(baseUrl: string, id: string) {
   throw new Error("Job did not reach a terminal state");
 }
 
-function result(requestId: string, summary: string): ExecutionOutcome {
-  return {
-    exitCode: 0,
-    result: {
-      schemaVersion: 1,
-      requestId,
-      summary,
-      validation: [],
-    },
-  };
+function result(summary: string): ExecutionOutcome {
+  return { exitCode: 0, result: { schemaVersion: 1, summary, validation: [] } };
 }
 
 test("health is public while job endpoints require authentication", async () => {
-  const fixture = await createFixture(async (jobRequest) => result(jobRequest.requestId, "No changes required."));
+  const fixture = await createFixture(async () => result("No changes required."));
   try {
     const health = await fetch(`${fixture.baseUrl}/health`);
     assert.equal(health.status, 200);
@@ -99,13 +86,12 @@ test("health is public while job endpoints require authentication", async () => 
 
 test("HTTP create and poll derives completed state and preserves idempotency", async () => {
   let executions = 0;
-  const fixture = await createFixture(async (jobRequest) => {
+  const fixture = await createFixture(async () => {
     executions += 1;
     return {
       exitCode: 0,
       result: {
         schemaVersion: 1,
-        requestId: jobRequest.requestId,
         summary: "Completed through the integration executor.",
         validation: [{ command: "npm test", status: "passed", exitCode: 0, details: "Passed." }],
       },
@@ -139,9 +125,9 @@ test("HTTP create and poll derives completed state and preserves idempotency", a
 test("parallel job submission allows only one active job", async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
-  const fixture = await createFixture(async (jobRequest) => {
+  const fixture = await createFixture(async () => {
     await gate;
-    return result(jobRequest.requestId, "Completed.");
+    return result("Completed.");
   });
   try {
     const post = (body: CreateJobRequest) => fetch(`${fixture.baseUrl}/v1/jobs`, {

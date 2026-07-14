@@ -1,11 +1,7 @@
-export const EXECUTION_MODES = ["implement", "revise", "finalize"] as const;
-export type ExecutionMode = (typeof EXECUTION_MODES)[number];
-
 export interface CreateJobRequest {
   requestId: string;
   workspace: string;
   planPath: string;
-  mode: ExecutionMode;
 }
 
 export type JobStatus =

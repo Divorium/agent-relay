@@ -58,7 +58,6 @@ printf 'after\n' > "$workspace/tracked.txt"
 cat > "$workspace/.agent-relay/result.json" <<'JSON'
 {
   "schemaVersion": 1,
-  "requestId": "${requestId}",
   "summary": "The controlled executor changed the checked-out worktree and retained the documented blocker.",
   "validation": [{
     "command": "controlled-flow",
@@ -98,7 +97,6 @@ JSON
         AGENT_RELAY_URL: `http://127.0.0.1:${address.port}`,
         AGENT_RELAY_TOKEN: "relay-token",
         AGENT_RELAY_PLAN_PATH: "plan.md",
-        AGENT_RELAY_MODE: "implement",
         AGENT_RELAY_REQUEST_ID: requestId,
         AGENT_RELAY_WORKSPACE_ROOT: workspaceRoot,
         GITHUB_WORKSPACE: workspace,

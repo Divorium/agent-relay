@@ -8,8 +8,6 @@ export type ErrorCode =
   | "JOB_NOT_FOUND"
   | "CODEX_FAILED"
   | "CODEX_TIMEOUT"
-  | "RESULT_MISSING"
-  | "RESULT_INVALID"
   | "INTERNAL_ERROR";
 
 export class RelayError extends Error {

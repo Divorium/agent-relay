@@ -18,17 +18,12 @@ args="$*"
 case "$args" in *'default_permissions="relay"'*) ;; *) exit 41 ;; esac
 case "$args" in *'permissions.relay.filesystem={"/home/agent/.codex"="deny"}'*) ;; *) exit 42 ;; esac
 case "$args" in *'danger-full-access'*) exit 43 ;; esac
+case "$args" in *'result.json'*) exit 44 ;; esac
 while [ "$1" != "--cd" ]; do shift; done
 workspace="$2"
 printf 'first live line\n'
 sleep 1
-cat > "$workspace/.agent-relay/result.json" <<'JSON'
-{
-  "schemaVersion": 1,
-  "summary": "Completed.",
-  "validation": []
-}
-JSON
+printf 'changed\n' > "$workspace/changed.txt"
 `, { mode: 0o700 });
   await chmod(executable, 0o700);
 
@@ -51,7 +46,8 @@ JSON
     assert.match(await readFile(outputPath, "utf8"), /first live line/);
 
     const outcome = await execution;
-    assert.equal(outcome.result.summary, "Completed.");
+    assert.equal(outcome.exitCode, 0);
+    assert.equal(await readFile(join(workspace, "changed.txt"), "utf8"), "changed\n");
   } finally {
     process.stdout.write = originalWrite;
     await rm(root, { recursive: true, force: true });

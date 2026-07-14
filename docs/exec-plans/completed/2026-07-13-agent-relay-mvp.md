@@ -4,7 +4,7 @@
 
 Agent Relay is a self-hosted bridge between a repository-scoped GitHub Actions runner and Codex CLI.
 
-GitHub Actions checks out the requested pull-request branch. The runner submits a job to Agent Relay over the Compose network. Agent Relay starts a fresh non-interactive Codex process in the shared workspace. Codex implements the active plan, validates its work, and writes `.agent-relay/result.json`. The runner independently validates that artifact and the actual Git worktree, removes the artifact, commits with the validated message, and pushes to the same branch using GitHub Actions credentials.
+GitHub Actions checks out the requested pull-request branch. The runner submits a job to Agent Relay over the Compose network. Agent Relay starts a fresh non-interactive Codex process in the shared workspace. Codex implements the active plan, validates its work, and writes `.agent-relay/result.json`. The runner independently validates that artifact and the actual Git worktree, removes the artifact, commits with the validated message when repository changes exist, and pushes to the same branch using GitHub Actions credentials.
 
 The MVP supports one target repository per Docker Compose deployment.
 
@@ -19,6 +19,8 @@ The MVP supports one target repository per Docker Compose deployment.
 - [x] Implemented controlled Codex process execution, byte-based output limits, redaction, timeout, and process termination.
 - [x] Added explicit Codex automation permissions: global approval mode `never` and sandbox `danger-full-access`.
 - [x] Implemented the runner client and runner-owned Git flow.
+- [x] Removed agent-provided `shouldCommit`; the actual Git worktree is now the only source of truth for commit creation.
+- [x] Strengthened Relay instructions so Codex never runs `git commit`, `git push`, or equivalent commit-publishing commands.
 - [x] Fixed the workflow request ID to avoid the invalid `owner/repository` slash.
 - [x] Removed direct branch interpolation from shell commands and validate the branch with `git check-ref-format`.
 - [x] Made runner registration reusable after an ordinary container restart.
@@ -37,7 +39,8 @@ The remaining items require external credentials and a running deployment. They 
 - One repository is supported per Compose deployment.
 - The runner owns checkout, GitHub credentials, commit, and push.
 - Agent Relay owns validation, persistence, process execution, and result reporting.
-- Codex edits the shared checkout but does not commit or push.
+- Codex edits the shared checkout but never runs `git commit`, `git push`, or equivalent commit-publishing commands.
+- `git status --porcelain` in the runner is the only source of truth for whether a commit is needed.
 - The operator's standard `~/.codex` is mounted directly; `CODEX_HOME` is not set.
 - One Codex job may run at a time.
 - Agent Relay uses a fresh `codex exec` process for every job.
@@ -61,7 +64,8 @@ The runner image and workflow provide:
 - strict independent result validation;
 - sensitive-data rejection;
 - independent `git status --porcelain` verification;
-- commit creation and push to the validated target branch.
+- commit creation only when the actual worktree changed;
+- push to the validated target branch.
 
 Evidence:
 
@@ -90,7 +94,8 @@ Agent Relay provides:
 - explicit approval and sandbox flags;
 - timeout with `SIGTERM`, `SIGKILL`, and waiting for process close;
 - byte-based output limits and persisted redaction;
-- mandatory result parsing and validation.
+- mandatory result parsing and validation;
+- explicit Relay prompt instructions reserving commit and push for the runner.
 
 Evidence:
 
@@ -98,6 +103,7 @@ Evidence:
 - `src/application/job-service.ts`
 - `src/persistence/job-store.ts`
 - `src/execution/codex-executor.ts`
+- `src/execution/prompt.ts`
 - `src/contracts/validators.ts`
 - `src/security/auth.ts`
 - `src/security/workspace.ts`
@@ -112,14 +118,13 @@ Evidence:
 - `schemaVersion`;
 - matching `requestId`;
 - `status`;
-- `shouldCommit`;
-- conditional one-line `commitMessage`;
+- one-line `commitMessage` for completed work;
 - `summary`;
 - validation records;
 - blockers;
 - limitations.
 
-Relay and runner validators reject unknown fields, unsupported versions, request-ID mismatches, invalid status combinations, malformed validation records, oversized values, control characters, and likely sensitive data. The runner compares `shouldCommit` with the actual worktree and removes the artifact before staging.
+Relay and runner validators reject unknown fields, unsupported versions, request-ID mismatches, invalid status combinations, malformed validation records, oversized values, control characters, and likely sensitive data. `shouldCommit` is not accepted. The runner independently evaluates `git status --porcelain`, uses `commitMessage` only when repository changes exist, and removes the artifact before staging.
 
 ## Docker and Toolchain
 
@@ -132,6 +137,7 @@ The Agent Relay image includes Node.js 22, npm, TypeScript, Codex CLI, Python, J
 `npm run check` covers:
 
 - request and result contracts;
+- rejection of the legacy `shouldCommit` field;
 - error codes and strict unknown-field rejection;
 - authentication and configuration;
 - workspace containment;
@@ -143,6 +149,7 @@ The Agent Relay image includes Node.js 22, npm, TypeScript, Codex CLI, Python, J
 - explicit Codex argument order;
 - timeout only after child termination;
 - runner-client request/result/Git integration;
+- commit output when the worktree changed and no commit output when it is clean;
 - safe workflow request ID and branch handling;
 - runner initial registration, restart reuse, and missing-token failure.
 
@@ -183,10 +190,11 @@ A CI result is authoritative only when it belongs to the current head SHA.
 - A timed-out process must close before the active-job lock is released.
 - Recovery is a new GitHub Actions run against the current branch and active plan.
 - An ordinary runner-container restart reuses `.runner`; container recreation requires a new registration token.
+- Re-running a completed no-change job produces no commit because the runner observes a clean worktree.
 
 ## Outcomes and Remaining External Evidence
 
-All behavior that can be deterministically exercised without operator credentials is implemented and covered by automated checks or controlled integration tests.
+All behavior that can be deterministically exercised without operator credentials is implemented and covered by automated checks or controlled integration tests. Commit creation no longer depends on an agent-authored boolean: the runner uses the actual Git worktree, while Codex supplies only a validated message for completed work and is explicitly forbidden from creating or pushing commits itself.
 
 The deployment owner must still record:
 
@@ -204,3 +212,4 @@ The plan remains active until those deployment-specific exercises are recorded.
 - 2026-07-13: Implemented Relay, runner, Docker packaging, contracts, persistence, process execution, and operations.
 - 2026-07-13: Added unit and integration coverage plus repository CI.
 - 2026-07-13: Review fixed runner restart behavior, OpenSSH inheritance, workflow request ID and branch injection, independent runner validation, polling bounds, default read-only Codex execution, Codex global-flag ordering, and byte-accurate output limiting.
+- 2026-07-14: Removed `shouldCommit`, made the Git worktree authoritative for commit creation, and strengthened Relay and repository instructions so Codex never creates or pushes commits.

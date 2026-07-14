@@ -25,7 +25,6 @@ function completedResult(overrides: Record<string, unknown> = {}) {
     schemaVersion: 1,
     requestId: validRequest.requestId,
     status: "completed",
-    shouldCommit: true,
     commitMessage: "Implement contract validators",
     summary: "Implemented validation.",
     validation: [{ command: "npm test", status: "passed", exitCode: 0, details: "Passed." }],
@@ -55,14 +54,18 @@ test("accepts a valid completed result", () => {
   const result = validateCodexResult(completedResult(), validRequest.requestId);
   assert.equal(result.commitMessage, "Implement contract validators");
 });
-test("rejects mismatched result requestId", () => assert.throws(() => validateCodexResult({ schemaVersion: 1, requestId: "other", status: "blocked", shouldCommit: false, summary: "Blocked.", validation: [], blockers: ["Reason"], limitations: [] }, validRequest.requestId), /does not match/));
+test("rejects mismatched result requestId", () => assert.throws(() => validateCodexResult({ schemaVersion: 1, requestId: "other", status: "blocked", summary: "Blocked.", validation: [], blockers: ["Reason"], limitations: [] }, validRequest.requestId), /does not match/));
+test("rejects completed results without a commit message", () => assert.throws(() => validateCodexResult(completedResult({ commitMessage: undefined }), validRequest.requestId), /commitMessage/));
 test("rejects multiline commit messages", () => assert.throws(() => validateCodexResult(completedResult({ commitMessage: "Line one\nLine two" }), validRequest.requestId)));
-test("rejects blocked results that request a commit", () => assert.throws(() => validateCodexResult({ schemaVersion: 1, requestId: validRequest.requestId, status: "blocked", shouldCommit: true, summary: "Blocked.", validation: [], blockers: ["Reason"], limitations: [] }, validRequest.requestId), /cannot be committed/));
+test("rejects blocked results that include a commit message", () => assert.throws(() => validateCodexResult({ schemaVersion: 1, requestId: validRequest.requestId, status: "blocked", commitMessage: "Do not use", summary: "Blocked.", validation: [], blockers: ["Reason"], limitations: [] }, validRequest.requestId), /not allowed/));
 test("uses RESULT_INVALID and 422 for malformed result strings", () => {
   expectRelayError(() => validateCodexResult(completedResult({ summary: "" }), validRequest.requestId), "RESULT_INVALID", 422);
 });
 test("rejects unknown fields inside validation records", () => {
   expectRelayError(() => validateCodexResult(completedResult({ validation: [{ command: "npm test", status: "passed", details: "Passed.", output: "unexpected" }] }), validRequest.requestId), "RESULT_INVALID", 422);
+});
+test("rejects the legacy shouldCommit field", () => {
+  expectRelayError(() => validateCodexResult(completedResult({ shouldCommit: true }), validRequest.requestId), "RESULT_INVALID", 422);
 });
 test("rejects unknown top-level result fields", () => {
   expectRelayError(() => validateCodexResult(completedResult({ filesChanged: ["src/index.ts"] }), validRequest.requestId), "RESULT_INVALID", 422);
@@ -78,17 +81,19 @@ test("loads required configuration and defaults", () => {
   assert.equal(config.codexTimeoutMs, 21_600_000);
 });
 test("rejects missing configuration", () => assert.throws(() => loadConfig({ SHARED_WORKSPACE_ROOT: "/work" }), /AGENT_RELAY_TOKEN/));
-test("prompt includes plan, mode and result contract", () => {
+test("prompt includes plan, mode, result contract, and runner-owned Git rules", () => {
   const prompt = buildCodexPrompt({ ...validRequest, mode: "revise", reviewFindings: ["Fix validation"] }, ".agent-relay/result.json");
   assert.match(prompt, /docs\/exec-plans/);
-  assert.match(prompt, /Do not commit or push/);
+  assert.match(prompt, /Never run git commit, git push/);
+  assert.match(prompt, /runner exclusively owns commit and push/);
+  assert.match(prompt, /Do not include shouldCommit/);
   assert.match(prompt, /result\.json/);
 });
 test("redacts common token formats", () => {
   const output = redactSensitiveText("authorization: Bearer abcdefghijklmnopqrstuvwxyz token=super-secret-value");
   assert.doesNotMatch(output, /abcdefghijklmnopqrstuvwxyz|super-secret-value/);
 });
-test("rejects sensitive result content", () => assert.throws(() => validateCodexResult({ schemaVersion: 1, requestId: "req-1", status: "blocked", shouldCommit: false, summary: "Found github_pat_abcdefghijklmnopqrstuvwxyz1234567890", validation: [], blockers: ["Blocked"], limitations: [] }, "req-1"), /sensitive data/));
+test("rejects sensitive result content", () => assert.throws(() => validateCodexResult({ schemaVersion: 1, requestId: "req-1", status: "blocked", summary: "Found github_pat_abcdefghijklmnopqrstuvwxyz1234567890", validation: [], blockers: ["Blocked"], limitations: [] }, "req-1"), /sensitive data/));
 
 test("resolves a workspace below the shared root", async () => {
   const root = join(tmpdir(), `agent-relay-workspace-${process.pid}`);

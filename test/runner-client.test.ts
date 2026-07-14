@@ -23,27 +23,32 @@ function runProcess(command: string, args: string[], options: Record<string, unk
   });
 }
 
-test("runner client submits a job, validates the result and writes the commit message to GITHUB_OUTPUT", async () => {
-  const root = join(tmpdir(), `agent-relay-runner-client-${process.pid}-${Date.now()}`);
-  const workspaceRoot = join(root, "workspaces");
-  const workspace = join(workspaceRoot, "repository", "repository");
-  const githubOutput = join(root, "github-output");
-  const requestId = "12345-67890-1";
+async function initializeRepository(workspace: string): Promise<void> {
   await mkdir(join(workspace, ".agent-relay"), { recursive: true });
-  await writeFile(githubOutput, "");
   await writeFile(join(workspace, "plan.md"), "# Plan\n");
   await writeFile(join(workspace, "tracked.txt"), "before\n");
   runGit(workspace, ["init"]);
   runGit(workspace, ["config", "user.name", "Test Runner"]);
   runGit(workspace, ["config", "user.email", "runner@example.invalid"]);
+  await writeFile(join(workspace, ".git", "info", "exclude"), ".agent-relay/\n");
   runGit(workspace, ["add", "plan.md", "tracked.txt"]);
   runGit(workspace, ["commit", "-m", "Initial state"]);
+}
+
+test("runner client submits a job, validates the result and writes the commit message when Git reports changes", async () => {
+  const root = join(tmpdir(), `agent-relay-runner-client-${process.pid}-${Date.now()}`);
+  const workspaceRoot = join(root, "workspaces");
+  const workspace = join(workspaceRoot, "repository", "repository");
+  const githubOutput = join(root, "github-output");
+  const requestId = "12345-67890-1";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(githubOutput, "");
+  await initializeRepository(workspace);
   await writeFile(join(workspace, "tracked.txt"), "after\n");
   await writeFile(join(workspace, ".agent-relay", "result.json"), `${JSON.stringify({
     schemaVersion: 1,
     requestId,
     status: "completed",
-    shouldCommit: true,
     commitMessage: "Apply the active plan",
     summary: "Completed the controlled integration test.",
     validation: [{ command: "npm test", status: "passed", exitCode: 0, details: "Passed." }],
@@ -101,6 +106,66 @@ test("runner client submits a job, validates the result and writes the commit me
     });
     await assert.rejects(() => stat(join(workspace, ".agent-relay")));
     assert.equal(await readFile(join(workspace, "tracked.txt"), "utf8"), "after\n");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error: Error | undefined) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("runner client leaves GITHUB_OUTPUT empty when Git reports a clean worktree", async () => {
+  const root = join(tmpdir(), `agent-relay-runner-client-clean-${process.pid}-${Date.now()}`);
+  const workspaceRoot = join(root, "workspaces");
+  const workspace = join(workspaceRoot, "repository", "repository");
+  const githubOutput = join(root, "github-output");
+  const requestId = "12345-67890-2";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(githubOutput, "");
+  await initializeRepository(workspace);
+  await writeFile(join(workspace, ".agent-relay", "result.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    requestId,
+    status: "completed",
+    commitMessage: "Unused because the worktree is clean",
+    summary: "No repository files required changes.",
+    validation: [],
+    blockers: [],
+    limitations: [],
+  })}\n`);
+
+  const server = createServer(async (_req: any, res: any) => {
+    res.statusCode = 202;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ id: "job-2", status: "completed" }));
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  try {
+    const result = await runProcess(process.execPath, [join(process.cwd(), "runner", "client.mjs")], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        AGENT_RELAY_URL: `http://127.0.0.1:${address.port}`,
+        AGENT_RELAY_TOKEN: "relay-token",
+        AGENT_RELAY_PLAN_PATH: "plan.md",
+        AGENT_RELAY_MODE: "implement",
+        AGENT_RELAY_REQUEST_ID: requestId,
+        AGENT_RELAY_WORKSPACE_ROOT: workspaceRoot,
+        GITHUB_WORKSPACE: workspace,
+        GITHUB_OUTPUT: githubOutput,
+        AGENT_RELAY_REQUEST_TIMEOUT_MS: "5000",
+        AGENT_RELAY_POLL_INTERVAL_MS: "10",
+        AGENT_RELAY_POLL_TIMEOUT_MS: "5000",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(await readFile(githubOutput, "utf8"), "");
+    await assert.rejects(() => stat(join(workspace, ".agent-relay")));
+    assert.equal(spawnSync("git", ["status", "--porcelain"], { cwd: workspace, encoding: "utf8" }).stdout.trim(), "");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error: Error | undefined) => error ? reject(error) : resolve()));
     await rm(root, { recursive: true, force: true });

@@ -9,7 +9,6 @@ export interface CodexResult {
   schemaVersion: 1;
   requestId: string;
   status: "completed" | "blocked";
-  shouldCommit: boolean;
   commitMessage?: string;
   summary: string;
   validation: ValidationResult[];

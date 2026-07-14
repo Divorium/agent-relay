@@ -37,20 +37,22 @@ test("CodexExecutor runs a real child process without the Relay token, validates
 set -eu
 [ "$1" = "--ask-for-approval" ]
 [ "$2" = "never" ]
-[ "$3" = "exec" ]
-[ "$4" = "--sandbox" ]
-[ "$5" = "danger-full-access" ]
-[ "$6" = "--cd" ]
-[ "$7" = "${workspace}" ]
+[ "$3" = "-c" ]
+[ "$4" = "features.memories=false" ]
+[ "$5" = "exec" ]
+[ "$6" = "--sandbox" ]
+[ "$7" = "danger-full-access" ]
+[ "$8" = "--cd" ]
+[ "$9" = "${workspace}" ]
 [ -z "\${AGENT_RELAY_TOKEN:-}" ]
 [ "\${APPLICATION_MODE:-}" = "test" ]
 printf '%s\n' 'authorization: Bearer abcdefghijklmnopqrstuvwxyz'
-cat > "$7/.agent-relay/result.json" <<'JSON'
+cat > "$9/.agent-relay/result.json" <<'JSON'
 {
   "schemaVersion": 1,
   "requestId": "${requestId}",
   "status": "completed",
-  "shouldCommit": false,
+  "commitMessage": "Complete controlled child process",
   "summary": "Controlled child process completed.",
   "validation": [],
   "blockers": [],
@@ -76,6 +78,7 @@ JSON
     assert.equal(outcome.exitCode, 0);
     assert.equal(outcome.result.requestId, requestId);
     assert.equal(outcome.result.status, "completed");
+    assert.equal(outcome.result.commitMessage, "Complete controlled child process");
     const log = await readFile(outputPath, "utf8");
     assert.doesNotMatch(log, /abcdefghijklmnopqrstuvwxyz/);
     assert.match(log, /\[REDACTED\]/);

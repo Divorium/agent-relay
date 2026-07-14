@@ -23,7 +23,7 @@ The MVP includes:
 
 Each deployment supports one target repository and contains two services:
 
-- `runner`: a repository-scoped GitHub Actions self-hosted runner;
+- `runner`: a repository-scoped self-hosted runner;
 - `agent-relay`: the HTTP service and Codex CLI environment.
 
 The services share one Docker network and one workspace volume. The runner owns checkout, GitHub credentials, commit, and push. Agent Relay never clones repositories, chooses branches, stores GitHub credentials, or pushes changes.
@@ -186,7 +186,9 @@ docker compose up --build -d
 
 Copy `examples/github-actions/agent-relay.yml` into a target repository when Agent Relay is deployed separately. Registration, recovery, dispatch, and troubleshooting instructions are in `docs/operations/README.md`.
 
-## Active plans
+## ExecPlans
 
-- `docs/exec-plans/active/2026-07-13-agent-relay-mvp.md`
-- `docs/exec-plans/active/2026-07-13-ready-pr-gate.md`
+There are no active ExecPlans. Completed plans:
+
+- `docs/exec-plans/completed/2026-07-13-agent-relay-mvp.md`
+- `docs/exec-plans/completed/2026-07-13-ready-pr-gate.md`

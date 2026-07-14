@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { createRelayServer } from "../src/api/server.js";
 import { JobService } from "../src/application/job-service.js";
 import { JobStore } from "../src/persistence/job-store.js";
+import { OutputStore } from "../src/persistence/output-store.js";
 import type { CodexExecutor, ExecutionOutcome } from "../src/execution/codex-executor.js";
 import type { CreateJobRequest } from "../src/contracts/job.js";
 import type { AppConfig } from "../src/config/config.js";
@@ -21,7 +22,8 @@ async function createFixture(run: (request: CreateJobRequest) => Promise<Executi
   await writeFile(join(workspace, "docs", "plan.md"), "# Plan\n");
 
   const executor = { run } as unknown as CodexExecutor;
-  const jobs = new JobService(workspaceRoot, stateDir, new JobStore(stateDir), executor);
+  const outputStore = new OutputStore(stateDir);
+  const jobs = new JobService(workspaceRoot, stateDir, new JobStore(stateDir), outputStore, executor);
   await jobs.init();
 
   const config: AppConfig = {
@@ -32,9 +34,8 @@ async function createFixture(run: (request: CreateJobRequest) => Promise<Executi
     stateDir,
     codexCommand: "codex",
     codexTimeoutMs: 10_000,
-    maxOutputBytes: 100_000,
   };
-  const server = createRelayServer(config, jobs);
+  const server = createRelayServer(config, jobs, outputStore);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Server did not expose a TCP address");
@@ -43,6 +44,7 @@ async function createFixture(run: (request: CreateJobRequest) => Promise<Executi
     baseUrl: `http://127.0.0.1:${address.port}`,
     close: async () => {
       await new Promise<void>((resolve, reject) => server.close((error: Error | undefined) => error ? reject(error) : resolve()));
+      await outputStore.close().catch(() => undefined);
       await rm(root, { recursive: true, force: true });
     },
   };

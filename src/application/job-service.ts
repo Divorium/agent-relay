@@ -5,6 +5,7 @@ import type { CreateJobRequest, JobRecord } from "../contracts/job.js";
 import { resolveWorkspace } from "../security/workspace.js";
 import { JobStore } from "../persistence/job-store.js";
 import { CodexExecutor } from "../execution/codex-executor.js";
+import { OutputStore } from "../persistence/output-store.js";
 
 function sameRequest(a: CreateJobRequest, b: CreateJobRequest): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -18,12 +19,16 @@ export class JobService {
     private readonly workspaceRoot: string,
     private readonly stateDir: string,
     private readonly store: JobStore,
+    private readonly outputStore: OutputStore,
     private readonly executor: CodexExecutor,
   ) {}
 
   async init(): Promise<void> {
     await this.store.init();
-    await this.store.markRunningJobsInterrupted();
+    const recovered = await this.store.markRunningJobsInterrupted();
+    for (const job of recovered) {
+      await this.outputStore.attach(job);
+    }
   }
 
   async create(request: CreateJobRequest): Promise<JobRecord> {
@@ -39,11 +44,12 @@ export class JobService {
     }
 
     this.acceptingJob = true;
+    let createdJob: JobRecord | undefined;
     try {
       const workspace = await resolveWorkspace(this.workspaceRoot, request.workspace);
       const id = randomUUID();
       const now = new Date().toISOString();
-      const job: JobRecord = {
+      createdJob = {
         id,
         request,
         status: "accepted",
@@ -52,11 +58,20 @@ export class JobService {
         resultPath: join(workspace, ".agent-relay", "result.json"),
         outputPath: join(this.stateDir, "logs", `${id}.log`),
       };
-      await this.store.save(job);
-      await this.store.index(job);
+      await this.outputStore.prepare(createdJob.id, createdJob.outputPath);
+      await this.store.save(createdJob);
+      await this.store.index(createdJob);
+      const job = createdJob;
       this.activeJobId = id;
       void this.execute(job, workspace);
       return job;
+    } catch (error) {
+      if (createdJob) {
+        await this.outputStore.discard(createdJob.id).catch(() => undefined);
+        await this.store.delete(createdJob.id).catch(() => undefined);
+        await this.store.removeRequestId(createdJob.request.requestId).catch(() => undefined);
+      }
+      throw error;
     } finally {
       this.acceptingJob = false;
     }
@@ -75,14 +90,23 @@ export class JobService {
       current = { ...job, status: "running", startedAt: started, updatedAt: started };
       await this.store.save(current);
 
-      const outcome = await this.executor.run(job.request, workspace, job.outputPath);
+      const outcome = await this.executor.run(job, workspace);
       const finished = new Date().toISOString();
-      await this.store.save({
+      const terminal: JobRecord = {
         ...current,
         status: outcome.result.status,
         exitCode: outcome.exitCode,
         finishedAt: finished,
         updatedAt: finished,
+      };
+      try {
+        await this.store.save(terminal);
+      } catch {
+        await this.outputStore.fail(job.id, new RelayError("OUTPUT_WRITE_FAILED", "Terminal job state could not be persisted", 500)).catch(() => undefined);
+        return;
+      }
+      await this.outputStore.complete(job.id, terminal.status).catch(async () => {
+        await this.outputStore.fail(job.id, new RelayError("OUTPUT_WRITE_FAILED", "Terminal output completion failed", 500)).catch(() => undefined);
       });
     } catch (error) {
       const relayError = error instanceof RelayError
@@ -91,16 +115,24 @@ export class JobService {
       const finished = new Date().toISOString();
       const status = relayError.code === "CODEX_TIMEOUT" ? "timed_out" : "failed";
       try {
-        await this.store.save({
+        const terminal: JobRecord = {
           ...current,
           status,
           finishedAt: finished,
           updatedAt: finished,
           errorCode: relayError.code,
           errorMessage: relayError.message,
-        });
+        };
+        await this.store.save(terminal);
+        if (relayError.code === "OUTPUT_WRITE_FAILED") {
+          await this.outputStore.fail(job.id, relayError).catch(() => undefined);
+        } else {
+          await this.outputStore.complete(job.id, terminal.status).catch(async () => {
+            await this.outputStore.fail(job.id, new RelayError("OUTPUT_WRITE_FAILED", "Terminal output completion failed", 500)).catch(() => undefined);
+          });
+        }
       } catch {
-        // The active lock must still be released when persistence is unavailable.
+        await this.outputStore.fail(job.id, relayError).catch(() => undefined);
       }
     } finally {
       if (this.activeJobId === job.id) this.activeJobId = undefined;

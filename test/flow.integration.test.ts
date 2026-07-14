@@ -8,6 +8,7 @@ import { createRelayServer } from "../src/api/server.js";
 import { JobService } from "../src/application/job-service.js";
 import { CodexExecutor } from "../src/execution/codex-executor.js";
 import { JobStore } from "../src/persistence/job-store.js";
+import { OutputStore } from "../src/persistence/output-store.js";
 import type { AppConfig } from "../src/config/config.js";
 
 function runGit(cwd: string, args: string[]): void {
@@ -86,13 +87,13 @@ JSON
     stateDir,
     codexCommand: fakeCodex,
     codexTimeoutMs: 5_000,
-    maxOutputBytes: 100_000,
   };
   const store = new JobStore(stateDir);
-  const executor = new CodexExecutor(fakeCodex, config.codexTimeoutMs, config.maxOutputBytes);
-  const jobs = new JobService(workspaceRoot, stateDir, store, executor);
+  const outputStore = new OutputStore(stateDir);
+  const executor = new CodexExecutor(fakeCodex, config.codexTimeoutMs, outputStore);
+  const jobs = new JobService(workspaceRoot, stateDir, store, outputStore, executor);
   await jobs.init();
-  const server = createRelayServer(config, jobs);
+  const server = createRelayServer(config, jobs, outputStore);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address === "object");
@@ -132,6 +133,7 @@ JSON
     assert.equal(job.exitCode, 0);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error: Error | undefined) => error ? reject(error) : resolve()));
+    await outputStore.close().catch(() => undefined);
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -1,6 +1,9 @@
 #!/usr/bin/env node
-import { appendFile, readFile, rm } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { dirname } from "node:path";
+import { once } from "node:events";
 
 const baseUrl = process.env.AGENT_RELAY_URL ?? "http://agent-relay:8080";
 const token = process.env.AGENT_RELAY_TOKEN;
@@ -31,6 +34,15 @@ function positiveInteger(name, fallback) {
 const requestTimeoutMs = positiveInteger("AGENT_RELAY_REQUEST_TIMEOUT_MS", 30_000);
 const pollIntervalMs = positiveInteger("AGENT_RELAY_POLL_INTERVAL_MS", 5_000);
 const pollTimeoutMs = positiveInteger("AGENT_RELAY_POLL_TIMEOUT_MS", 21_900_000);
+const outputIdleMs = positiveInteger("AGENT_RELAY_OUTPUT_IDLE_MS", 60_000);
+const githubLogBytes = positiveInteger("AGENT_RELAY_GITHUB_LOG_BYTES", 10_000_000);
+const githubTailBytes = positiveInteger("AGENT_RELAY_GITHUB_TAIL_BYTES", 1_000_000);
+const outputArchivePath = process.env.AGENT_RELAY_OUTPUT_ARCHIVE_PATH;
+const normalizedWorkspaceRoot = workspaceRoot.replace(/\/$/, "");
+const workspacePrefix = `${normalizedWorkspaceRoot}/`;
+if (!workspace.startsWith(workspacePrefix)) throw new Error(`GITHUB_WORKSPACE must be below ${workspacePrefix}`);
+const relativeWorkspace = workspace.slice(workspacePrefix.length);
+if (!relativeWorkspace) throw new Error("GITHUB_WORKSPACE does not identify a repository workspace");
 
 function asObject(value, name) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${name} must be an object`);
@@ -110,7 +122,12 @@ function validateResult(value) {
 async function fetchJson(url, options = {}) {
   const response = await fetch(url, { ...options, signal: AbortSignal.timeout(requestTimeoutMs) });
   const text = await response.text();
-  if (!response.ok) throw new Error(`Agent Relay request failed: ${response.status} ${text}`);
+  if (!response.ok) {
+    const error = new Error(`Agent Relay request failed: ${response.status} ${text}`);
+    error.status = response.status;
+    error.body = text;
+    throw error;
+  }
   try {
     return JSON.parse(text);
   } catch {
@@ -118,53 +135,363 @@ async function fetchJson(url, options = {}) {
   }
 }
 
+async function writeBuffer(stream, buffer) {
+  if (buffer.length === 0) return;
+  if (!stream.write(buffer)) await once(stream, "drain");
+}
+
+async function writeText(stream, text) {
+  if (text.length === 0) return;
+  if (!stream.write(text)) await once(stream, "drain");
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTerminalStatus(status) {
+  return status === "completed" || status === "blocked" || status === "failed" || status === "timed_out" || status === "interrupted";
+}
+
 function logJobStatus(job) {
   console.log(`Agent Relay job ${String(job.id ?? "unknown")}: ${String(job.status ?? "unknown")}`);
 }
 
-const normalizedRoot = workspaceRoot.replace(/\/$/, "");
-const workspacePrefix = `${normalizedRoot}/`;
-if (!workspace.startsWith(workspacePrefix)) throw new Error(`GITHUB_WORKSPACE must be below ${workspacePrefix}`);
-const relativeWorkspace = workspace.slice(workspacePrefix.length);
-if (!relativeWorkspace) throw new Error("GITHUB_WORKSPACE does not identify a repository workspace");
+async function runGitStatus(workspaceDir) {
+  const diff = spawnSync("git", ["status", "--porcelain"], { cwd: workspaceDir, encoding: "utf8" });
+  if (diff.status !== 0) throw new Error(diff.stderr || "git status failed");
+  return diff.stdout.trim().length > 0;
+}
 
-const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
-let job = await fetchJson(`${baseUrl}/v1/jobs`, {
-  method: "POST",
-  headers,
-  body: JSON.stringify({ requestId, workspace: relativeWorkspace, planPath, mode }),
-});
-logJobStatus(job);
-let previousStatus = job.status;
-
-const pollDeadline = Date.now() + pollTimeoutMs;
-while (["accepted", "running"].includes(job.status)) {
-  if (Date.now() >= pollDeadline) throw new Error(`Agent Relay polling timed out after ${pollTimeoutMs}ms`);
-  await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-  job = await fetchJson(`${baseUrl}/v1/jobs/${job.id}`, { headers: { authorization: `Bearer ${token}` } });
-  if (job.status !== previousStatus) {
-    logJobStatus(job);
-    previousStatus = job.status;
+async function openArchiveIfConfigured() {
+  if (!outputArchivePath) return undefined;
+  try {
+    await mkdir(dirname(outputArchivePath), { recursive: true });
+    return await open(outputArchivePath, "w", 0o600);
+  } catch (error) {
+    await writeText(process.stderr, `[Agent Relay] raw archive unavailable, switching to tail-only mode: ${error.message ?? error}\n`);
+    return undefined;
   }
 }
 
-if (job.status !== "completed" && job.status !== "blocked") {
-  throw new Error(`Agent Relay job failed: ${job.status} ${job.errorCode ?? ""} ${job.errorMessage ?? ""}`);
+function appendToTail(state, chunk) {
+  state.tailChunks.push(chunk);
+  state.tailBytes += chunk.length;
+  while (state.tailBytes > githubTailBytes && state.tailChunks.length > 0) {
+    const first = state.tailChunks[0];
+    const overflow = state.tailBytes - githubTailBytes;
+    if (first.length <= overflow) {
+      state.tailChunks.shift();
+      state.tailBytes -= first.length;
+      continue;
+    }
+    state.tailChunks[0] = first.subarray(overflow);
+    state.tailBytes -= overflow;
+  }
 }
 
-const result = validateResult(JSON.parse(await readFile(`${workspace}/.agent-relay/result.json`, "utf8")));
-if (result.status === "blocked") throw new Error(`Codex blocked: ${result.blockers.join("; ")}`);
-const diff = spawnSync("git", ["status", "--porcelain"], { cwd: workspace, encoding: "utf8" });
-if (diff.status !== 0) throw new Error(diff.stderr || "git status failed");
-const hasChanges = diff.stdout.trim().length > 0;
-await rm(`${workspace}/.agent-relay`, { recursive: true, force: true });
-
-console.log(`Codex summary: ${result.summary}`);
-for (const validation of result.validation) {
-  console.log(`Validation ${validation.status}: ${validation.command} - ${validation.details}`);
+function buildTailBuffer(state) {
+  if (state.tailBytes === 0) return Buffer.alloc(0);
+  return Buffer.concat(state.tailChunks, state.tailBytes);
 }
 
-if (!hasChanges) process.exit(0);
-const githubOutput = process.env.GITHUB_OUTPUT;
-if (!githubOutput) throw new Error("GITHUB_OUTPUT is required when the worktree changed");
-await appendFile(githubOutput, `commit_message=${result.commitMessage}\n`, "utf8");
+async function writeFully(handle, buffer) {
+  let written = 0;
+  while (written < buffer.length) {
+    const result = await handle.write(buffer.subarray(written));
+    if (result.bytesWritten <= 0) throw new Error("archive write returned no progress");
+    written += result.bytesWritten;
+  }
+}
+
+async function appendArchive(handle, buffer) {
+  await writeFully(handle, buffer);
+}
+
+async function fetchOutputResponse(jobId, offset, signal) {
+  return await fetch(`${baseUrl}/v1/jobs/${jobId}/output?offset=${offset}`, {
+    method: "GET",
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: "application/octet-stream",
+    },
+    signal,
+  });
+}
+
+async function streamOnce(state, jobId, deadlineAt) {
+  if (Date.now() >= deadlineAt) throw new Error(`Agent Relay output drain timed out after ${pollTimeoutMs}ms`);
+  const controller = new AbortController();
+  let idleTimer;
+  let deadlineTimer;
+  let idleExpired = false;
+  let deadlineExpired = false;
+
+  const armIdleTimer = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      idleExpired = true;
+      controller.abort();
+    }, outputIdleMs);
+  };
+
+  try {
+    deadlineTimer = setTimeout(() => {
+      deadlineExpired = true;
+      controller.abort();
+    }, Math.max(1, deadlineAt - Date.now()));
+    armIdleTimer();
+
+    let response;
+    try {
+      response = await fetchOutputResponse(jobId, state.confirmedOffset, controller.signal);
+    } catch (error) {
+      if (idleExpired) return { kind: "idle" };
+      if (deadlineExpired || controller.signal.aborted) throw new Error(`Agent Relay output drain timed out after ${pollTimeoutMs}ms`);
+      return { kind: "request-failed", error };
+    }
+
+    if (response.status === 416) {
+      const text = await response.text();
+      return { kind: "offset-too-high", error: new Error(`Agent Relay output request rejected: ${response.status} ${text}`) };
+    }
+    if (!response.ok) {
+      const text = await response.text();
+      return { kind: "request-failed", error: new Error(`Agent Relay output request failed: ${response.status} ${text}`) };
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) return { kind: "request-failed", error: new Error("Agent Relay returned a response without a body") };
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) return { kind: "eof" };
+        armIdleTimer();
+        const chunk = Buffer.from(value);
+        await handleRawChunk(state, chunk);
+      }
+    } catch (error) {
+      if (idleExpired) return { kind: "idle" };
+      if (deadlineExpired || controller.signal.aborted) throw new Error(`Agent Relay output drain timed out after ${pollTimeoutMs}ms`);
+      return { kind: "disconnect", error };
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
+  } finally {
+    clearTimeout(idleTimer);
+    clearTimeout(deadlineTimer);
+  }
+}
+
+async function handleRawChunk(state, chunk) {
+  if (state.archiveHandle) {
+    try {
+      await appendArchive(state.archiveHandle, chunk);
+    } catch (error) {
+      await closeAndRemoveArchive(state);
+      state.archiveFallback = true;
+      await writeText(process.stderr, `[Agent Relay] raw archive write failed, switching to tail-only mode: ${error.message ?? error}\n`);
+      appendToTail(state, chunk);
+      state.confirmedOffset += chunk.length;
+      state.totalReceived += chunk.length;
+      return;
+    }
+  }
+
+  appendToTail(state, chunk);
+  if (state.archiveHandle && state.livePrinted < githubLogBytes) {
+    const liveBytes = Math.min(chunk.length, githubLogBytes - state.livePrinted);
+    if (liveBytes > 0) {
+      await ensureRawDisplayStarted(state);
+      const slice = chunk.subarray(0, liveBytes);
+      await writeBuffer(process.stdout, slice);
+      state.livePrinted += slice.length;
+      state.lastRawByte = slice[slice.length - 1];
+    }
+  }
+
+  state.confirmedOffset += chunk.length;
+  state.totalReceived += chunk.length;
+  if (chunk.length > 0) state.lastRawByte = chunk[chunk.length - 1];
+}
+
+async function ensureRawDisplayStarted(state) {
+  if (state.rawDisplayStarted) return;
+  await writeText(process.stdout, `::stop-commands::${state.stopCommandsToken}\n`);
+  state.rawDisplayStarted = true;
+}
+
+async function closeAndRemoveArchive(state) {
+  if (!state.archiveHandle) return;
+  const handle = state.archiveHandle;
+  state.archiveHandle = undefined;
+  await handle.close().catch(() => undefined);
+  if (state.archivePath) await rm(state.archivePath, { force: true }).catch(() => undefined);
+}
+
+async function finalizeOutput(state) {
+  let finalMarkerNeeded = false;
+  let finalMarkerText = "";
+  let finalTail = Buffer.alloc(0);
+  if (state.archiveHandle) {
+    try {
+      await state.archiveHandle.sync().catch(() => undefined);
+      await state.archiveHandle.close();
+      state.archiveComplete = true;
+    } catch (error) {
+      state.archiveComplete = false;
+      await rm(state.archivePath, { force: true }).catch(() => undefined);
+      await writeText(process.stderr, `[Agent Relay] complete archive could not be finalized and was removed: ${error.message ?? error}\n`);
+    } finally {
+      state.archiveHandle = undefined;
+    }
+  }
+
+  const suppressionExists = state.totalReceived > state.livePrinted;
+  if (!state.archiveComplete || suppressionExists) {
+    finalMarkerNeeded = true;
+    finalMarkerText = state.archiveComplete
+      ? "[Agent Relay] live raw output was truncated; the final tail follows.\n"
+      : "[Agent Relay] complete archive is unavailable; the final tail follows.\n";
+    finalTail = buildTailBuffer(state);
+    const tailStart = state.totalReceived - finalTail.length;
+    const finalTailStart = Math.max(state.livePrinted, tailStart);
+    finalTail = finalTail.subarray(finalTailStart - tailStart);
+  }
+
+  if (finalMarkerNeeded || finalTail.length > 0 || state.rawDisplayStarted) {
+    await ensureRawDisplayStarted(state);
+  }
+
+  if (finalMarkerNeeded) {
+    if (state.lastRawByte !== undefined && state.lastRawByte !== 10) {
+      await writeText(process.stdout, "\n");
+    }
+    await writeText(process.stdout, finalMarkerText);
+  }
+
+  if (finalTail.length > 0) {
+    if (state.lastRawByte !== undefined && state.lastRawByte !== 10) {
+      await writeText(process.stdout, "\n");
+    }
+    await writeBuffer(process.stdout, finalTail);
+    state.lastRawByte = finalTail[finalTail.length - 1];
+  }
+
+  if (state.rawDisplayStarted) {
+    if (state.lastRawByte !== undefined && state.lastRawByte !== 10) {
+      await writeText(process.stdout, "\n");
+    }
+    await writeText(process.stdout, `::${state.stopCommandsToken}::\n`);
+  }
+
+  state.archiveComplete = state.archiveComplete && !state.archiveFallback;
+}
+
+function createOutputState() {
+  return {
+    confirmedOffset: 0,
+    totalReceived: 0,
+    livePrinted: 0,
+    tailChunks: [],
+    tailBytes: 0,
+    archiveHandle: undefined,
+    archivePath: outputArchivePath,
+    archiveComplete: !outputArchivePath,
+    archiveFallback: false,
+    rawDisplayStarted: false,
+    stopCommandsToken: randomBytes(32).toString("hex"),
+    lastRawByte: undefined,
+  };
+}
+
+async function runOutputPipeline(state, job) {
+  const deadlineAt = Date.now() + pollTimeoutMs;
+  let status = job;
+
+  while (Date.now() < deadlineAt) {
+    const outcome = await streamOnce(state, job.id, deadlineAt);
+    if (outcome.kind === "request-failed") {
+      const statusAfterFailure = await fetchJson(`${baseUrl}/v1/jobs/${job.id}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (statusAfterFailure.status !== status.status) {
+        logJobStatus(statusAfterFailure);
+      }
+      status = statusAfterFailure;
+      if (Date.now() >= deadlineAt) break;
+      await sleep(Math.min(pollIntervalMs, 1000));
+      continue;
+    }
+    if (outcome.kind === "offset-too-high" || outcome.kind === "disconnect" || outcome.kind === "idle" || outcome.kind === "eof") {
+      const nextStatus = await fetchJson(`${baseUrl}/v1/jobs/${job.id}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (nextStatus.status !== status.status) logJobStatus(nextStatus);
+      status = nextStatus;
+      if (isTerminalStatus(status.status) && outcome.kind === "eof") {
+        return status;
+      }
+      if (Date.now() >= deadlineAt) break;
+      await sleep(Math.min(pollIntervalMs, 1000));
+      continue;
+    }
+    throw outcome.error;
+  }
+
+  throw new Error(`Agent Relay output drain timed out after ${pollTimeoutMs}ms`);
+}
+
+async function main() {
+  const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+  const job = await fetchJson(`${baseUrl}/v1/jobs`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ requestId, workspace: relativeWorkspace, planPath, mode }),
+  });
+  logJobStatus(job);
+
+  const outputState = createOutputState();
+  outputState.archiveHandle = await openArchiveIfConfigured();
+  if (!outputState.archiveHandle && outputArchivePath) outputState.archiveFallback = true;
+
+  let failure;
+  try {
+    await runOutputPipeline(outputState, job);
+
+    const finalJob = await fetchJson(`${baseUrl}/v1/jobs/${job.id}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (finalJob.status !== "completed" && finalJob.status !== "blocked") {
+      throw new Error(`Agent Relay job failed: ${finalJob.status} ${finalJob.errorCode ?? ""} ${finalJob.errorMessage ?? ""}`);
+    }
+
+    const result = validateResult(JSON.parse(await readFile(`${workspace}/.agent-relay/result.json`, "utf8")));
+    if (result.status === "blocked") throw new Error(`Codex blocked: ${result.blockers.join("; ")}`);
+
+    const hasChanges = await runGitStatus(workspace);
+    await rm(`${workspace}/.agent-relay`, { recursive: true, force: true });
+
+    console.log(`Codex summary: ${result.summary}`);
+    for (const validation of result.validation) {
+      console.log(`Validation ${validation.status}: ${validation.command} - ${validation.details}`);
+    }
+
+    if (!hasChanges) return;
+    const githubOutput = process.env.GITHUB_OUTPUT;
+    if (!githubOutput) throw new Error("GITHUB_OUTPUT is required when the worktree changed");
+    await appendFile(githubOutput, `commit_message=${result.commitMessage}\n`, "utf8");
+  } catch (error) {
+    failure = error;
+  } finally {
+    try {
+      await finalizeOutput(outputState);
+    } catch (error) {
+      if (!failure) failure = error;
+    }
+  }
+  if (failure) throw failure;
+}
+
+await main();

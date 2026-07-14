@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CodexExecutor, createCodexEnvironment } from "../src/execution/codex-executor.js";
 import { RelayError } from "../src/contracts/errors.js";
+import { OutputStore } from "../src/persistence/output-store.js";
+import type { JobRecord } from "../src/contracts/job.js";
 
 const requestId = "executor-integration-request";
 
@@ -15,6 +17,23 @@ async function createRoot(name: string) {
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "plan.md"), "# Plan\n");
   return { root, workspace, outputPath };
+}
+
+function job(outputPath: string): JobRecord {
+  return {
+    id: "job-1",
+    request: {
+      requestId,
+      workspace: "workspace",
+      planPath: "plan.md",
+      mode: "implement",
+    },
+    status: "accepted",
+    createdAt: "2026-07-13T00:00:00.000Z",
+    updatedAt: "2026-07-13T00:00:00.000Z",
+    resultPath: "/workspace/.agent-relay/result.json",
+    outputPath,
+  };
 }
 
 test("Codex environment removes only the Agent Relay API token", () => {
@@ -30,7 +49,7 @@ test("Codex environment removes only the Agent Relay API token", () => {
   });
 });
 
-test("CodexExecutor runs a real child process without the Relay token, validates its result and redacts output", async () => {
+test("CodexExecutor streams raw bytes into the shared output store", async () => {
   const { root, workspace, outputPath } = await createRoot("executor");
   const executable = join(root, "fake-codex");
   await writeFile(executable, `#!/bin/sh
@@ -44,9 +63,8 @@ set -eu
 [ "$7" = "danger-full-access" ]
 [ "$8" = "--cd" ]
 [ "$9" = "${workspace}" ]
-[ -z "\${AGENT_RELAY_TOKEN:-}" ]
-[ "\${APPLICATION_MODE:-}" = "test" ]
-printf '%s\n' 'authorization: Bearer abcdefghijklmnopqrstuvwxyz'
+printf '%s\\n' 'authorization: Bearer abcdefghijklmnopqrstuvwxyz'
+printf '%s\\n' 'raw stdout'
 cat > "$9/.agent-relay/result.json" <<'JSON'
 {
   "schemaVersion": 1,
@@ -62,29 +80,23 @@ JSON
 `, { mode: 0o700 });
   await chmod(executable, 0o700);
 
-  const previousRelayToken = process.env.AGENT_RELAY_TOKEN;
   const previousApplicationMode = process.env.APPLICATION_MODE;
-  process.env.AGENT_RELAY_TOKEN = "relay-secret";
   process.env.APPLICATION_MODE = "test";
-  const executor = new CodexExecutor(executable, 5_000, 100_000);
+  const outputStore = new OutputStore(join(root, "state"));
+  await outputStore.prepare("job-1", outputPath);
+  const executor = new CodexExecutor(executable, 5_000, outputStore);
   try {
-    const outcome = await executor.run({
-      requestId,
-      workspace: "workspace",
-      planPath: "plan.md",
-      mode: "implement",
-    }, workspace, outputPath);
+    const outcome = await executor.run(job(outputPath), workspace);
 
     assert.equal(outcome.exitCode, 0);
     assert.equal(outcome.result.requestId, requestId);
     assert.equal(outcome.result.status, "completed");
     assert.equal(outcome.result.commitMessage, "Complete controlled child process");
     const log = await readFile(outputPath, "utf8");
-    assert.doesNotMatch(log, /abcdefghijklmnopqrstuvwxyz/);
-    assert.match(log, /\[REDACTED\]/);
+    assert.match(log, /abcdefghijklmnopqrstuvwxyz/);
+    assert.match(log, /raw stdout/);
   } finally {
-    if (previousRelayToken === undefined) delete process.env.AGENT_RELAY_TOKEN;
-    else process.env.AGENT_RELAY_TOKEN = previousRelayToken;
+    await outputStore.close().catch(() => undefined);
     if (previousApplicationMode === undefined) delete process.env.APPLICATION_MODE;
     else process.env.APPLICATION_MODE = previousApplicationMode;
     await rm(root, { recursive: true, force: true });
@@ -102,14 +114,17 @@ while true; do sleep 1; done
 `, { mode: 0o700 });
   await chmod(executable, 0o700);
 
-  const executor = new CodexExecutor(executable, 50, 100_000);
+  const outputStore = new OutputStore(join(root, "state"));
+  await outputStore.prepare("job-1", outputPath);
+  const executor = new CodexExecutor(executable, 50, outputStore);
   try {
     await assert.rejects(
-      () => executor.run({ requestId: "timeout-request", workspace: "workspace", planPath: "plan.md", mode: "implement" }, workspace, outputPath),
+      () => executor.run(job(outputPath), workspace),
       (error: unknown) => error instanceof RelayError && error.code === "CODEX_TIMEOUT",
     );
     assert.equal(await readFile(marker, "utf8"), "terminated");
   } finally {
+    await outputStore.close().catch(() => undefined);
     await rm(root, { recursive: true, force: true });
   }
 });

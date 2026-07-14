@@ -87,8 +87,6 @@ Agent Relay:
 - persists job records atomically;
 - marks incomplete running jobs as interrupted after restart;
 - starts a fresh `codex exec` process per job;
-- applies timeout and output-size limits;
-- redacts sensitive output before persistence;
 - validates the required result JSON before completing the job.
 
 ### Codex
@@ -106,9 +104,7 @@ Codex:
 
 The workflow runs the runner client through `tee`. Everything written by `runner/client.mjs` to stdout or stderr is visible in the GitHub Actions step log and stored in the `agent-relay-output` artifact.
 
-The client writes control data such as `commit_message` directly to `$GITHUB_OUTPUT`, so normal log output cannot corrupt GitHub step outputs. The current client emits Agent Relay job-state changes, the validated Codex summary, and validation results. A future relay-side Codex-output streaming implementation can write to the same stdout channel without another workflow redesign.
-
-The complete redacted Codex process output is currently persisted under the Agent Relay state volume and is not yet streamed through the polling API.
+The client writes control data such as `commit_message` directly to `$GITHUB_OUTPUT`, so normal log output cannot corrupt GitHub step outputs. Raw stdout and stderr are streamed as bytes, with a bounded live prefix and a final tail when needed. Treat the live log and archive as sensitive execution data: they are not redacted and may contain arbitrary process output.
 
 ## Result contract
 
@@ -161,10 +157,11 @@ HOST_CODEX_DIR=/absolute/path/to/.codex
 HOST_UID=1000
 HOST_GID=1000
 CODEX_TIMEOUT_MS=21600000
-MAX_OUTPUT_BYTES=10000000
 ```
 
 `HOST_CODEX_DIR` must point to the actual Codex directory containing `auth.json` and `config.toml`. `HOST_UID` and `HOST_GID` should match its owner.
+
+The raw stdout/stderr stream is preserved as bytes and may be visible in the GitHub log and archive. Treat it as sensitive execution data, not redacted user-facing output.
 
 ## Build and validation
 
@@ -188,7 +185,11 @@ Copy `examples/github-actions/agent-relay.yml` into a target repository when Age
 
 ## ExecPlans
 
-There are no active ExecPlans. Completed plans:
+Active plan:
+
+- `docs/exec-plans/active/2026-07-14-stream-raw-codex-output.md`
+
+Completed plans:
 
 - `docs/exec-plans/completed/2026-07-13-agent-relay-mvp.md`
 - `docs/exec-plans/completed/2026-07-13-ready-pr-gate.md`

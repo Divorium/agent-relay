@@ -9,7 +9,6 @@ import { requireBearerToken } from "../src/security/auth.js";
 import { resolveWorkspace } from "../src/security/workspace.js";
 import { loadConfig } from "../src/config/config.js";
 import { buildCodexPrompt } from "../src/execution/prompt.js";
-import { redactSensitiveText } from "../src/security/redaction.js";
 import { JobStore } from "../src/persistence/job-store.js";
 import type { JobRecord } from "../src/contracts/job.js";
 
@@ -89,10 +88,6 @@ test("prompt includes plan, mode, result contract, and runner-owned Git rules", 
   assert.match(prompt, /Do not include shouldCommit/);
   assert.match(prompt, /result\.json/);
 });
-test("redacts common token formats", () => {
-  const output = redactSensitiveText("authorization: Bearer abcdefghijklmnopqrstuvwxyz token=super-secret-value");
-  assert.doesNotMatch(output, /abcdefghijklmnopqrstuvwxyz|super-secret-value/);
-});
 test("rejects sensitive result content", () => assert.throws(() => validateCodexResult({ schemaVersion: 1, requestId: "req-1", status: "blocked", summary: "Found github_pat_abcdefghijklmnopqrstuvwxyz1234567890", validation: [], blockers: ["Blocked"], limitations: [] }, "req-1"), /sensitive data/));
 
 test("resolves a workspace below the shared root", async () => {
@@ -119,7 +114,7 @@ test("persists, indexes and recovers job state", async () => {
   await store.save(record);
   await store.index(record);
   assert.equal((await store.findByRequestId("request-1"))?.id, "job-1");
-  assert.equal(await store.markRunningJobsInterrupted(), 1);
+  assert.equal((await store.markRunningJobsInterrupted()).length, 1);
   assert.equal((await store.get("job-1"))?.status, "interrupted");
   await rm(stateDir, { recursive: true, force: true });
 });

@@ -35,7 +35,6 @@ services:
       SHARED_WORKSPACE_ROOT: /runner/_work
       AGENT_RELAY_STATE_DIR: /var/lib/agent-relay
       CODEX_TIMEOUT_MS: ${CODEX_TIMEOUT_MS:-21600000}
-      MAX_OUTPUT_BYTES: ${MAX_OUTPUT_BYTES:-10000000}
     volumes:
       - workspace:/runner/_work
       - relay-state:/var/lib/agent-relay

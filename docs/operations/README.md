@@ -86,7 +86,7 @@ The `Run Codex through Agent Relay` step pipes runner-client stdout and stderr t
 - the same output is uploaded as the `agent-relay-output` artifact;
 - `$GITHUB_OUTPUT` is reserved for validated control values such as `commit_message`.
 
-The current client prints job-state transitions, the validated Codex summary, and validation results. The full redacted Codex process log remains under the Agent Relay state volume until relay-side output streaming is implemented.
+The current client prints job-state transitions, the validated Codex summary, and validation results. Raw stdout/stderr is streamed as bytes, with a bounded live prefix and a final tail when needed. Treat the live log and archive as sensitive execution data: they are not redacted and may contain arbitrary process output.
 
 ## Recovery
 

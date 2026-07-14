@@ -4,9 +4,9 @@
 
 This repository implements a self-hosted bridge between a repository-scoped GitHub Actions runner and Codex. Keep the system small: GitHub Actions owns checkout, commit, push, and GitHub credentials; Agent Relay owns authenticated process execution in the shared workspace.
 
-## Required workflow
+# ExecPlans
 
-For substantial work, read `.agent/PLANS.md` and the active ExecPlan under `docs/exec-plans/active/`. Keep the plan current while implementing. Do not mark work complete without executable validation evidence.
+When writing complex features or significant refactors, use an ExecPlan (as described in .agent/PLANS.md) from design to implementation.
 
 ## Engineering rules
 

@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JobRecord } from "../contracts/job.js";
 
@@ -23,6 +23,10 @@ export class JobStore {
     catch (error: any) { if (error?.code === "ENOENT") return undefined; throw error; }
   }
 
+  async delete(id: string): Promise<void> {
+    await rm(this.path(id), { force: true });
+  }
+
   async findByRequestId(requestId: string): Promise<JobRecord | undefined> {
     const indexPath = join(this.stateDir, "request-index.json");
     try {
@@ -32,26 +36,39 @@ export class JobStore {
     } catch (error: any) { if (error?.code === "ENOENT") return undefined; throw error; }
   }
 
-  async markRunningJobsInterrupted(): Promise<number> {
+  async removeRequestId(requestId: string): Promise<void> {
+    const indexPath = join(this.stateDir, "request-index.json");
+    let index: Record<string, string> = {};
+    try { index = JSON.parse(await readFile(indexPath, "utf8")) as Record<string, string>; }
+    catch (error: any) { if (error?.code === "ENOENT") return; throw error; }
+    if (!(requestId in index)) return;
+    delete index[requestId];
+    const temp = `${indexPath}.tmp`;
+    await writeFile(temp, `${JSON.stringify(index, null, 2)}\n`, { mode: 0o600 });
+    await rename(temp, indexPath);
+  }
+
+  async markRunningJobsInterrupted(): Promise<JobRecord[]> {
     await this.init();
-    let count = 0;
+    const recovered: JobRecord[] = [];
     for (const name of await readdir(this.jobsDir())) {
       if (!name.endsWith(".json")) continue;
       const id = name.slice(0, -5);
       const job = await this.get(id);
       if (!job || (job.status !== "accepted" && job.status !== "running")) continue;
       const now = new Date().toISOString();
-      await this.save({
+      const interrupted: JobRecord = {
         ...job,
         status: "interrupted",
         updatedAt: now,
         finishedAt: now,
         errorCode: "INTERRUPTED",
         errorMessage: "Agent Relay restarted before the job reached a terminal state",
-      });
-      count += 1;
+      };
+      await this.save(interrupted);
+      recovered.push(interrupted);
     }
-    return count;
+    return recovered;
   }
 
   async index(job: JobRecord): Promise<void> {

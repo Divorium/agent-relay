@@ -35,6 +35,38 @@ async function initializeRepository(workspace: string): Promise<void> {
   runGit(workspace, ["commit", "-m", "Initial state"]);
 }
 
+function createCompletedRelayServer(jobId: string, onSubmit?: (value: Record<string, unknown>) => void) {
+  return createServer(async (req: any, res: any) => {
+    if (req.method === "POST" && req.url === "/v1/jobs") {
+      let body = "";
+      for await (const chunk of req) body += String(chunk);
+      const submitted = JSON.parse(body) as Record<string, unknown>;
+      onSubmit?.(submitted);
+      assert.equal(req.headers.authorization, "Bearer relay-token");
+      res.statusCode = 202;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ id: jobId, status: "completed" }));
+      return;
+    }
+    if (req.method === "GET" && req.url === `/v1/jobs/${jobId}/output?offset=0`) {
+      assert.equal(req.headers.authorization, "Bearer relay-token");
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/octet-stream");
+      res.setHeader("cache-control", "no-store");
+      res.end();
+      return;
+    }
+    if (req.method === "GET" && req.url === `/v1/jobs/${jobId}`) {
+      assert.equal(req.headers.authorization, "Bearer relay-token");
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ id: jobId, status: "completed" }));
+      return;
+    }
+    throw new Error(`Unexpected request: ${req.method} ${req.url}`);
+  });
+}
+
 test("runner client submits a job, validates the result and writes the commit message when Git reports changes", async () => {
   const root = join(tmpdir(), `agent-relay-runner-client-${process.pid}-${Date.now()}`);
   const workspaceRoot = join(root, "workspaces");
@@ -57,17 +89,7 @@ test("runner client submits a job, validates the result and writes the commit me
   })}\n`);
 
   let submitted: Record<string, unknown> | undefined;
-  const server = createServer(async (req: any, res: any) => {
-    let body = "";
-    for await (const chunk of req) body += String(chunk);
-    submitted = JSON.parse(body) as Record<string, unknown>;
-    assert.equal(req.method, "POST");
-    assert.equal(req.url, "/v1/jobs");
-    assert.equal(req.headers.authorization, "Bearer relay-token");
-    res.statusCode = 202;
-    res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify({ id: "job-1", status: "completed" }));
-  });
+  const server = createCompletedRelayServer("job-1", (value) => { submitted = value; });
 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -132,11 +154,7 @@ test("runner client leaves GITHUB_OUTPUT empty when Git reports a clean worktree
     limitations: [],
   })}\n`);
 
-  const server = createServer(async (_req: any, res: any) => {
-    res.statusCode = 202;
-    res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify({ id: "job-2", status: "completed" }));
-  });
+  const server = createCompletedRelayServer("job-2");
 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();

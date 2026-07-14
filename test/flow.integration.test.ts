@@ -50,9 +50,10 @@ test("controlled full flow preserves work and an active-plan blocker without a r
 set -eu
 args="$*"
 case "$args" in *'default_permissions="relay"'*) ;; *) exit 31 ;; esac
-case "$args" in *'permissions.relay.filesystem={"/home/agent/.codex"="deny"}'*) ;; *) exit 32 ;; esac
-case "$args" in *'danger-full-access'*) exit 33 ;; esac
-case "$args" in *'result.json'*) exit 34 ;; esac
+case "$args" in *'"/home/agent/.codex"="deny"'*) ;; *) exit 32 ;; esac
+case "$args" in *'"${workspace}/.git"="read"'*) ;; *) exit 33 ;; esac
+case "$args" in *'danger-full-access'*) exit 34 ;; esac
+case "$args" in *'result.json'*) exit 35 ;; esac
 while [ "$1" != "--cd" ]; do shift; done
 workspace="$2"
 printf 'after\n' > "$workspace/tracked.txt"

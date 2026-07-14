@@ -38,6 +38,8 @@ export class CodexExecutor {
     const child = spawn(this.command, [
       "--ask-for-approval",
       "never",
+      "-c",
+      "features.memories=false",
       "exec",
       "--sandbox",
       "danger-full-access",

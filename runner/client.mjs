@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { appendFile, readFile, rm } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
@@ -25,44 +25,11 @@ const requestTimeoutMs = positiveInteger("AGENT_RELAY_REQUEST_TIMEOUT_MS", 30_00
 const pollIntervalMs = positiveInteger("AGENT_RELAY_POLL_INTERVAL_MS", 5_000);
 const pollTimeoutMs = positiveInteger("AGENT_RELAY_POLL_TIMEOUT_MS", 21_900_000);
 
-function asObject(value, name) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${name} must be an object`);
-  return value;
-}
-
-function strictKeys(value, allowed, name) {
-  for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`Unknown ${name} field: ${key}`);
-}
-
 function requiredString(value, name, maxLength) {
   if (typeof value !== "string" || value.length === 0 || value.length > maxLength || CONTROL_CHARACTERS.test(value)) {
     throw new Error(`Invalid ${name}`);
   }
   return value;
-}
-
-function validateValidation(value, index) {
-  const record = asObject(value, `validation[${index}]`);
-  strictKeys(record, new Set(["command", "status", "exitCode", "details"]), `validation[${index}]`);
-  const command = requiredString(record.command, `validation[${index}].command`, 500);
-  if (!["passed", "failed", "skipped"].includes(record.status)) throw new Error(`Invalid validation[${index}].status`);
-  const details = requiredString(record.details, `validation[${index}].details`, 2000);
-  if (record.exitCode !== undefined && (!Number.isInteger(record.exitCode) || record.exitCode < 0 || record.exitCode > 255)) {
-    throw new Error(`Invalid validation[${index}].exitCode`);
-  }
-  return { command, status: record.status, ...(record.exitCode === undefined ? {} : { exitCode: record.exitCode }), details };
-}
-
-function validateResult(value) {
-  const result = asObject(value, "result");
-  strictKeys(result, new Set(["schemaVersion", "summary", "validation"]), "result");
-  if (result.schemaVersion !== 1) throw new Error("Result contract mismatch");
-
-  const summary = requiredString(result.summary, "summary", 4000);
-  if (!Array.isArray(result.validation) || result.validation.length > 100) throw new Error("Invalid validation");
-  const validation = result.validation.map(validateValidation);
-
-  return { schemaVersion: 1, summary, validation };
 }
 
 function deriveCommitMessage(plan) {
@@ -117,23 +84,11 @@ if (job.status !== "completed") {
   throw new Error(`Agent Relay job failed: ${job.status} ${job.errorCode ?? ""} ${job.errorMessage ?? ""}`);
 }
 
-const result = validateResult(JSON.parse(await readFile(`${workspace}/.agent-relay/result.json`, "utf8")));
 const diff = spawnSync("git", ["status", "--porcelain"], { cwd: workspace, encoding: "utf8" });
 if (diff.status !== 0) throw new Error(diff.stderr || "git status failed");
-const hasChanges = diff.stdout.trim().length > 0;
-
-console.log(`Codex summary: ${result.summary}`);
-for (const validation of result.validation) {
-  console.log(`Validation ${validation.status}: ${validation.command} - ${validation.details}`);
-}
-
-if (!hasChanges) {
-  await rm(`${workspace}/.agent-relay`, { recursive: true, force: true });
-  process.exit(0);
-}
+if (diff.stdout.trim().length === 0) process.exit(0);
 
 const commitMessage = deriveCommitMessage(await readFile(`${workspace}/${planPath}`, "utf8"));
-await rm(`${workspace}/.agent-relay`, { recursive: true, force: true });
 const githubOutput = process.env.GITHUB_OUTPUT;
 if (!githubOutput) throw new Error("GITHUB_OUTPUT is required when the worktree changed");
 await appendFile(githubOutput, `commit_message=${commitMessage}\n`, "utf8");

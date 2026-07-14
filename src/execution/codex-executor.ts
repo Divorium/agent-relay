@@ -1,14 +1,12 @@
 import { spawn } from "node:child_process";
-import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { RelayError } from "../contracts/errors.js";
 import type { CreateJobRequest } from "../contracts/job.js";
-import { validateCodexResult } from "../contracts/validators.js";
-import type { CodexResult } from "../contracts/result.js";
 import { buildCodexPrompt } from "./prompt.js";
 import { redactSensitiveText } from "../security/redaction.js";
 
-export interface ExecutionOutcome { exitCode: number; result: CodexResult; }
+export interface ExecutionOutcome { exitCode: number; }
 
 const CODEX_ENVIRONMENT_VARIABLES = [
   "PATH",
@@ -68,15 +66,10 @@ export class CodexExecutor {
   ) {}
 
   async run(request: CreateJobRequest, workspace: string, outputPath: string): Promise<ExecutionOutcome> {
-    const resultPath = join(workspace, ".agent-relay", "result.json");
-    if (!this.runAsUser) {
-      await mkdir(dirname(resultPath), { recursive: true });
-      await rm(resultPath, { force: true });
-    }
     await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(outputPath, "", { mode: 0o600 });
 
-    const prompt = buildCodexPrompt(request, ".agent-relay/result.json");
+    const prompt = buildCodexPrompt(request);
     const invocation = createCodexInvocation(this.command, createCodexArgs(workspace, prompt), this.runAsUser);
     const child = spawn(invocation.command, invocation.args, {
       cwd: workspace,
@@ -123,13 +116,6 @@ export class CodexExecutor {
 
     if (timedOut) throw new RelayError("CODEX_TIMEOUT", "Codex execution timed out", 504);
     if (exitCode !== 0) throw new RelayError("CODEX_FAILED", `Codex exited with code ${exitCode}`, 502);
-
-    let raw: string;
-    try { raw = await readFile(resultPath, "utf8"); }
-    catch { throw new RelayError("RESULT_MISSING", "Codex did not write the required result file", 422); }
-    let parsed: unknown;
-    try { parsed = JSON.parse(raw); }
-    catch { throw new RelayError("RESULT_INVALID", "Codex result is not valid JSON", 422); }
-    return { exitCode, result: validateCodexResult(parsed) };
+    return { exitCode };
   }
 }

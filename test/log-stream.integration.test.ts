@@ -16,14 +16,22 @@ test("Codex output reaches Docker stdout and the job log before process completi
   await writeFile(join(workspace, "plan.md"), "# Plan\n");
   await writeFile(executable, `#!/bin/sh
 set -eu
+[ "$1" = "--ask-for-approval" ]
+[ "$2" = "never" ]
+[ "$3" = "-c" ]
+[ "$4" = "features.memories=false" ]
+[ "$5" = "exec" ]
+[ "$6" = "--sandbox" ]
+[ "$7" = "danger-full-access" ]
+[ "$8" = "--cd" ]
 printf 'first live line\\n'
 sleep 1
-cat > "$7/.agent-relay/result.json" <<'JSON'
+cat > "$9/.agent-relay/result.json" <<'JSON'
 {
   "schemaVersion": 1,
   "requestId": "${requestId}",
   "status": "completed",
-  "shouldCommit": false,
+  "commitMessage": "Complete live log test",
   "summary": "Completed.",
   "validation": [],
   "blockers": [],
@@ -54,6 +62,7 @@ JSON
 
     const outcome = await execution;
     assert.equal(outcome.result.status, "completed");
+    assert.equal(outcome.result.commitMessage, "Complete live log test");
   } finally {
     process.stdout.write = originalWrite;
     await rm(root, { recursive: true, force: true });

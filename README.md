@@ -2,7 +2,7 @@
 
 Agent Relay is a self-hosted bridge between a repository-scoped GitHub Actions runner and Codex CLI.
 
-A GitHub Actions workflow resolves a specific pull request through the GitHub API, verifies that it is open and ready for review, and checks out the exact head revision returned by GitHub. The runner asks Agent Relay to execute Codex in the shared workspace. Codex edits and validates the repository and writes a structured result file. The runner validates that result, creates a commit, and pushes it to the API-derived pull-request branch.
+A GitHub Actions workflow resolves a specific pull request through the GitHub API, verifies that it is open and ready for review, and checks out the exact head revision returned by GitHub. The runner asks Agent Relay to execute Codex in the shared workspace. Codex edits and validates the repository and writes a structured result file. The runner validates that result, creates a commit when the Git worktree changed, and pushes it to the API-derived pull-request branch.
 
 ## Status
 
@@ -35,7 +35,7 @@ Operator or automation
    -> self-hosted runner: checkout exact PR head SHA
    -> Agent Relay: codex exec in shared workspace
    -> Codex: .agent-relay/result.json
-   -> runner: validate worktree, commit and push to PR head ref
+   -> runner: validate worktree, commit when changed, and push to PR head ref
    -> review
 ```
 
@@ -71,7 +71,8 @@ The runner:
 - validates the complete result contract;
 - verifies the actual Git worktree independently;
 - removes the relay artifact before staging;
-- commits with the validated Codex-proposed message;
+- decides whether a commit is needed exclusively from `git status --porcelain`;
+- commits with the validated Codex-proposed message when repository changes exist;
 - pushes to the resolved pull-request head ref.
 
 ### Agent Relay
@@ -97,7 +98,7 @@ Codex:
 - reads `AGENTS.md` and the active ExecPlan;
 - implements and validates the requested change;
 - updates the active plan;
-- does not commit or push;
+- never runs `git commit`, `git push`, or equivalent commit-publishing commands;
 - does not receive GitHub credentials;
 - writes `.agent-relay/result.json` before exit.
 
@@ -118,7 +119,6 @@ Codex writes `.agent-relay/result.json`:
   "schemaVersion": 1,
   "requestId": "owner-repo-run-123-attempt-1",
   "status": "completed",
-  "shouldCommit": true,
   "commitMessage": "Implement the active ExecPlan",
   "summary": "Implemented the requested behavior and updated the active plan.",
   "validation": [
@@ -134,7 +134,7 @@ Codex writes `.agent-relay/result.json`:
 }
 ```
 
-The runner validates the schema version, matching request ID, allowed status combination, commit-message format, field sizes, sensitive-data rules, and correspondence between `shouldCommit` and the actual worktree. The artifact is deleted before staging and must never enter a repository commit.
+A completed result must include a valid one-line `commitMessage`; a blocked result must omit it. The runner validates the schema version, matching request ID, allowed status combination, commit-message format, field sizes, and sensitive-data rules. The result does not contain `shouldCommit`: the runner determines whether a commit is needed exclusively from the actual Git worktree. The artifact is deleted before staging and must never enter a repository commit.
 
 ## Authentication and access boundaries
 

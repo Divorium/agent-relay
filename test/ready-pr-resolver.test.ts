@@ -96,6 +96,10 @@ function assertApprovalWorkflow(workflow: string): void {
   assert.match(workflow, /Expected exactly one added or modified active ExecPlan/);
   assert.match(workflow, /AGENT_RELAY_PLAN_PATH: \$\{\{ steps\.plan\.outputs\.plan_path \}\}/);
   assert.match(workflow, /AGENT_RELAY_MODE: \$\{\{ steps\.request\.outputs\.mode \}\}/);
+  assert.match(workflow, /AGENT_RELAY_OUTPUT_ARCHIVE_PATH: \$\{\{ runner\.temp \}\}\/agent-relay-output\.log/);
+  assert.match(workflow, /tee "\$\{RUNNER_TEMP\}\/agent-relay-console\.log"/);
+  assert.match(workflow, /\$\{\{ runner\.temp \}\}\/agent-relay-output\.log/);
+  assert.match(workflow, /\$\{\{ runner\.temp \}\}\/agent-relay-console\.log/);
   assert.ok(requestIndex >= 0);
   assert.ok(resolverIndex > requestIndex);
   assert.ok(checkoutIndex > resolverIndex);

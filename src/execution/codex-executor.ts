@@ -59,6 +59,7 @@ export class CodexExecutor {
       const accepted = buffer.length > remaining ? buffer.subarray(0, remaining) : buffer;
       outputBytes += accepted.length;
       const redacted = redactSensitiveText(accepted.toString("utf8"));
+      process.stdout.write(redacted);
       pendingWrite = pendingWrite.then(() => appendFile(outputPath, redacted, { mode: 0o600 }));
     };
     child.stdout?.on("data", collect);

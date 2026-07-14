@@ -15,7 +15,7 @@ For substantial work, read `.agent/PLANS.md` and the active ExecPlan under `docs
 - Keep API and result contracts explicit and validated.
 - Never add GitHub credentials, SSH keys, Docker socket access, or private application log access to Agent Relay.
 - Never set `CODEX_HOME`; use the mounted standard `~/.codex` directory.
-- The runner, not Codex, performs Git commit and push.
+- Codex must never run `git commit`, `git push`, or equivalent commit-publishing commands. The runner exclusively owns commit and push.
 - `.agent-relay/result.json` is transient control metadata and must never be committed.
 - Code, identifiers, and code comments must be in English.
 

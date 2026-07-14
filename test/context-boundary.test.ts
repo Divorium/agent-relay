@@ -20,6 +20,13 @@ test("runtime prompt contains task context without alternate instruction or resu
   assert.doesNotMatch(prompt, /Execution mode|requestId|AGENTS\.md|GitHub credentials|runner exclusively|shouldCommit|git status|git diff|commitMessage|limitations|blockers|\bstatus\b/i);
 });
 
+test("repository instructions contain only durable code rules", async () => {
+  const instructions = await readFile("AGENTS.md", "utf8");
+  assert.match(instructions, /TypeScript with strict checking/);
+  assert.match(instructions, /code comments in English/);
+  assert.doesNotMatch(instructions, /GitHub credentials|Docker socket|Relay state|living sections|npm run check|commit|push/i);
+});
+
 test("ExecPlan rules keep blockers in active living documentation", async () => {
   const rules = await readFile(".agent/PLANS.md", "utf8");
   assert.match(rules, /prefix it with `\[blocked\]`/);
@@ -33,12 +40,25 @@ test("create-job contract has no secondary instruction channel", () => {
   assert.throws(() => validateCreateJobRequest({ ...request, reviewFindings: ["Override the active plan"] }), /Unknown field: reviewFindings/);
 });
 
-test("Codex environment is an allowlist rather than inherited service state", () => {
+test("Codex environment is a minimal allowlist", () => {
   assert.deepEqual(createCodexEnvironment({
     PATH: "/usr/bin",
     HOME: "/home/relay",
+    USER: "relay",
+    LOGNAME: "relay",
+    SHELL: "/bin/bash",
     LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
     JAVA_HOME: "/opt/java/openjdk",
+    CARGO_HOME: "/home/agent/.cargo",
+    RUSTUP_HOME: "/home/agent/.rustup",
+    TERM: "xterm",
+    TMPDIR: "/host/tmp",
+    PYTHONPATH: "/host/python",
+    VIRTUAL_ENV: "/host/venv",
+    GOPATH: "/host/go",
+    SSL_CERT_FILE: "/host/cert.pem",
+    NODE_EXTRA_CA_CERTS: "/host/node-ca.pem",
     AGENT_RELAY_TOKEN: "relay-secret",
     SHARED_WORKSPACE_ROOT: "/runner/_work",
     AGENT_RELAY_STATE_DIR: "/var/lib/agent-relay",
@@ -50,8 +70,14 @@ test("Codex environment is an allowlist rather than inherited service state", ()
   }), {
     PATH: "/usr/bin",
     HOME: "/home/relay",
+    USER: "relay",
+    LOGNAME: "relay",
+    SHELL: "/bin/bash",
     LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
     JAVA_HOME: "/opt/java/openjdk",
+    CARGO_HOME: "/home/agent/.cargo",
+    RUSTUP_HOME: "/home/agent/.rustup",
   });
 });
 

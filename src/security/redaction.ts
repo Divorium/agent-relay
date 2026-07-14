@@ -18,10 +18,3 @@ export function redactSensitiveText(value: string): string {
   }
   return redacted;
 }
-
-export function assertNoSensitiveResult(value: unknown): void {
-  const serialized = JSON.stringify(value);
-  if (redactSensitiveText(serialized) !== serialized || /auth\.json|\.ssh\/|BEGIN [A-Z ]*PRIVATE KEY/i.test(serialized)) {
-    throw new Error("Result contains sensitive data");
-  }
-}

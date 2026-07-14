@@ -160,16 +160,19 @@ jobs:
           AGENT_RELAY_PLAN_PATH: ${{ steps.plan.outputs.plan_path }}
           AGENT_RELAY_MODE: ${{ steps.request.outputs.mode }}
           AGENT_RELAY_REQUEST_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          AGENT_RELAY_OUTPUT_ARCHIVE_PATH: ${{ runner.temp }}/agent-relay-output.log
         run: |
           set -o pipefail
-          node /runner/client.mjs 2>&1 | tee "${RUNNER_TEMP}/agent-relay-output.log"
+          node /runner/client.mjs 2>&1 | tee "${RUNNER_TEMP}/agent-relay-console.log"
 
       - name: Upload Agent Relay output
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: agent-relay-output
-          path: ${{ runner.temp }}/agent-relay-output.log
+          path: |
+            ${{ runner.temp }}/agent-relay-output.log
+            ${{ runner.temp }}/agent-relay-console.log
           if-no-files-found: warn
 
       - name: Fail when Agent Relay failed

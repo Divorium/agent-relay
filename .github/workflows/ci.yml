@@ -82,17 +82,19 @@ jobs:
             set -euxo pipefail
             mkdir -p /tmp/codex-work
             chown agent:agent /tmp/codex-work
+            runuser -u agent -- git -C /tmp/codex-work init
             printf private > /home/agent/.codex/sentinel
             chown agent:agent /home/agent/.codex/sentinel
             runuser -u agent -- /usr/local/bin/codex \
               -c features.memories=false \
               -c "default_permissions=\"relay\"" \
               -c "permissions.relay.extends=\":workspace\"" \
-              -c "permissions.relay.filesystem={\"/home/agent/.codex\"=\"deny\"}" \
+              -c "permissions.relay.filesystem={\"/home/agent/.codex\"=\"deny\",\"/tmp/codex-work/.git\"=\"read\"}" \
               -c permissions.relay.network.enabled=true \
               sandbox -P relay -C /tmp/codex-work \
-              /bin/bash -lc "test ! -r /home/agent/.codex/sentinel && touch sandbox-write-ok"
+              /bin/bash -lc "git status --short >/dev/null && test ! -r /home/agent/.codex/sentinel && touch sandbox-write-ok && ! touch .git/sandbox-write-denied"
             test -f /tmp/codex-work/sandbox-write-ok
+            test ! -e /tmp/codex-work/.git/sandbox-write-denied
             su -s /bin/bash relay -c "cd /tmp/codex-work && sudo -H -u agent -- /usr/local/bin/codex-run --version"
           ' > isolation.log 2>&1
       - name: Upload isolation log

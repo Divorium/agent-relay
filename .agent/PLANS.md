@@ -10,7 +10,7 @@ When an item cannot be completed:
 - continue every other item that is not affected;
 - remove `[blocked]` as soon as the condition is resolved.
 
-A blocker is plan documentation only. It is never a Codex result status or an Agent Relay job status, and it must not prevent completed work from being preserved.
+A blocker is plan documentation only and must not prevent completed work from being preserved.
 
 A plan is complete only when every acceptance item has one of:
 

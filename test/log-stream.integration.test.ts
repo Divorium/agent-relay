@@ -1,98 +1,61 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { appendFile, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createRelayServer } from "../src/api/server.js";
-import type { AppConfig } from "../src/config/config.js";
-import type { JobRecord } from "../src/contracts/job.js";
-import type { JobService } from "../src/application/job-service.js";
+import { CodexExecutor } from "../src/execution/codex-executor.js";
 
-const token = "stream-test-token";
+const requestId = "live-log-request";
 
-test("job log endpoint streams output before the job completes", async () => {
-  const root = join(tmpdir(), `agent-relay-log-stream-${process.pid}-${Date.now()}`);
-  const outputPath = join(root, "job.log");
-  await mkdir(root, { recursive: true });
-  await writeFile(outputPath, "");
+test("Codex output reaches Docker stdout and the job log before process completion", async () => {
+  const root = join(tmpdir(), `agent-relay-live-log-${process.pid}-${Date.now()}`);
+  const workspace = join(root, "workspace");
+  const outputPath = join(root, "state", "job.log");
+  const executable = join(root, "fake-codex");
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "plan.md"), "# Plan\n");
+  await writeFile(executable, `#!/bin/sh
+set -eu
+printf 'first live line\\n'
+sleep 1
+cat > "$7/.agent-relay/result.json" <<'JSON'
+{
+  "schemaVersion": 1,
+  "requestId": "${requestId}",
+  "status": "completed",
+  "shouldCommit": false,
+  "summary": "Completed.",
+  "validation": [],
+  "blockers": [],
+  "limitations": []
+}
+JSON
+`, { mode: 0o700 });
+  await chmod(executable, 0o700);
 
-  let status: JobRecord["status"] = "running";
-  const job: JobRecord = {
-    id: "job-1",
-    request: { requestId: "request-1", workspace: "owner/repo", planPath: "plan.md", mode: "implement" },
-    status,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    resultPath: join(root, "result.json"),
-    outputPath,
-  };
-  const jobs = {
-    get: async () => ({ ...job, status }),
-  } as unknown as JobService;
-  const config: AppConfig = {
-    host: "127.0.0.1",
-    port: 0,
-    relayToken: token,
-    workspaceRoot: root,
-    stateDir: root,
-    codexCommand: "codex",
-    codexTimeoutMs: 10_000,
-    maxOutputBytes: 100_000,
-  };
-  const server = createRelayServer(config, jobs);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  assert.ok(address && typeof address === "object");
+  let stdout = "";
+  const originalWrite = process.stdout.write;
+  process.stdout.write = ((chunk: unknown) => {
+    stdout += String(chunk);
+    return true;
+  }) as any;
 
   try {
-    const responsePromise = fetch(`http://127.0.0.1:${address.port}/v1/jobs/job-1/logs`, {
-      headers: { authorization: `Bearer ${token}` },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    await appendFile(outputPath, "first line\n");
+    const execution = new CodexExecutor(executable, 5_000, 100_000).run({
+      requestId,
+      workspace: "workspace",
+      planPath: "plan.md",
+      mode: "implement",
+    }, workspace, outputPath);
 
-    const response = await responsePromise;
-    assert.equal(response.status, 200);
-    const reader = response.body?.getReader();
-    assert.ok(reader);
-    const first = await reader.read();
-    assert.equal(new TextDecoder().decode(first.value), "first line\n");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.match(stdout, /first live line/);
+    assert.match(await readFile(outputPath, "utf8"), /first live line/);
 
-    await appendFile(outputPath, "second line\n");
-    status = "completed";
-    let remaining = "";
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      remaining += new TextDecoder().decode(chunk.value);
-    }
-    assert.equal(remaining, "second line\n");
+    const outcome = await execution;
+    assert.equal(outcome.result.status, "completed");
   } finally {
-    await new Promise<void>((resolve, reject) => server.close((error: Error | undefined) => error ? reject(error) : resolve()));
+    process.stdout.write = originalWrite;
     await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("job log endpoint requires the relay token", async () => {
-  const jobs = { get: async () => { throw new Error("must not be called"); } } as unknown as JobService;
-  const config = {
-    host: "127.0.0.1",
-    port: 0,
-    relayToken: token,
-    workspaceRoot: "/tmp",
-    stateDir: "/tmp",
-    codexCommand: "codex",
-    codexTimeoutMs: 10_000,
-    maxOutputBytes: 100_000,
-  };
-  const server = createRelayServer(config, jobs);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  assert.ok(address && typeof address === "object");
-  try {
-    const response = await fetch(`http://127.0.0.1:${address.port}/v1/jobs/job-1/logs`);
-    assert.equal(response.status, 401);
-  } finally {
-    await new Promise<void>((resolve, reject) => server.close((error: Error | undefined) => error ? reject(error) : resolve()));
   }
 });

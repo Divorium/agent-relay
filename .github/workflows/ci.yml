@@ -47,11 +47,11 @@ jobs:
           RUNNER_NAME: agent-relay-ci
           RUNNER_LABELS: agent-relay
           AGENT_RELAY_TOKEN: placeholder-relay-token
-          HOST_CODEX_DIR: /tmp/codex
+          HOST_CODEX_AUTH_FILE: /tmp/codex-credential
           HOST_UID: "1000"
           HOST_GID: "1000"
         run: |
-          mkdir -p /tmp/codex
+          touch /tmp/codex-credential
           docker compose config
 
   images:
@@ -75,6 +75,25 @@ jobs:
         run: |
           cat toolchain.log
           exit 1
+      - name: Verify isolated Codex boundary
+        run: |
+          docker run --rm --user root --entrypoint /bin/bash agent-relay:ci -lc '
+            set -euo pipefail
+            mkdir -p /tmp/codex-work
+            chown agent:agent /tmp/codex-work
+            printf private > /home/agent/.codex/sentinel
+            chown agent:agent /home/agent/.codex/sentinel
+            runuser -u agent -- /usr/local/bin/codex \
+              -c features.memories=false \
+              -c "default_permissions=\"relay\"" \
+              -c "permissions.relay.extends=\":workspace\"" \
+              -c "permissions.relay.filesystem.\"/home/agent/.codex\"=\"deny\"" \
+              -c permissions.relay.network.enabled=true \
+              sandbox -P relay -C /tmp/codex-work \
+              /bin/bash -lc "test ! -r /home/agent/.codex/sentinel && touch sandbox-write-ok"
+            test -f /tmp/codex-work/sandbox-write-ok
+            su -s /bin/bash relay -c "cd /tmp/codex-work && sudo -H -u agent -- /usr/local/bin/codex-run --version"
+          '
       - name: Verify excluded tools
         run: |
           if docker run --rm --entrypoint /bin/bash agent-relay:ci -lc 'command -v ssh'; then

@@ -92,13 +92,29 @@ jobs:
           ref: ${{ steps.pr.outputs.head_sha }}
           fetch-depth: 0
           token: ${{ secrets.AGENT_RELAY_PUSH_TOKEN || github.token }}
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Verify resolved revision
         shell: bash
         env:
           EXPECTED_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD_SHA}"
+
+      - name: Verify credential-free checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null; then
+            echo "Checkout credentials must not remain in the repository config" >&2
+            exit 1
+          fi
+          remote_url="$(git remote get-url origin)"
+          case "${remote_url}" in
+            *://*@*)
+              echo "The repository remote must not contain embedded credentials" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Resolve active ExecPlan
         id: plan
@@ -159,7 +175,6 @@ jobs:
         env:
           AGENT_RELAY_PLAN_PATH: ${{ steps.plan.outputs.plan_path }}
           AGENT_RELAY_MODE: ${{ steps.request.outputs.mode }}
-          AGENT_RELAY_REQUEST_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           AGENT_RELAY_OUTPUT_ARCHIVE_PATH: ${{ runner.temp }}/agent-relay-output.log
         run: |
           set -o pipefail
@@ -185,4 +200,5 @@ jobs:
         env:
           COMMIT_MESSAGE: ${{ steps.relay.outputs.commit_message }}
           TARGET_BRANCH: ${{ steps.pr.outputs.head_ref }}
+          GITHUB_PUSH_TOKEN: ${{ secrets.AGENT_RELAY_PUSH_TOKEN || github.token }}
         run: /runner/finalize.sh

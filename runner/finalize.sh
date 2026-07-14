@@ -13,6 +13,7 @@ if test -z "$(git status --porcelain)"; then
 fi
 
 : "${COMMIT_MESSAGE:?COMMIT_MESSAGE is required when the worktree changed}"
+: "${GITHUB_PUSH_TOKEN:?GITHUB_PUSH_TOKEN is required when the worktree changed}"
 case "$COMMIT_MESSAGE" in
   *$'\n'*|*$'\r'*)
     echo "COMMIT_MESSAGE must be one line" >&2
@@ -35,4 +36,21 @@ if git diff --cached --quiet; then
 fi
 
 git commit -m "$COMMIT_MESSAGE"
-git push origin "HEAD:${TARGET_BRANCH}"
+
+askpass="$(mktemp)"
+cleanup() {
+  rm -f "$askpass"
+}
+trap cleanup EXIT
+cat > "$askpass" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  *Username*) printf '%s\n' 'x-access-token' ;;
+  *Password*) printf '%s\n' "${GITHUB_PUSH_TOKEN:?}" ;;
+  *) exit 1 ;;
+esac
+SCRIPT
+chmod 0700 "$askpass"
+
+GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 git -c credential.helper= push origin "HEAD:${TARGET_BRANCH}"

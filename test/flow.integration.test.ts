@@ -27,7 +27,7 @@ function runProcess(command: string, args: string[], options: Record<string, unk
   });
 }
 
-test("controlled full flow runs runner client through Relay and Codex executor", async () => {
+test("controlled full flow preserves work and derives commit metadata from the active plan", async () => {
   const root = join(tmpdir(), `agent-relay-full-flow-${process.pid}-${Date.now()}`);
   const workspaceRoot = join(root, "workspaces");
   const workspace = join(workspaceRoot, "repository", "repository");
@@ -38,7 +38,7 @@ test("controlled full flow runs runner client through Relay and Codex executor",
 
   await mkdir(workspace, { recursive: true });
   await writeFile(githubOutput, "");
-  await writeFile(join(workspace, "plan.md"), "# Active plan\n");
+  await writeFile(join(workspace, "plan.md"), "# Active plan\n\n- [ ] [blocked] External image validation — Cause: Docker unavailable. Impact: image validation deferred. Evidence: command missing. Unblock condition: run on CI.\n");
   await writeFile(join(workspace, "tracked.txt"), "before\n");
   runGit(workspace, ["init"]);
   runGit(workspace, ["config", "user.name", "Test Runner"]);
@@ -59,17 +59,13 @@ cat > "$workspace/.agent-relay/result.json" <<'JSON'
 {
   "schemaVersion": 1,
   "requestId": "${requestId}",
-  "status": "completed",
-  "commitMessage": "Apply controlled full flow",
-  "summary": "The controlled executor changed the checked-out worktree.",
+  "summary": "The controlled executor changed the checked-out worktree and retained the documented blocker.",
   "validation": [{
     "command": "controlled-flow",
     "status": "passed",
     "exitCode": 0,
     "details": "Runner, HTTP API, job lifecycle, process execution and result handoff completed."
-  }],
-  "blockers": [],
-  "limitations": ["Authentication and push are replaced by controlled boundaries."]
+  }]
 }
 JSON
 `, { mode: 0o700 });
@@ -115,11 +111,11 @@ JSON
     });
 
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /Agent Relay job .*: accepted/);
     assert.match(result.stdout, /Agent Relay job .*: completed/);
-    assert.match(result.stdout, /Codex summary: The controlled executor changed the checked-out worktree\./);
-    assert.equal(await readFile(githubOutput, "utf8"), "commit_message=Apply controlled full flow\n");
+    assert.match(result.stdout, /Codex summary: The controlled executor changed the checked-out worktree/);
+    assert.equal(await readFile(githubOutput, "utf8"), "commit_message=Active plan\n");
     assert.equal(await readFile(join(workspace, "tracked.txt"), "utf8"), "after\n");
+    assert.match(await readFile(join(workspace, "plan.md"), "utf8"), /\[blocked\]/);
     await assert.rejects(() => stat(join(workspace, ".agent-relay")));
 
     const persistedJobs = await readFile(join(stateDir, "request-index.json"), "utf8");

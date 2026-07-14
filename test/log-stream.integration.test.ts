@@ -28,12 +28,8 @@ cat > "$workspace/.agent-relay/result.json" <<'JSON'
 {
   "schemaVersion": 1,
   "requestId": "${requestId}",
-  "status": "completed",
-  "commitMessage": "Complete live log test",
   "summary": "Completed.",
-  "validation": [],
-  "blockers": [],
-  "limitations": []
+  "validation": []
 }
 JSON
 `, { mode: 0o700 });
@@ -59,8 +55,7 @@ JSON
     assert.match(await readFile(outputPath, "utf8"), /first live line/);
 
     const outcome = await execution;
-    assert.equal(outcome.result.status, "completed");
-    assert.equal(outcome.result.commitMessage, "Complete live log test");
+    assert.equal(outcome.result.summary, "Completed.");
   } finally {
     process.stdout.write = originalWrite;
     await rm(root, { recursive: true, force: true });

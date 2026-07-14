@@ -12,7 +12,6 @@ export type JobStatus =
   | "accepted"
   | "running"
   | "completed"
-  | "blocked"
   | "failed"
   | "timed_out"
   | "interrupted";

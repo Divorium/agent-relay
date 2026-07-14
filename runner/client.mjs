@@ -14,13 +14,6 @@ const requestId = process.env.AGENT_RELAY_REQUEST_ID ?? randomUUID();
 if (!workspace || !planPath) throw new Error("GITHUB_WORKSPACE and AGENT_RELAY_PLAN_PATH are required");
 
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
-const SECRET_PATTERNS = [
-  /gh[pousr]_[A-Za-z0-9_]{20,}/g,
-  /github_pat_[A-Za-z0-9_]{20,}/g,
-  /sk-[A-Za-z0-9_-]{20,}/g,
-  /(authorization\s*[:=]\s*bearer\s+)[^\s"']+/gi,
-  /("?(?:token|password|secret|apiKey|api_key)"?\s*[:=]\s*(?:["']?))[^\s,"']+((?:["']?))/gi,
-];
 
 function positiveInteger(name, fallback) {
   const raw = process.env[name];
@@ -49,11 +42,6 @@ function requiredString(value, name, maxLength) {
   return value;
 }
 
-function stringArray(value, name, maxItems, maxLength) {
-  if (!Array.isArray(value) || value.length > maxItems) throw new Error(`Invalid ${name}`);
-  return value.map((item, index) => requiredString(item, `${name}[${index}]`, maxLength));
-}
-
 function validateValidation(value, index) {
   const record = asObject(value, `validation[${index}]`);
   strictKeys(record, new Set(["command", "status", "exitCode", "details"]), `validation[${index}]`);
@@ -66,46 +54,23 @@ function validateValidation(value, index) {
   return { command, status: record.status, ...(record.exitCode === undefined ? {} : { exitCode: record.exitCode }), details };
 }
 
-function assertNoSensitiveData(value) {
-  const serialized = JSON.stringify(value);
-  if (/auth\.json|\.ssh\/|BEGIN [A-Z ]*PRIVATE KEY/i.test(serialized)) throw new Error("Result contains sensitive data");
-  for (const pattern of SECRET_PATTERNS) {
-    pattern.lastIndex = 0;
-    if (pattern.test(serialized)) throw new Error("Result contains sensitive data");
-  }
-}
-
 function validateResult(value) {
-  assertNoSensitiveData(value);
   const result = asObject(value, "result");
-  strictKeys(result, new Set(["schemaVersion", "requestId", "status", "commitMessage", "summary", "validation", "blockers", "limitations"]), "result");
+  strictKeys(result, new Set(["schemaVersion", "requestId", "summary", "validation"]), "result");
   if (result.schemaVersion !== 1 || result.requestId !== requestId) throw new Error("Result contract mismatch");
-  if (result.status !== "completed" && result.status !== "blocked") throw new Error("Invalid result status");
 
   const summary = requiredString(result.summary, "summary", 4000);
   if (!Array.isArray(result.validation) || result.validation.length > 100) throw new Error("Invalid validation");
   const validation = result.validation.map(validateValidation);
-  const blockers = stringArray(result.blockers, "blockers", 50, 2000);
-  const limitations = stringArray(result.limitations, "limitations", 50, 2000);
 
-  let commitMessage;
-  if (result.status === "completed") {
-    commitMessage = requiredString(result.commitMessage, "commitMessage", 120);
-    if (commitMessage.includes("\n") || commitMessage.includes("\r")) throw new Error("Invalid commitMessage");
-  } else if (result.commitMessage !== undefined) {
-    throw new Error("Unexpected commitMessage");
-  }
+  return { schemaVersion: 1, requestId, summary, validation };
+}
 
-  return {
-    schemaVersion: 1,
-    requestId,
-    status: result.status,
-    ...(commitMessage === undefined ? {} : { commitMessage }),
-    summary,
-    validation,
-    blockers,
-    limitations,
-  };
+function deriveCommitMessage(plan) {
+  const heading = plan.split(/\r?\n/).find((line) => /^#\s+\S/.test(line));
+  const source = heading ? heading.replace(/^#\s+/, "") : "Apply active ExecPlan";
+  const normalized = source.replace(/\s+/g, " ").trim().slice(0, 120).trim();
+  return requiredString(normalized || "Apply active ExecPlan", "commitMessage", 120);
 }
 
 async function fetchJson(url, options = {}) {
@@ -149,23 +114,27 @@ while (["accepted", "running"].includes(job.status)) {
   }
 }
 
-if (job.status !== "completed" && job.status !== "blocked") {
+if (job.status !== "completed") {
   throw new Error(`Agent Relay job failed: ${job.status} ${job.errorCode ?? ""} ${job.errorMessage ?? ""}`);
 }
 
 const result = validateResult(JSON.parse(await readFile(`${workspace}/.agent-relay/result.json`, "utf8")));
-if (result.status === "blocked") throw new Error(`Codex blocked: ${result.blockers.join("; ")}`);
 const diff = spawnSync("git", ["status", "--porcelain"], { cwd: workspace, encoding: "utf8" });
 if (diff.status !== 0) throw new Error(diff.stderr || "git status failed");
 const hasChanges = diff.stdout.trim().length > 0;
-await rm(`${workspace}/.agent-relay`, { recursive: true, force: true });
 
 console.log(`Codex summary: ${result.summary}`);
 for (const validation of result.validation) {
   console.log(`Validation ${validation.status}: ${validation.command} - ${validation.details}`);
 }
 
-if (!hasChanges) process.exit(0);
+if (!hasChanges) {
+  await rm(`${workspace}/.agent-relay`, { recursive: true, force: true });
+  process.exit(0);
+}
+
+const commitMessage = deriveCommitMessage(await readFile(`${workspace}/${planPath}`, "utf8"));
+await rm(`${workspace}/.agent-relay`, { recursive: true, force: true });
 const githubOutput = process.env.GITHUB_OUTPUT;
 if (!githubOutput) throw new Error("GITHUB_OUTPUT is required when the worktree changed");
-await appendFile(githubOutput, `commit_message=${result.commitMessage}\n`, "utf8");
+await appendFile(githubOutput, `commit_message=${commitMessage}\n`, "utf8");

@@ -70,20 +70,20 @@ async function waitForTerminal(baseUrl: string, id: string) {
   throw new Error("Job did not reach a terminal state");
 }
 
-test("health is public while job endpoints require authentication", async () => {
-  const fixture = await createFixture(async (jobRequest) => ({
+function result(requestId: string, summary: string): ExecutionOutcome {
+  return {
     exitCode: 0,
     result: {
       schemaVersion: 1,
-      requestId: jobRequest.requestId,
-      status: "completed",
-      shouldCommit: false,
-      summary: "No changes required.",
+      requestId,
+      summary,
       validation: [],
-      blockers: [],
-      limitations: [],
     },
-  }));
+  };
+}
+
+test("health is public while job endpoints require authentication", async () => {
+  const fixture = await createFixture(async (jobRequest) => result(jobRequest.requestId, "No changes required."));
   try {
     const health = await fetch(`${fixture.baseUrl}/health`);
     assert.equal(health.status, 200);
@@ -97,7 +97,7 @@ test("health is public while job endpoints require authentication", async () => 
   }
 });
 
-test("HTTP create and poll executes the job and preserves idempotency", async () => {
+test("HTTP create and poll derives completed state and preserves idempotency", async () => {
   let executions = 0;
   const fixture = await createFixture(async (jobRequest) => {
     executions += 1;
@@ -106,13 +106,8 @@ test("HTTP create and poll executes the job and preserves idempotency", async ()
       result: {
         schemaVersion: 1,
         requestId: jobRequest.requestId,
-        status: "completed",
-        shouldCommit: true,
-        commitMessage: "Implement integration coverage",
         summary: "Completed through the integration executor.",
         validation: [{ command: "npm test", status: "passed", exitCode: 0, details: "Passed." }],
-        blockers: [],
-        limitations: [],
       },
     };
   });
@@ -146,19 +141,7 @@ test("parallel job submission allows only one active job", async () => {
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const fixture = await createFixture(async (jobRequest) => {
     await gate;
-    return {
-      exitCode: 0,
-      result: {
-        schemaVersion: 1,
-        requestId: jobRequest.requestId,
-        status: "completed",
-        shouldCommit: false,
-        summary: "Completed.",
-        validation: [],
-        blockers: [],
-        limitations: [],
-      },
-    };
+    return result(jobRequest.requestId, "Completed.");
   });
   try {
     const post = (body: CreateJobRequest) => fetch(`${fixture.baseUrl}/v1/jobs`, {

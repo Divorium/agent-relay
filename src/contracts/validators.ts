@@ -36,13 +36,6 @@ function requiredString(value: unknown, name: string, max: number, context: Erro
   return value;
 }
 
-function stringArray(value: unknown, name: string, maxItems: number, maxLength: number, context: ErrorContext): string[] {
-  if (!Array.isArray(value) || value.length > maxItems) {
-    throw invalid(context, `${name} must be an array with at most ${maxItems} items`);
-  }
-  return value.map((item, index) => requiredString(item, `${name}[${index}]`, maxLength, context));
-}
-
 export function validateCreateJobRequest(value: unknown): CreateJobRequest {
   const object = asObject(value, "request", "request");
   rejectUnknownFields(object, ["requestId", "workspace", "planPath", "mode"], "request", "");
@@ -69,7 +62,7 @@ function validateValidation(value: unknown, index: number): ValidationResult {
   const object = asObject(value, `validation[${index}]`, "result");
   rejectUnknownFields(object, ["command", "status", "exitCode", "details"], "result", `validation[${index}].`);
   const command = requiredString(object.command, `validation[${index}].command`, 500, "result");
-  if (!( ["passed", "failed", "skipped"] as const).includes(object.status as never)) {
+  if (!(["passed", "failed", "skipped"] as const).includes(object.status as never)) {
     throw invalid("result", `validation[${index}].status is invalid`);
   }
   const details = requiredString(object.details, `validation[${index}].details`, 2000, "result");
@@ -86,34 +79,19 @@ function validateValidation(value: unknown, index: number): ValidationResult {
 export function validateCodexResult(value: unknown, expectedRequestId: string): CodexResult {
   try { assertNoSensitiveResult(value); } catch { throw invalid("result", "Result contains sensitive data"); }
   const object = asObject(value, "result", "result");
-  rejectUnknownFields(object, ["schemaVersion", "requestId", "status", "commitMessage", "summary", "validation", "blockers", "limitations"], "result", "result ");
+  rejectUnknownFields(object, ["schemaVersion", "requestId", "summary", "validation"], "result", "result ");
   if (object.schemaVersion !== 1) throw invalid("result", "Unsupported schemaVersion");
   if (object.requestId !== expectedRequestId) throw invalid("result", "Result requestId does not match the job");
-  if (object.status !== "completed" && object.status !== "blocked") throw invalid("result", "Invalid result status");
 
   const summary = requiredString(object.summary, "summary", 4000, "result");
   const validation = Array.isArray(object.validation) && object.validation.length <= 100
     ? object.validation.map(validateValidation)
     : (() => { throw invalid("result", "validation must be an array with at most 100 items"); })();
-  const blockers = stringArray(object.blockers, "blockers", 50, 2000, "result");
-  const limitations = stringArray(object.limitations, "limitations", 50, 2000, "result");
 
-  const result: CodexResult = {
+  return {
     schemaVersion: 1,
     requestId: expectedRequestId,
-    status: object.status,
     summary,
     validation,
-    blockers,
-    limitations,
   };
-
-  if (object.status === "completed") {
-    const commitMessage = requiredString(object.commitMessage, "commitMessage", 120, "result");
-    if (commitMessage.includes("\n") || commitMessage.includes("\r")) throw invalid("result", "commitMessage must be one line");
-    result.commitMessage = commitMessage;
-  } else if (object.commitMessage !== undefined) {
-    throw invalid("result", "commitMessage is not allowed for blocked work");
-  }
-  return result;
 }

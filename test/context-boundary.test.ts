@@ -12,13 +12,22 @@ const request = {
   mode: "implement" as const,
 };
 
-test("runtime prompt contains task context without repository governance details", () => {
+test("runtime prompt contains task context without runner-owned result decisions", () => {
   const prompt = buildCodexPrompt(request, ".agent-relay/result.json");
   assert.match(prompt, /docs\/exec-plans\/active\/task\.md/);
   assert.match(prompt, /Execution mode: implement/);
+  assert.match(prompt, /mark it \[blocked\]/);
   assert.match(prompt, /Do not run commands that create or publish Git commits/);
   assert.match(prompt, /\.agent-relay\/result\.json/);
   assert.doesNotMatch(prompt, /AGENTS\.md|GitHub credentials|runner exclusively|shouldCommit|git status|git diff/i);
+  assert.match(prompt, /Do not include status, blockers, limitations, shouldCommit, or commitMessage/);
+});
+
+test("ExecPlan rules keep blockers in living documentation rather than result state", async () => {
+  const rules = await readFile(".agent/PLANS.md", "utf8");
+  assert.match(rules, /prefix it with `\[blocked\]`/);
+  assert.match(rules, /cause, impact, evidence, and concrete unblock condition/);
+  assert.match(rules, /never a Codex result status or an Agent Relay job status/);
 });
 
 test("create-job contract has no secondary instruction channel", () => {

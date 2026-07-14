@@ -79,7 +79,7 @@ export class JobService {
       const finished = new Date().toISOString();
       await this.store.save({
         ...current,
-        status: outcome.result.status,
+        status: "completed",
         exitCode: outcome.exitCode,
         finishedAt: finished,
         updatedAt: finished,

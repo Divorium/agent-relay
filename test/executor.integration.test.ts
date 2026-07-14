@@ -42,7 +42,7 @@ test("Codex arguments select the restricted Relay permission profile", () => {
   assert.doesNotDeepEqual(args.slice(args.indexOf("exec") + 1, args.indexOf("exec") + 3), ["--sandbox", "danger-full-access"]);
 });
 
-test("CodexExecutor runs a real child process with filtered context and validates its result", async () => {
+test("CodexExecutor runs a real child process with filtered context and validates its minimal result", async () => {
   const { root, workspace, outputPath } = await createRoot("executor");
   const executable = join(root, "fake-codex");
   await writeFile(executable, `#!/bin/sh
@@ -62,12 +62,8 @@ cat > "$workspace/.agent-relay/result.json" <<'JSON'
 {
   "schemaVersion": 1,
   "requestId": "${requestId}",
-  "status": "completed",
-  "commitMessage": "Complete controlled child process",
   "summary": "Controlled child process completed.",
-  "validation": [],
-  "blockers": [],
-  "limitations": []
+  "validation": []
 }
 JSON
 `, { mode: 0o700 });
@@ -88,8 +84,7 @@ JSON
 
     assert.equal(outcome.exitCode, 0);
     assert.equal(outcome.result.requestId, requestId);
-    assert.equal(outcome.result.status, "completed");
-    assert.equal(outcome.result.commitMessage, "Complete controlled child process");
+    assert.equal(outcome.result.summary, "Controlled child process completed.");
     const log = await readFile(outputPath, "utf8");
     assert.doesNotMatch(log, /abcdefghijklmnopqrstuvwxyz/);
     assert.match(log, /\[REDACTED\]/);

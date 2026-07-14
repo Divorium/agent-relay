@@ -20,16 +20,12 @@ const validRequest = {
   mode: "implement" as const,
 };
 
-function completedResult(overrides: Record<string, unknown> = {}) {
+function validResult(overrides: Record<string, unknown> = {}) {
   return {
     schemaVersion: 1,
     requestId: validRequest.requestId,
-    status: "completed",
-    commitMessage: "Implement contract validators",
     summary: "Implemented validation.",
     validation: [{ command: "npm test", status: "passed", exitCode: 0, details: "Passed." }],
-    blockers: [],
-    limitations: [],
     ...overrides,
   };
 }
@@ -50,25 +46,24 @@ test("rejects absolute and traversing workspace paths", () => {
   assert.throws(() => validateCreateJobRequest({ ...validRequest, workspace: "../repo" }), /safe relative path/);
 });
 test("rejects non-Markdown plan paths", () => assert.throws(() => validateCreateJobRequest({ ...validRequest, planPath: "plan.json" }), /Markdown/));
-test("accepts a valid completed result", () => {
-  const result = validateCodexResult(completedResult(), validRequest.requestId);
-  assert.equal(result.commitMessage, "Implement contract validators");
+test("accepts a minimal valid result", () => {
+  const result = validateCodexResult(validResult(), validRequest.requestId);
+  assert.deepEqual(result, validResult());
 });
-test("rejects mismatched result requestId", () => assert.throws(() => validateCodexResult({ schemaVersion: 1, requestId: "other", status: "blocked", summary: "Blocked.", validation: [], blockers: ["Reason"], limitations: [] }, validRequest.requestId), /does not match/));
-test("rejects completed results without a commit message", () => assert.throws(() => validateCodexResult(completedResult({ commitMessage: undefined }), validRequest.requestId), /commitMessage/));
-test("rejects multiline commit messages", () => assert.throws(() => validateCodexResult(completedResult({ commitMessage: "Line one\nLine two" }), validRequest.requestId)));
-test("rejects blocked results that include a commit message", () => assert.throws(() => validateCodexResult({ schemaVersion: 1, requestId: validRequest.requestId, status: "blocked", commitMessage: "Do not use", summary: "Blocked.", validation: [], blockers: ["Reason"], limitations: [] }, validRequest.requestId), /not allowed/));
+test("rejects mismatched result requestId", () => assert.throws(() => validateCodexResult(validResult({ requestId: "other" }), validRequest.requestId), /does not match/));
+for (const field of ["status", "blockers", "limitations", "commitMessage", "shouldCommit"]) {
+  test(`rejects removed result field ${field}`, () => {
+    expectRelayError(() => validateCodexResult(validResult({ [field]: field === "status" ? "completed" : [] }), validRequest.requestId), "RESULT_INVALID", 422);
+  });
+}
 test("uses RESULT_INVALID and 422 for malformed result strings", () => {
-  expectRelayError(() => validateCodexResult(completedResult({ summary: "" }), validRequest.requestId), "RESULT_INVALID", 422);
+  expectRelayError(() => validateCodexResult(validResult({ summary: "" }), validRequest.requestId), "RESULT_INVALID", 422);
 });
 test("rejects unknown fields inside validation records", () => {
-  expectRelayError(() => validateCodexResult(completedResult({ validation: [{ command: "npm test", status: "passed", details: "Passed.", output: "unexpected" }] }), validRequest.requestId), "RESULT_INVALID", 422);
-});
-test("rejects the legacy shouldCommit field", () => {
-  expectRelayError(() => validateCodexResult(completedResult({ shouldCommit: true }), validRequest.requestId), "RESULT_INVALID", 422);
+  expectRelayError(() => validateCodexResult(validResult({ validation: [{ command: "npm test", status: "passed", details: "Passed.", output: "unexpected" }] }), validRequest.requestId), "RESULT_INVALID", 422);
 });
 test("rejects unknown top-level result fields", () => {
-  expectRelayError(() => validateCodexResult(completedResult({ filesChanged: ["src/index.ts"] }), validRequest.requestId), "RESULT_INVALID", 422);
+  expectRelayError(() => validateCodexResult(validResult({ filesChanged: ["src/index.ts"] }), validRequest.requestId), "RESULT_INVALID", 422);
 });
 test("accepts exact bearer token", () => assert.doesNotThrow(() => requireBearerToken("Bearer secret", "secret")));
 test("rejects missing or incorrect bearer token", () => {
@@ -87,10 +82,11 @@ test("loads the isolated Codex user", () => {
 });
 test("rejects invalid Codex user names", () => assert.throws(() => loadConfig({ AGENT_RELAY_TOKEN: "secret", SHARED_WORKSPACE_ROOT: "/work", CODEX_RUN_AS_USER: "../root" }), /valid local user/));
 test("rejects missing configuration", () => assert.throws(() => loadConfig({ SHARED_WORKSPACE_ROOT: "/work" }), /AGENT_RELAY_TOKEN/));
-test("prompt includes task context and the result contract", () => {
+test("prompt includes task context and the minimal result contract", () => {
   const prompt = buildCodexPrompt({ ...validRequest, mode: "revise" }, ".agent-relay/result.json");
   assert.match(prompt, /docs\/exec-plans/);
   assert.match(prompt, /Execution mode: revise/);
+  assert.match(prompt, /mark it \[blocked\]/);
   assert.match(prompt, /Do not run commands that create or publish Git commits/);
   assert.match(prompt, /result\.json/);
   assert.doesNotMatch(prompt, /GitHub credentials|runner exclusively|shouldCommit/i);
@@ -99,7 +95,7 @@ test("redacts common token formats", () => {
   const output = redactSensitiveText("authorization: Bearer abcdefghijklmnopqrstuvwxyz token=super-secret-value");
   assert.doesNotMatch(output, /abcdefghijklmnopqrstuvwxyz|super-secret-value/);
 });
-test("rejects sensitive result content", () => assert.throws(() => validateCodexResult({ schemaVersion: 1, requestId: "req-1", status: "blocked", summary: "Found github_pat_abcdefghijklmnopqrstuvwxyz1234567890", validation: [], blockers: ["Blocked"], limitations: [] }, "req-1"), /sensitive data/));
+test("rejects sensitive result content", () => assert.throws(() => validateCodexResult(validResult({ requestId: "req-1", summary: "Found github_pat_abcdefghijklmnopqrstuvwxyz1234567890" }), "req-1"), /sensitive data/));
 
 test("resolves a workspace below the shared root", async () => {
   const root = join(tmpdir(), `agent-relay-workspace-${process.pid}`);

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { RelayError } from "../contracts/errors.js";
 import type { CreateJobRequest } from "../contracts/job.js";
@@ -50,15 +50,17 @@ export class CodexExecutor {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    const outputChunks: any[] = [];
     let outputBytes = 0;
-    const collect = (chunk: any): void => {
+    let pendingWrite = Promise.resolve();
+    const collect = (chunk: unknown): void => {
       if (outputBytes >= this.maxOutputBytes) return;
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
       const remaining = this.maxOutputBytes - outputBytes;
       const accepted = buffer.length > remaining ? buffer.subarray(0, remaining) : buffer;
-      outputChunks.push(accepted);
       outputBytes += accepted.length;
+      const redacted = redactSensitiveText(accepted.toString("utf8"));
+      process.stdout.write(redacted);
+      pendingWrite = pendingWrite.then(() => appendFile(outputPath, redacted, { mode: 0o600 }));
     };
     child.stdout?.on("data", collect);
     child.stderr?.on("data", collect);
@@ -82,10 +84,8 @@ export class CodexExecutor {
         if (forceKillTimer) clearTimeout(forceKillTimer);
         resolve(code ?? 1);
       });
-    }).finally(async () => {
-      const output = Buffer.concat(outputChunks, outputBytes).toString("utf8");
-      await writeFile(outputPath, redactSensitiveText(output), { mode: 0o600 });
     });
+    await pendingWrite;
 
     if (timedOut) throw new RelayError("CODEX_TIMEOUT", "Codex execution timed out", 504);
     if (exitCode !== 0) throw new RelayError("CODEX_FAILED", `Codex exited with code ${exitCode}`, 502);

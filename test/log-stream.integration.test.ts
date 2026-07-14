@@ -1,0 +1,61 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { CodexExecutor } from "../src/execution/codex-executor.js";
+
+const requestId = "live-log-request";
+
+test("Codex output reaches Docker stdout and the job log before process completion", async () => {
+  const root = join(tmpdir(), `agent-relay-live-log-${process.pid}-${Date.now()}`);
+  const workspace = join(root, "workspace");
+  const outputPath = join(root, "state", "job.log");
+  const executable = join(root, "fake-codex");
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "plan.md"), "# Plan\n");
+  await writeFile(executable, `#!/bin/sh
+set -eu
+printf 'first live line\\n'
+sleep 1
+cat > "$7/.agent-relay/result.json" <<'JSON'
+{
+  "schemaVersion": 1,
+  "requestId": "${requestId}",
+  "status": "completed",
+  "shouldCommit": false,
+  "summary": "Completed.",
+  "validation": [],
+  "blockers": [],
+  "limitations": []
+}
+JSON
+`, { mode: 0o700 });
+  await chmod(executable, 0o700);
+
+  let stdout = "";
+  const originalWrite = process.stdout.write;
+  process.stdout.write = ((chunk: unknown) => {
+    stdout += String(chunk);
+    return true;
+  }) as any;
+
+  try {
+    const execution = new CodexExecutor(executable, 5_000, 100_000).run({
+      requestId,
+      workspace: "workspace",
+      planPath: "plan.md",
+      mode: "implement",
+    }, workspace, outputPath);
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.match(stdout, /first live line/);
+    assert.match(await readFile(outputPath, "utf8"), /first live line/);
+
+    const outcome = await execution;
+    assert.equal(outcome.result.status, "completed");
+  } finally {
+    process.stdout.write = originalWrite;
+    await rm(root, { recursive: true, force: true });
+  }
+});

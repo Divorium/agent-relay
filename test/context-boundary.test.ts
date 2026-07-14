@@ -82,11 +82,11 @@ test("Codex environment is a minimal allowlist", () => {
   });
 });
 
-test("Codex arguments use a restricted profile that hides Codex home", () => {
+test("Codex arguments deny Codex home and make repository Git metadata read-only", () => {
   const args = createCodexArgs("/work/repository", "task prompt");
   assert.ok(args.includes("default_permissions=\"relay\""));
   assert.ok(args.includes("permissions.relay.extends=\":workspace\""));
-  assert.ok(args.includes("permissions.relay.filesystem={\"/home/agent/.codex\"=\"deny\"}"));
+  assert.ok(args.includes("permissions.relay.filesystem={\"/home/agent/.codex\"=\"deny\",\"/work/repository/.git\"=\"read\"}"));
   assert.ok(args.includes("permissions.relay.network.enabled=true"));
   assert.ok(!args.includes("danger-full-access"));
 });
@@ -130,4 +130,5 @@ test("packaging exposes only a read-only Codex credential file and keeps Relay s
 
   assert.match(ci, /Verify isolated Codex boundary/);
   assert.match(ci, /test ! -r \/home\/agent\/\.codex\/sentinel/);
+  assert.match(ci, /touch \.git\/sandbox-write-denied/);
 });

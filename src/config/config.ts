@@ -33,6 +33,7 @@ function optionalUser(name: string, value: string | undefined): string | undefin
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): AppConfig {
+  const codexRunAsUser = optionalUser("CODEX_RUN_AS_USER", env.CODEX_RUN_AS_USER);
   return {
     host: env.AGENT_RELAY_HOST ?? "0.0.0.0",
     port: positiveInteger("AGENT_RELAY_PORT", env.AGENT_RELAY_PORT, 8080),
@@ -40,7 +41,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     workspaceRoot: resolve(required("SHARED_WORKSPACE_ROOT", env.SHARED_WORKSPACE_ROOT)),
     stateDir: resolve(env.AGENT_RELAY_STATE_DIR ?? "/var/lib/agent-relay"),
     codexCommand: env.CODEX_COMMAND ?? "codex",
-    codexRunAsUser: optionalUser("CODEX_RUN_AS_USER", env.CODEX_RUN_AS_USER),
+    ...(codexRunAsUser === undefined ? {} : { codexRunAsUser }),
     codexTimeoutMs: positiveInteger("CODEX_TIMEOUT_MS", env.CODEX_TIMEOUT_MS, 21_600_000),
     maxOutputBytes: positiveInteger("MAX_OUTPUT_BYTES", env.MAX_OUTPUT_BYTES, 10_000_000),
   };

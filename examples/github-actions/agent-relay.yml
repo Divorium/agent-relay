@@ -1,6 +1,9 @@
 name: Agent Relay
 
 on:
+  pull_request:
+    types:
+      - ready_for_review
   workflow_dispatch:
     inputs:
       pr_number:
@@ -26,20 +29,62 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: agent-relay-${{ github.repository }}-pr-${{ inputs.pr_number }}
+  group: agent-relay-${{ github.repository }}-pr-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   codex:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: [self-hosted, agent-relay]
     steps:
+      - name: Resolve execution request
+        id: request
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          INPUT_MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+
+          case "${EVENT_NAME}" in
+            pull_request)
+              pr_number="${EVENT_PR_NUMBER}"
+              mode="implement"
+              ;;
+            workflow_dispatch)
+              pr_number="${INPUT_PR_NUMBER}"
+              mode="${INPUT_MODE}"
+              ;;
+            *)
+              echo "Unsupported event: ${EVENT_NAME}" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ ! "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Pull request number must be a positive integer" >&2
+            exit 1
+          fi
+
+          case "${mode}" in
+            implement|revise|finalize) ;;
+            *)
+              echo "Unsupported Agent Relay mode: ${mode}" >&2
+              exit 1
+              ;;
+          esac
+
+          printf 'pr_number=%s\nmode=%s\n' "${pr_number}" "${mode}" >> "${GITHUB_OUTPUT}"
+
       - name: Resolve ready pull request
         id: pr
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ inputs.pr_number }}
+          PR_NUMBER: ${{ steps.request.outputs.pr_number }}
         run: node /runner/resolve-pr.mjs
 
       - uses: actions/checkout@v4
@@ -55,6 +100,51 @@ jobs:
           EXPECTED_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD_SHA}"
 
+      - name: Resolve active ExecPlan
+        id: plan
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          INPUT_PLAN_PATH: ${{ inputs.plan_path }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            if [[ ! "${BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Pull request base SHA is invalid" >&2
+              exit 1
+            fi
+
+            mapfile -t candidates < <(
+              git diff --name-only --diff-filter=AM "${BASE_SHA}...${HEAD_SHA}" -- \
+                ':(glob)docs/exec-plans/active/*.md' | LC_ALL=C sort -u
+            )
+
+            if [[ "${#candidates[@]}" -ne 1 ]]; then
+              echo "Expected exactly one added or modified active ExecPlan, found ${#candidates[@]}" >&2
+              printf 'Candidate: %s\n' "${candidates[@]:-<none>}" >&2
+              exit 1
+            fi
+
+            plan_path="${candidates[0]}"
+          else
+            plan_path="${INPUT_PLAN_PATH}"
+          fi
+
+          if [[ ! "${plan_path}" =~ ^docs/exec-plans/active/[A-Za-z0-9._-]+\.md$ ]]; then
+            echo "ExecPlan must be a safe file directly under docs/exec-plans/active" >&2
+            exit 1
+          fi
+
+          if [[ ! -f "${plan_path}" ]]; then
+            echo "ExecPlan does not exist: ${plan_path}" >&2
+            exit 1
+          fi
+
+          printf 'plan_path=%s\n' "${plan_path}" >> "${GITHUB_OUTPUT}"
+
       - name: Exclude relay artifact
         shell: bash
         run: |
@@ -67,8 +157,8 @@ jobs:
         continue-on-error: true
         shell: bash
         env:
-          AGENT_RELAY_PLAN_PATH: ${{ inputs.plan_path }}
-          AGENT_RELAY_MODE: ${{ inputs.mode }}
+          AGENT_RELAY_PLAN_PATH: ${{ steps.plan.outputs.plan_path }}
+          AGENT_RELAY_MODE: ${{ steps.request.outputs.mode }}
           AGENT_RELAY_REQUEST_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -o pipefail

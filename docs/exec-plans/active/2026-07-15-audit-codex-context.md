@@ -2,175 +2,128 @@
 
 This ExecPlan is a living document. Keep `Progress`, `Surprises & Discoveries`, `Decision Log`, and validation evidence current while work proceeds.
 
-When an item cannot be completed, leave it unchecked and mark it `[blocked]` in `Progress`. Record the cause, impact, evidence, and concrete unblock condition. Continue every unaffected item. A blocker is plan documentation only; it is not a Codex result status or Relay job status and must not discard completed work. A plan with an unchecked or `[blocked]` item remains active.
+When an item cannot be completed, leave it unchecked and mark it `[blocked]` in `Progress`. Record the cause, impact, evidence, and concrete unblock condition. Continue every unaffected item. A blocker is plan documentation only; it is not a Codex result or Relay job status and must not discard completed work. A plan with an unchecked or `[blocked]` item remains active.
 
 ## Purpose / Big Picture
 
-Codex should receive only the repository instructions and task context required to implement the active ExecPlan. It must not receive conflicting commands, duplicate governance, runner or operator procedures, GitHub workflow metadata, Relay internals, host Codex history, or result fields that ask the model to make control-plane decisions.
+Codex should receive only the repository instructions and task context required to implement this active ExecPlan. It must not receive conflicting commands, duplicate governance, runner or operator procedures, GitHub workflow metadata, Relay internals, host Codex history, or fields that ask the model to make control-plane decisions.
 
-After this work, each source has one owner:
+After this work:
 
-- `AGENTS.md` contains durable engineering constraints;
-- `.agent/PLANS.md` contains reusable living-plan rules;
+- `AGENTS.md` contains only durable code rules;
+- `.agent/PLANS.md` defines the reusable living-plan convention;
 - the active ExecPlan is the sole task authority;
-- `src/execution/prompt.ts` contains only the plan location, living-plan maintenance, validation, the prohibition against creating or publishing commits, and the exact minimal result shape;
-- Relay derives technical execution state;
+- the runtime prompt identifies the plan, requires plan maintenance and validation, and forbids commit/push;
+- Relay derives technical execution state from the child process;
 - Git and the runner own commit decisions and publication;
-- operator-only configuration remains in the operations runbook.
-
-The Codex result is evidence only. It contains `schemaVersion`, `summary`, and `validation`. It contains no request identifier, status, blocker list, limitations, commit intent, or commit message.
+- task blockers and validation evidence remain in the active plan;
+- no model-generated control or result artifact exists.
 
 ## Progress
 
-- [x] (2026-07-15) Created this plan before implementation changes and opened draft PR #9 from current `main`.
-- [x] (2026-07-15) Inventoried repository instructions, prompt construction, request/result contracts, child environment, workflow inputs, checkout/finalization credentials, Compose mounts, container users, Relay state, runner files, tests, and operations documentation.
-- [x] (2026-07-15) Removed the unused `reviewFindings` instruction channel and reduced the runtime prompt.
-- [x] (2026-07-15) Replaced inherited process environment with an allowlist plus a final `env -i` launcher.
+- [x] (2026-07-15) Created this plan before implementation and opened draft PR #9 from current `main`.
+- [x] (2026-07-15) Inventoried instruction files, prompt construction, request contracts, child environment, workflow inputs, checkout/finalization credentials, Compose mounts, container users, Relay state, runner files, tests, and operations documentation.
+- [x] (2026-07-15) Removed the unused `reviewFindings` channel and undefined `implement`/`revise`/`finalize` mode.
+- [x] (2026-07-15) Replaced inherited child environment with a minimal allowlist and a final `env -i` launcher.
 - [x] (2026-07-15) Removed persisted checkout credentials and scoped the push token to finalization.
-- [x] (2026-07-15) Separated `relay` and `agent` users, protected Relay state, and replaced the full host `.codex` mount with an `auth.json`-only mount.
-- [x] (2026-07-15) Removed model-controlled `completed`/`blocked` outcomes, `blockers`, `limitations`, and `commitMessage` from the result contract.
-- [x] (2026-07-15) Removed `blocked` from Relay job status and made successful process/result validation produce Relay-owned `completed`.
-- [x] (2026-07-15) Added the living-plan `[blocked]` rule and made plans with unchecked or blocked items remain active.
-- [x] (2026-07-15) Moved commit-message derivation to the runner using the active plan title with a fixed fallback.
-- [x] (2026-07-15) Removed `requestId` from the Codex prompt and result; it remains opaque runner-to-Relay idempotency metadata only.
-- [x] (2026-07-15) Removed the undefined `implement`/`revise`/`finalize` mode from workflow inputs, job requests, and the prompt so the active plan is the sole task instruction.
-- [x] (2026-07-15) Made the required `auth.json` mount read-only.
-- [x] (2026-07-15) Removed duplicated sensitive-result scanning from the runner; Relay validates the result before reporting completion.
-- [x] (2026-07-15) Removed a legacy CI branch trigger and added persistent isolation diagnostics.
-- [x] (2026-07-15) Updated README, operations documentation, examples, and focused tests to the minimized contract.
-- [ ] Resolve the image-level Codex isolation verification failure and retain a deterministic CI test for the supported Codex CLI version.
-- [ ] Run a fresh end-to-end audit from workflow dispatch to finalization without relying on the existing finding list.
-- [ ] Fix every additional finding and repeat the audit until one complete pass produces no new conflict, duplicate instruction, alternate instruction channel, runner-owned responsibility, unnecessary exposure, or model-controlled outcome.
-- [ ] Run full test, Compose, Relay image, isolated-boundary, toolchain, excluded-tool, runner-image, and controlled-flow validation; record exact evidence.
-- [ ] Move this plan to `docs/exec-plans/completed/` only after every item is checked and no `[blocked]` entry remains.
+- [x] (2026-07-15) Separated `relay` and `agent` users, protected Relay state, and replaced the full host `.codex` mount with a read-only `auth.json` mount.
+- [x] (2026-07-15) Added a restricted Codex permissions profile and fixed its filesystem override to use a valid inline TOML table.
+- [x] (2026-07-15) Removed model-controlled `completed`/`blocked`, blocker arrays, limitations, commit intent, and commit messages.
+- [x] (2026-07-15) Added the living-plan `[blocked]` convention and made plans with unchecked or blocked items remain active.
+- [x] (2026-07-15) Moved commit-message derivation to the runner using the active plan heading and a fixed fallback.
+- [x] (2026-07-15) Removed request IDs and workflow metadata from the Codex prompt.
+- [x] (2026-07-15) Reduced `AGENTS.md` to four durable engineering rules.
+- [x] (2026-07-15) Removed dead archive wiring and the legacy `.agent-relay` workflow/ignore/finalizer path.
+- [x] (2026-07-15) Removed the entire model-generated result artifact. Relay now derives completion from process exit; the active plan owns progress, blockers, and validation evidence.
+- [x] (2026-07-15) Updated focused unit and integration tests for process-derived completion, living blockers, Git-derived commits, and the minimized context boundary.
+- [x] (2026-07-15) Updated README and the operations runbook to the result-free contract.
+- [ ] Run the current full CI and fix every failure without restoring removed model-control channels.
+- [ ] Perform a fresh end-to-end audit from workflow dispatch to finalization, independent of the existing findings list.
+- [ ] Repeat the audit until one complete pass finds no conflict, duplicate instruction, alternate instruction channel, runner-owned responsibility, unnecessary exposure, or model-controlled outcome.
+- [ ] Record exact validation evidence and move this plan to `docs/exec-plans/completed/` only when every item is checked and no `[blocked]` entry remains.
 
 ## Surprises & Discoveries
 
-- Observation: a warning in the prompt did not create a credential boundary.
-  Evidence: checkout used `persist-credentials: true`, leaving an authorization header in local Git configuration inside the shared workspace.
+- Observation: a prompt warning did not create a credential boundary.
+  Evidence: checkout persisted an authorization header in local Git configuration until `persist-credentials: false` and an explicit verification step were added.
 
-- Observation: the whole host `.codex` directory was exposed.
-  Evidence: Compose mounted `HOST_CODEX_DIR` at `/home/agent/.codex`, including configuration, history, sessions, logs, and rules that Codex did not need.
+- Observation: the entire host `.codex` directory was exposed.
+  Evidence: the original Compose mount included host configuration, history, sessions, logs, and rules; Codex needs only authentication.
 
 - Observation: Relay and Codex originally shared one Unix identity.
-  Evidence: the service and child process ran as `agent`, so environment filtering could not protect Relay state or process information.
+  Evidence: same-UID execution made Relay state and process information reachable regardless of environment filtering.
 
-- Observation: the environment boundary was a one-variable denylist.
-  Evidence: the child inherited every parent variable except `AGENT_RELAY_TOKEN`.
+- Observation: the child environment was a one-variable denylist.
+  Evidence: all future workflow, service, and operator variables would have been inherited automatically.
 
-- Observation: the prompt repeated repository governance and runner internals.
-  Evidence: it described instruction precedence, GitHub credentials, Git inspection, runner ownership, and obsolete result fields.
+- Observation: alternate task fields duplicated the active plan.
+  Evidence: `reviewFindings` and execution `mode` created instruction channels with no independent semantics.
 
-- Observation: `reviewFindings` and execution `mode` were alternate instruction channels with no independent contract.
-  Evidence: `reviewFindings` was never supplied by the workflow, while `mode` merely added an undefined label beside the active plan.
+- Observation: model-selected `blocked` could invalidate useful work after the entire token budget had been spent.
+  Evidence: the prompt requested a status, validators accepted `blocked`, the job copied it, and the runner threw only after execution.
 
-- Observation: request correlation did not belong in model context.
-  Evidence: Relay already owns the request ID, removes the stale result before execution, and reads one job-specific workspace result. Asking Codex to echo the ID added no integrity property.
+- Observation: even a minimized model result remained an unnecessary post-execution failure point.
+  Evidence: malformed JSON, a missing file, an echoed request ID, or sensitive text could reject otherwise valid repository changes after Codex finished. Process exit, Git state, and the living plan already provide the required facts.
 
-- Observation: the model could spend the full token budget and then invalidate useful work by choosing `blocked`.
-  Evidence: the prompt requested a status, validators accepted `blocked`, job state copied it, and the runner threw after execution.
+- Observation: `.agent-relay` became pure legacy once the result file was removed.
+  Evidence: workflow exclusion, ignore entries, finalizer guard, and tests had no remaining producer to protect against.
 
-- Observation: blocker and limitation arrays duplicated the living ExecPlan.
-  Evidence: the same incomplete state could diverge between the plan and result file.
+- Observation: the first filesystem permission override was syntactically invalid for Codex 0.144.3.
+  Evidence: the dotted key split `/home/agent/.codex` at the dot. Passing `permissions.relay.filesystem={"/home/agent/.codex"="deny"}` preserves the absolute path as a table key.
 
-- Observation: commit-message generation was assigned to Codex even though the runner already owns all Git publication behavior.
-  Evidence: the result required `commitMessage`; the runner can derive it deterministically from the plan heading.
-
-- Observation: the initial living-plan rule accidentally allowed a blocked item to count as completion evidence.
-  Evidence: `.agent/PLANS.md` listed an explicit blocker beside passing tests and reproducible commands. The corrected rule keeps the plan active while any item is unchecked or blocked.
-
-- Observation: the minimized authentication mount was still writable.
-  Evidence: Compose mounted `auth.json` without `:ro`, although the CLI only needs to read it.
-
-- Observation: the runner repeated Relay sensitive-result validation.
-  Evidence: both processes scanned the same result, creating two policy owners. Relay already validates before persisting `completed`.
-
-- Observation: CI did not preserve output from the new isolation check.
-  Evidence: the failed image job exposed only a truncated Actions log. The check now uploads `isolation.log` before failing.
+- Observation: `AGENTS.md` repeated plan process, validation, Git, credential, and infrastructure rules.
+  Evidence: those details were already enforced by `.agent/PLANS.md`, the prompt, workflow, users, mounts, and CI.
 
 ## Decision Log
 
 - Decision: the active ExecPlan is the only task instruction source.
-  Rationale: removing `mode` and `reviewFindings` prevents ambiguous task overlays.
+  Rationale: removing mode and review overlays prevents contradictory task definitions.
   Date/Author: 2026-07-15 / repository audit.
 
-- Decision: blockers live only in the active ExecPlan.
-  Rationale: the plan remains restartable and authoritative while Relay preserves valid partial work. A blocked item prevents plan completion but not technical run completion.
+- Decision: blockers and validation evidence live in the active ExecPlan.
+  Rationale: the living plan is restartable, reviewable, and already part of the changed worktree. A blocker prevents plan completion but does not convert a successful process into technical failure.
   Date/Author: 2026-07-15 / repository audit.
 
-- Decision: Codex does not select a terminal outcome.
-  Rationale: Relay can deterministically classify process exit, timeout, interruption, persistence failure, and result validity.
+- Decision: Codex produces no control or result artifact.
+  Rationale: every former result field duplicated a deterministic owner: Relay owns process state, the plan owns work status and evidence, and Git/runner own commit behavior.
   Date/Author: 2026-07-15 / repository audit.
 
-- Decision: the result contains exactly `schemaVersion`, `summary`, and `validation`.
-  Rationale: correlation remains in the runner-to-Relay request; incomplete work remains in the plan; Git metadata remains in the runner.
+- Decision: Git status and the plan heading drive finalization.
+  Rationale: actual worktree state is authoritative and the plan title provides a deterministic commit message.
   Date/Author: 2026-07-15 / repository audit.
 
-- Decision: Git status and plan title drive finalization.
-  Rationale: `git status --porcelain` is authoritative for changes, and the first level-one plan heading provides a deterministic commit message with a fixed fallback.
-  Date/Author: 2026-07-15 / repository audit.
-
-- Decision: enforce credential absence structurally.
-  Rationale: checkout does not persist credentials, the workflow verifies local Git config, and only finalization receives the push token.
-  Date/Author: 2026-07-15 / repository audit.
-
-- Decision: run Relay and Codex as different users.
-  Rationale: Relay secrets and state cannot be isolated from a same-UID child. The service runs as `relay`; a fixed launcher runs Codex as `agent`; Relay state is mode `0700`.
-  Date/Author: 2026-07-15 / repository audit.
-
-- Decision: use an environment allowlist and final `env -i` reconstruction.
-  Rationale: a denylist cannot cover future service, workflow, credential, or operator variables.
-  Date/Author: 2026-07-15 / repository audit.
-
-- Decision: mount only `auth.json`, read-only.
-  Rationale: Codex must authenticate but does not need host configuration, history, sessions, logs, rules, or write access to the credential.
-  Date/Author: 2026-07-15 / repository audit.
-
-- Decision: Relay is the sole sensitive-result validator.
-  Rationale: the runner acts only after Relay reports a validated completed job, so duplicating the policy creates drift without strengthening the boundary.
+- Decision: credentials and host context are excluded structurally rather than by model instruction.
+  Rationale: checkout credentials are removed, push credentials exist only during finalization, Relay and Codex use separate users, Relay state is private, the child environment is allowlisted, and only read-only `auth.json` is mounted.
   Date/Author: 2026-07-15 / repository audit.
 
 ## Outcomes & Retrospective
 
-The branch now applies the intended context boundary rather than asking Codex to police it. GitHub credentials are absent while Codex runs, Relay and Codex use separate identities, Relay state is protected, host Codex data is reduced to a read-only authentication file, the child environment is rebuilt from an allowlist, and the prompt contains only the active plan workflow and exact evidence schema.
+The branch now applies the context boundary in code and packaging rather than asking Codex to understand or certify it. The runtime prompt contains only the active-plan execution contract. Task blockers remain visible in the living plan without wasting completed work. Relay has only technical statuses, and the runner uses Git and the plan heading for finalization.
 
-The original `blocked` result is removed. A real blocker is documented in the active plan, unaffected work continues, the result remains ordinary evidence, and Relay preserves the work as a technically completed run.
-
-The work remains active until the image isolation test passes, a fresh audit finds no additional issue, all validation succeeds, and this plan is moved to `completed/`.
+This plan remains active until current CI passes and a fresh audit finds no additional issue.
 
 ## Context and Orientation
 
-The GitHub runner checks out a pull-request revision into a named workspace volume. Agent Relay mounts the same volume and launches Codex in that repository.
-
 Relevant boundaries:
 
-- workflow dispatch: `.github/workflows/agent-relay.yml` and `examples/github-actions/agent-relay.yml`;
-- runner request/result handling: `runner/client.mjs`;
-- finalization: `runner/finalize.sh`;
-- request/result contracts: `src/contracts/job.ts`, `src/contracts/result.ts`, `src/contracts/validators.ts`;
-- prompt and child process: `src/execution/prompt.ts`, `src/execution/codex-executor.ts`, `scripts/codex-run`;
-- technical job state: `src/application/job-service.ts`, `src/persistence/job-store.ts`;
-- packaging and identity boundary: `Dockerfile`, `compose.yml`;
 - durable instructions: `AGENTS.md`, `.agent/PLANS.md`;
-- operator documentation: `docs/operations/README.md`.
+- task instruction: `docs/exec-plans/active/2026-07-15-audit-codex-context.md`;
+- workflow dispatch: `.github/workflows/agent-relay.yml`, `examples/github-actions/agent-relay.yml`;
+- runner request/finalization: `runner/client.mjs`, `runner/finalize.sh`;
+- request and job contracts: `src/contracts/job.ts`, `src/contracts/validators.ts`;
+- prompt and process: `src/execution/prompt.ts`, `src/execution/codex-executor.ts`, `scripts/codex-run`;
+- packaging: `Dockerfile`, `compose.yml`;
+- operations: `README.md`, `docs/operations/README.md`.
 
-Codex needs the repository, active plan, validation tools, minimal evidence schema, and its authentication file. It does not need GitHub or Relay tokens, runner registration, Relay state/logs, host Codex history/sessions, workflow-run metadata, an execution mode, a request ID, commit decisions, commit messages, publication mechanics, or a terminal outcome choice.
+Codex needs the repository, active plan, validation tools, network access required by its execution, and its authentication file. It does not need GitHub or Relay tokens, runner registration, Relay state/logs, host Codex history/sessions, workflow-run metadata, execution modes, request IDs, commit decisions, commit messages, publication mechanics, or a terminal outcome choice.
 
 ## Plan of Work
 
-Maintain one task channel: the active ExecPlan. Remove alternate instruction fields from the workflow, request contract, prompt, examples, tests, and documentation.
+After every implementation pass, trace all information that can enter Codex through argv, prompt, environment, current directory, readable files, mounted volumes, network peers, repository instructions, and process output. Remove anything not required to implement the active plan. Keep control-plane decisions in deterministic components.
 
-Maintain one blocker channel: unchecked `[blocked]` entries in the active plan. Keep the plan active until blockers are resolved. Do not translate blockers into technical job failure.
+Do not add instructions telling task-executing Codex to inspect or certify its own permissions, credentials, Git ownership model, context boundary, or outcome semantics. Those are repository and CI responsibilities.
 
-Maintain one technical outcome owner: Relay. A zero-exit Codex process with a valid evidence result becomes `completed`; process, timeout, interruption, persistence, and invalid-result failures remain Relay-owned.
-
-Maintain one finalization owner: the runner. It checks Git, derives the commit message from the plan title, and receives push credentials only during finalization.
-
-Maintain one credential boundary: credential-free checkout, finalization-only GitHub token, Relay-only bearer token, separate Unix users, Relay-only state, read-only `auth.json`, and a restricted Codex permissions profile.
-
-After each implementation pass, restart the audit at a different entry point and trace all data that can enter the Codex process: argv, prompt, environment, current directory, readable files, mounted volumes, network peers, repository instructions, active plan, result contract, and process output. Record and repair each new finding until a full pass finds none.
-
-## Concrete Steps
+## Validation and Acceptance
 
 Run from the repository root:
 
@@ -181,73 +134,16 @@ Run from the repository root:
     docker build --file Dockerfile.runner --tag agent-relay-runner:local .
     docker run --rm --entrypoint /bin/bash agent-relay:local /app/scripts/toolchain-smoke.sh
 
-Focused tests must prove:
+Acceptance requires:
 
-- the result accepts only `schemaVersion`, `summary`, and `validation`;
-- removed result fields and alternate request instruction fields are rejected;
-- Relay owns terminal state and has no `blocked` status;
-- an unchecked `[blocked]` plan item preserves work and keeps the plan active;
-- Git and the plan title control finalization;
-- the prompt omits request IDs, modes, runner internals, credentials, and obsolete result fields;
-- the child receives only the environment allowlist;
-- checkout and push credentials have non-overlapping lifetimes;
-- Relay state is unreadable by the agent;
-- only read-only `auth.json` is mounted from host Codex data;
-- the configured Codex permissions profile can write the workspace but cannot read Codex home.
-
-Do not add instructions telling task-executing Codex to inspect or certify its own permissions, credentials, Git ownership model, result-state ownership, or context boundary. Those are repository and CI responsibilities.
-
-## Validation and Acceptance
-
-- `.agent/PLANS.md` requires cause, impact, evidence, and unblock condition for `[blocked]` items and keeps such plans active.
-- The workflow accepts only pull request number and active plan path.
-- The create-job request contains only opaque request ID, workspace, and plan path.
-- The prompt contains no mode, request ID, runner procedure, credential detail, or model-selected status.
-- The result contains exactly `schemaVersion`, `summary`, and `validation`.
-- Relay has no `blocked` job state and derives `completed` from successful process/result validation.
-- The runner uses Git for change detection and the plan title for commit-message derivation.
-- The Codex child receives no GitHub, runner, or Relay token and cannot read Relay state.
-- Only read-only host `auth.json` is mounted under Codex home.
-- All tests, Compose validation, image builds, isolation checks, and runner checks pass.
-- A final audit produces no new finding.
-- The plan contains no unchecked or `[blocked]` item before it is moved to `completed/`.
-
-## Idempotence and Recovery
-
-The audit is repeatable and read-only. Reapplying declarative configuration produces the same boundary. Failed technical runs leave the active plan and worktree available for diagnosis. A task blocker updates only the plan and does not create a Relay failure.
-
-The temporary Git askpass helper is deleted on exit. Checkout credentials are not persisted. Rebuilding the containers recreates the user and filesystem boundary.
-
-## Artifacts and Notes
-
-Implementation paths include:
-
-- `.agent/PLANS.md`
-- `AGENTS.md`
-- `.github/workflows/agent-relay.yml`
-- `examples/github-actions/agent-relay.yml`
-- `src/execution/prompt.ts`
-- `src/execution/codex-executor.ts`
-- `src/contracts/job.ts`
-- `src/contracts/result.ts`
-- `src/contracts/validators.ts`
-- `src/application/job-service.ts`
-- `runner/client.mjs`
-- `runner/finalize.sh`
-- `scripts/codex-run`
-- `Dockerfile`
-- `compose.yml`
-- `.env.example`
-- `README.md`
-- `docs/operations/README.md`
-- focused tests under `test/`
-
-Validation evidence will be appended after CI completes.
-
-## Interfaces and Dependencies
-
-No external application dependency is added. The image uses Debian `sudo` for fixed user separation.
-
-`CreateJobRequest` contains `requestId`, `workspace`, and `planPath`. `CodexResult` contains `schemaVersion`, `summary`, and `validation`. `JobStatus` remains a Relay-owned technical lifecycle without `blocked`.
-
-The packaged service runs as `relay`. `CodexExecutor` invokes `/usr/local/bin/codex-run` as `agent`. The launcher rebuilds the environment with `env -i`. Compose mounts host `auth.json` read-only.
+- prompt content equals the minimal four-line active-plan contract;
+- create-job request contains only opaque request ID, workspace, and plan path;
+- no model-generated result file or result contract exists;
+- Relay has no task-level `blocked` status;
+- a `[blocked]` plan item preserves work and keeps the plan active;
+- Git and the plan heading control finalization;
+- Codex receives no GitHub, runner, or Relay token and cannot read Relay state or Codex home;
+- only read-only host `auth.json` is mounted;
+- all tests, Compose validation, image builds, isolation checks, and runner checks pass;
+- a complete fresh audit produces no new finding;
+- no unchecked or `[blocked]` item remains before this plan moves to `completed/`.

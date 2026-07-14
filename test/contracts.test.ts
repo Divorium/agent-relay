@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { validateCodexResult, validateCreateJobRequest } from "../src/contracts/validators.js";
-import { RelayError } from "../src/contracts/errors.js";
+import { validateCreateJobRequest } from "../src/contracts/validators.js";
 import { requireBearerToken } from "../src/security/auth.js";
 import { resolveWorkspace } from "../src/security/workspace.js";
 import { loadConfig } from "../src/config/config.js";
@@ -19,24 +18,6 @@ const validRequest = {
   planPath: "docs/exec-plans/active/plan.md",
 };
 
-function validResult(overrides: Record<string, unknown> = {}) {
-  return {
-    schemaVersion: 1,
-    summary: "Implemented validation.",
-    validation: [{ command: "npm test", status: "passed", exitCode: 0, details: "Passed." }],
-    ...overrides,
-  };
-}
-
-function expectRelayError(action: () => unknown, code: string, statusCode: number): void {
-  assert.throws(action, (error: unknown) => {
-    if (!(error instanceof RelayError)) return false;
-    assert.equal(error.code, code);
-    assert.equal(error.statusCode, statusCode);
-    return true;
-  });
-}
-
 test("accepts a valid create-job request", () => assert.deepEqual(validateCreateJobRequest(validRequest), validRequest));
 test("rejects unknown request fields", () => assert.throws(() => validateCreateJobRequest({ ...validRequest, command: "rm -rf /" }), /Unknown field/));
 test("rejects alternate instruction fields", () => {
@@ -48,24 +29,6 @@ test("rejects absolute and traversing workspace paths", () => {
   assert.throws(() => validateCreateJobRequest({ ...validRequest, workspace: "../repo" }), /safe relative path/);
 });
 test("rejects non-Markdown plan paths", () => assert.throws(() => validateCreateJobRequest({ ...validRequest, planPath: "plan.json" }), /Markdown/));
-test("accepts a minimal valid result", () => {
-  const result = validateCodexResult(validResult());
-  assert.deepEqual(result, validResult());
-});
-for (const field of ["requestId", "status", "blockers", "limitations", "commitMessage", "shouldCommit"]) {
-  test(`rejects removed result field ${field}`, () => {
-    expectRelayError(() => validateCodexResult(validResult({ [field]: field === "status" ? "completed" : "unused" })), "RESULT_INVALID", 422);
-  });
-}
-test("uses RESULT_INVALID and 422 for malformed result strings", () => {
-  expectRelayError(() => validateCodexResult(validResult({ summary: "" })), "RESULT_INVALID", 422);
-});
-test("rejects unknown fields inside validation records", () => {
-  expectRelayError(() => validateCodexResult(validResult({ validation: [{ command: "npm test", status: "passed", details: "Passed.", output: "unexpected" }] })), "RESULT_INVALID", 422);
-});
-test("rejects unknown top-level result fields", () => {
-  expectRelayError(() => validateCodexResult(validResult({ filesChanged: ["src/index.ts"] })), "RESULT_INVALID", 422);
-});
 test("accepts exact bearer token", () => assert.doesNotThrow(() => requireBearerToken("Bearer secret", "secret")));
 test("rejects missing or incorrect bearer token", () => {
   assert.throws(() => requireBearerToken(undefined, "secret"));
@@ -83,19 +46,17 @@ test("loads the isolated Codex user", () => {
 });
 test("rejects invalid Codex user names", () => assert.throws(() => loadConfig({ AGENT_RELAY_TOKEN: "secret", SHARED_WORKSPACE_ROOT: "/work", CODEX_RUN_AS_USER: "../root" }), /valid local user/));
 test("rejects missing configuration", () => assert.throws(() => loadConfig({ SHARED_WORKSPACE_ROOT: "/work" }), /AGENT_RELAY_TOKEN/));
-test("prompt includes only task context and the minimal result contract", () => {
-  const prompt = buildCodexPrompt(validRequest, ".agent-relay/result.json");
+test("prompt contains only the active-plan execution contract", () => {
+  const prompt = buildCodexPrompt(validRequest);
   assert.match(prompt, /docs\/exec-plans/);
-  assert.match(prompt, /mark it \[blocked\]/);
+  assert.match(prompt, /Maintain it according to \.agent\/PLANS\.md/);
   assert.match(prompt, /Do not run commands that create or publish Git commits/);
-  assert.match(prompt, /result\.json/);
-  assert.doesNotMatch(prompt, /Execution mode|requestId|GitHub credentials|runner exclusively|shouldCommit/i);
+  assert.doesNotMatch(prompt, /result\.json|requestId|Execution mode|GitHub credentials|runner exclusively|shouldCommit|summary|validation.*JSON/i);
 });
-test("redacts common token formats", () => {
+test("redacts common token formats from process output", () => {
   const output = redactSensitiveText("authorization: Bearer abcdefghijklmnopqrstuvwxyz token=super-secret-value");
   assert.doesNotMatch(output, /abcdefghijklmnopqrstuvwxyz|super-secret-value/);
 });
-test("rejects sensitive result content", () => assert.throws(() => validateCodexResult(validResult({ summary: "Found github_pat_abcdefghijklmnopqrstuvwxyz1234567890" })), /sensitive data/));
 
 test("resolves a workspace below the shared root", async () => {
   const root = join(tmpdir(), `agent-relay-workspace-${process.pid}`);
@@ -112,7 +73,7 @@ test("rejects files as workspaces", async () => {
 });
 
 function job(status: JobRecord["status"]): JobRecord {
-  return { id: "job-1", request: { requestId: "request-1", workspace: "repo/repo", planPath: "docs/plan.md" }, status, createdAt: "2026-07-13T00:00:00.000Z", updatedAt: "2026-07-13T00:00:00.000Z", resultPath: "/work/result.json", outputPath: "/state/job.log" };
+  return { id: "job-1", request: { requestId: "request-1", workspace: "repo/repo", planPath: "docs/plan.md" }, status, createdAt: "2026-07-13T00:00:00.000Z", updatedAt: "2026-07-13T00:00:00.000Z", outputPath: "/state/job.log" };
 }
 test("persists, indexes and recovers job state", async () => {
   const stateDir = join(tmpdir(), `agent-relay-state-${process.pid}`);

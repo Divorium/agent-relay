@@ -11,7 +11,9 @@ Copy `.env.example` to `.env` and provide:
 - the absolute host path to Codex `auth.json`;
 - the host UID and GID that own the authentication file and runner workspace.
 
-Only `auth.json` is mounted into the Codex home directory, read-only. Do not mount the complete host `~/.codex` directory.
+Configure the same Relay bearer token as the repository Actions secret `AGENT_RELAY_TOKEN`. The Compose runner service does not receive this token; the workflow supplies it only to the client step.
+
+Only `auth.json` is mounted into the Codex home directory, read-only. Do not mount the complete host `~/.codex` directory. The launcher removes all generated agent-home content except `auth.json` before every execution.
 
 ## Start and verify
 
@@ -34,7 +36,6 @@ test "$(id -un)" = relay
 test "$(stat -c %a /var/lib/agent-relay)" = 700
 sudo -H -u agent -- test -r /home/agent/.codex/auth.json
 sudo -H -u agent -- test ! -w /home/agent/.codex/auth.json
-sudo -H -u agent -- test ! -e /home/agent/.codex/config.toml
 '
 ```
 
@@ -45,19 +46,25 @@ Use `.github/workflows/agent-relay.yml` in this repository or copy `examples/git
 Manual dispatch requires:
 
 - `pr_number`: the selected pull request number;
-- `plan_path`: the active ExecPlan path in that pull request.
+- `plan_path`: a regular, non-symlink Markdown file directly under `docs/exec-plans/active/`.
 
-There is no branch input, execution-mode input, or model result contract. The active plan is the sole task instruction.
+There is no branch input, execution-mode input, or model result contract. `.agent/PLANS.md` defines reusable plan behavior and the selected active plan is the sole task instruction.
 
 Before checkout, `/runner/resolve-pr.mjs` rejects the pull request unless it exists, is open, is not a draft, belongs to the target repository, and has valid head ref and SHA values. Checkout uses the API-derived head SHA. Commit and push target the API-derived head ref.
 
-The runner generates an opaque request ID for API idempotency. It is not included in the Codex prompt.
+The runner derives an idempotency key from repository, workflow-run, and run-attempt identifiers when available. It is not included in the Codex prompt.
 
 ## Credentials
 
-Checkout uses the selected token with `persist-credentials: false`. The workflow verifies that no authorization header, credential helper, or credential-bearing remote remains before invoking Relay. The push token is supplied again only to finalization.
+Checkout uses the selected token with `persist-credentials: false`. The workflow verifies that no authorization header, credential helper, or credential-bearing remote remains before invoking Relay.
 
-For normal source changes the workflow uses the job's `github.token`. When the plan may change `.github/workflows/`, configure `AGENT_RELAY_PUSH_TOKEN` with permission to update repository contents and workflow files.
+Credential lifetime is step-scoped:
+
+- the GitHub API token is supplied only to pull-request resolution;
+- the Relay bearer token is supplied only to the Relay client step;
+- the push token is supplied only to finalization.
+
+For normal source changes the workflow uses the job's `github.token` for checkout and finalization. When the plan may change `.github/workflows/`, configure `AGENT_RELAY_PUSH_TOKEN` with permission to update repository contents and workflow files.
 
 ## Logs and outcomes
 
@@ -97,6 +104,6 @@ test -n "$latest" && tail -n 200 "$latest"
 ## Credential rotation
 
 - Replace `RUNNER_TOKEN` when re-registering the runner.
-- Rotate `AGENT_RELAY_TOKEN` in `.env` and recreate both services.
+- Rotate `AGENT_RELAY_TOKEN` in `.env` and the repository Actions secret, then recreate the Relay service.
 - Refresh host `auth.json` when `codex login status` reports that it is not logged in.
 - Rotate `AGENT_RELAY_PUSH_TOKEN` independently when configured.

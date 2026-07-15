@@ -53,10 +53,10 @@ The runner independently uses `git status --porcelain` to determine whether work
 - The Relay bearer token is supplied only to the workflow client step; it is not part of the runner service environment.
 - The push token exists only in the finalization step and is consumed through a temporary askpass helper.
 - Codex receives no GitHub token, runner registration token, Relay token, Docker socket, or Relay state.
-- Codex receives a minimal allowlisted environment rather than the Relay process environment.
 - The packaged service always launches the root-owned wrapper as the fixed `agent` user; command and user overrides are not configuration inputs.
-- The host Codex `auth.json` file is mounted read-only. Other generated agent-home content is removed before each run.
-- Codex shell commands run under a restricted permissions profile that denies access to the agent home and makes repository Git metadata read-only.
+- The wrapper exclusively defines the final tool environment and clears generated agent-home state before each run while preserving the read-only `auth.json` mount.
+- The permissions profile denies the shared workspace root, Relay application directory, Relay home, and agent home; it re-allows writes only in the selected repository and reads only from that repository's Git metadata.
+- Image permissions independently prevent the `agent` user from reading `/app` and `/home/relay`.
 
 ## Configuration
 

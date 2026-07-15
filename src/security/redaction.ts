@@ -23,7 +23,7 @@ export class StreamingRedactor {
   private readonly decoder = new TextDecoder("utf-8");
   private pending = "";
 
-  write(chunk: Buffer): string {
+  write(chunk: Uint8Array): string {
     this.pending += this.decoder.decode(chunk, { stream: true });
     const lineBreak = Math.max(this.pending.lastIndexOf("\n"), this.pending.lastIndexOf("\r"));
     if (lineBreak < 0) return "";

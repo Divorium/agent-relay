@@ -71,7 +71,7 @@ jobs:
         with:
           ref: ${{ steps.pr.outputs.head_sha }}
           fetch-depth: 0
-          token: ${{ secrets.AGENT_RELAY_PUSH_TOKEN || github.token }}
+          token: ${{ github.token }}
           persist-credentials: false
 
       - name: Verify resolved revision
@@ -170,5 +170,5 @@ jobs:
         env:
           COMMIT_MESSAGE: ${{ steps.relay.outputs.commit_message }}
           TARGET_BRANCH: ${{ steps.pr.outputs.head_ref }}
-          GITHUB_PUSH_TOKEN: ${{ secrets.AGENT_RELAY_PUSH_TOKEN || github.token }}
+          GITHUB_PUSH_TOKEN: ${{ github.token }}
         run: /runner/finalize.sh

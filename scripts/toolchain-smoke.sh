@@ -42,7 +42,7 @@ case "$codex_version" in
     exit 1
     ;;
 esac
-codex --ask-for-approval never exec --sandbox danger-full-access --help >/dev/null
+codex --ask-for-approval never exec --help >/dev/null
 
 if command -v ssh >/dev/null 2>&1; then
   echo "OpenSSH must not be installed" >&2

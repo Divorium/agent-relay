@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$(id -un)" != "agent" ]]; then
+  echo "codex-run must execute as the isolated agent user" >&2
+  exit 1
+fi
+
+umask 0077
+agent_home=/home/agent
+codex_home="$agent_home/.codex"
+runtime_tmp=/tmp/agent-relay-runtime
+
+mkdir -p "$codex_home"
+find "$agent_home" -mindepth 1 -maxdepth 1 \
+  ! -name .cargo \
+  ! -name .rustup \
+  ! -name .codex \
+  -exec rm -rf -- {} +
+find "$codex_home" -mindepth 1 -maxdepth 1 ! -name auth.json -exec rm -rf -- {} +
+rm -rf -- "$runtime_tmp"
+mkdir -m 0700 "$runtime_tmp"
+git -C "$runtime_tmp" init --quiet
+mkdir -p "$runtime_tmp/.agents/workflows" "$runtime_tmp/.agents/skills"
+chmod 0700 "$runtime_tmp/.agents" "$runtime_tmp/.agents/workflows" "$runtime_tmp/.agents/skills"
+
+exec /usr/bin/env -i \
+  HOME=/home/agent \
+  USER=agent \
+  LOGNAME=agent \
+  SHELL=/bin/bash \
+  LANG=C.UTF-8 \
+  LC_ALL=C.UTF-8 \
+  JAVA_HOME=/opt/java/openjdk \
+  CARGO_HOME=/tmp/agent-relay-runtime/cargo \
+  RUSTUP_HOME=/home/agent/.rustup \
+  TMPDIR=/tmp/agent-relay-runtime \
+  TMP=/tmp/agent-relay-runtime \
+  TEMP=/tmp/agent-relay-runtime \
+  GIT_OPTIONAL_LOCKS=0 \
+  PATH=/opt/java/openjdk/bin:/usr/local/go/bin:/home/agent/.cargo/bin:/usr/local/bin:/usr/bin:/bin \
+  /usr/local/bin/codex "$@"

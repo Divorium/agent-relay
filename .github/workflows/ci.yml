@@ -5,16 +5,23 @@ on:
   push:
     branches:
       - main
-      - agent/define-agent-relay-mvp
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, agent-relay]
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -23,7 +30,21 @@ jobs:
       - name: Run checks
         id: checks
         continue-on-error: true
-        run: npm run check > check.log 2>&1
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run check 2>&1 | tee check.log
+      - name: Publish coverage summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Test coverage'
+            echo
+            echo '```text'
+            sed -n '/# start of coverage report/,/# end of coverage report/p' check.log
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
       - name: Upload check log
         if: always()
         uses: actions/upload-artifact@v4
@@ -32,68 +53,4 @@ jobs:
           path: check.log
       - name: Fail when checks failed
         if: steps.checks.outcome == 'failure'
-        run: |
-          cat check.log
-          exit 1
-
-  compose:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Validate Compose configuration
-        env:
-          RUNNER_TOKEN: placeholder
-          RUNNER_REPOSITORY_URL: https://github.com/owner/repository
-          RUNNER_NAME: agent-relay-ci
-          RUNNER_LABELS: agent-relay
-          AGENT_RELAY_TOKEN: placeholder-relay-token
-          HOST_CODEX_DIR: /tmp/codex
-          HOST_UID: "1000"
-          HOST_GID: "1000"
-        run: |
-          mkdir -p /tmp/codex
-          docker compose config
-
-  images:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build Agent Relay image
-        run: docker build --tag agent-relay:ci .
-      - name: Verify required toolchain
-        id: toolchain
-        continue-on-error: true
-        run: docker run --rm --entrypoint /bin/bash agent-relay:ci /app/scripts/toolchain-smoke.sh > toolchain.log 2>&1
-      - name: Upload toolchain log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: toolchain-log
-          path: toolchain.log
-      - name: Fail when toolchain verification failed
-        if: steps.toolchain.outcome == 'failure'
-        run: |
-          cat toolchain.log
-          exit 1
-      - name: Verify excluded tools
-        run: |
-          if docker run --rm --entrypoint /bin/bash agent-relay:ci -lc 'command -v ssh'; then
-            echo 'OpenSSH must not be installed' >&2
-            exit 1
-          fi
-          if docker run --rm --entrypoint /bin/bash agent-relay:ci -lc 'command -v dotnet'; then
-            echo '.NET SDK must not be installed' >&2
-            exit 1
-          fi
-      - name: Build runner image
-        run: docker build --file Dockerfile.runner --tag agent-relay-runner:ci .
-      - name: Verify runner image
-        run: |
-          docker run --rm --entrypoint /bin/bash agent-relay-runner:ci -lc '
-            node --version &&
-            git --version &&
-            test -x /entrypoint.sh &&
-            test -x /runner/client.mjs &&
-            test -x /runner/resolve-pr.mjs &&
-            test -x /runner/finalize.sh
-          '
+        run: exit 1

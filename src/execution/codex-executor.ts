@@ -11,6 +11,9 @@ export interface ExecutionOutcome { exitCode: number; }
 const ISOLATED_CODEX_HOME = "/home/agent/.codex";
 const RELAY_APPLICATION_ROOT = "/app";
 const RELAY_HOME = "/home/relay";
+const SYSTEM_TEMP_ROOT = "/tmp";
+const SYSTEM_VAR_TEMP_ROOT = "/var/tmp";
+const AGENT_TEMP_ROOT = "/tmp/agent-relay-runtime";
 
 export function createCodexEnvironment(): Record<string, string> {
   return {
@@ -30,6 +33,9 @@ export function createCodexArgs(workspace: string, prompt: string, workspaceRoot
     permission(ISOLATED_CODEX_HOME, "deny"),
     permission(RELAY_APPLICATION_ROOT, "deny"),
     permission(RELAY_HOME, "deny"),
+    permission(SYSTEM_TEMP_ROOT, "deny"),
+    permission(SYSTEM_VAR_TEMP_ROOT, "deny"),
+    permission(AGENT_TEMP_ROOT, "write"),
   ];
   if (resolvedRoot !== resolvedWorkspace) entries.push(permission(resolvedRoot, "deny"));
   entries.push(permission(resolvedWorkspace, "write"));

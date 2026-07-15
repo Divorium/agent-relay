@@ -67,15 +67,15 @@ The runner derives an idempotency key from repository, workflow-run, and run-att
 
 ## Credentials
 
-Checkout uses the selected token with `persist-credentials: false`. The workflow verifies that no authorization header, credential helper, or credential-bearing remote remains before invoking Relay.
+Checkout uses the job's `github.token` with `persist-credentials: false`. The workflow verifies that no authorization header, credential helper, or credential-bearing remote remains before invoking Relay.
 
 Credential lifetime is step-scoped:
 
-- the GitHub API token is supplied only to pull-request resolution;
+- `github.token` is supplied to pull-request resolution and checkout;
 - the Relay bearer token is supplied only to the Relay client step;
-- the push token is supplied only to finalization.
+- finalization receives `github.token` through the local `GITHUB_PUSH_TOKEN` environment variable and consumes it through a temporary askpass helper.
 
-For normal source changes the workflow uses the job's `github.token` for checkout and finalization. When the plan may change `.github/workflows/`, configure `AGENT_RELAY_PUSH_TOKEN` with permission to update repository contents and workflow files.
+No additional publication secret is required or supported by the workflow.
 
 ## Logs and outcomes
 
@@ -117,4 +117,3 @@ test -n "$latest" && tail -n 200 "$latest"
 - Replace `RUNNER_TOKEN` when re-registering the runner.
 - Rotate `AGENT_RELAY_TOKEN` in `.env` and the repository Actions secret, then recreate the Relay service.
 - Refresh host `auth.json` when `codex login status` reports that it is not logged in.
-- Rotate `AGENT_RELAY_PUSH_TOKEN` independently when configured.

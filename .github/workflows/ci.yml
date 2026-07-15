@@ -80,13 +80,14 @@ jobs:
         run: |
           docker run --rm --privileged --user root --entrypoint /bin/bash agent-relay:ci -lc '
             set -euxo pipefail
-            mkdir -p /tmp/codex-root/current /tmp/codex-root/sibling
-            chown -R agent:agent /tmp/codex-root
+            mkdir -p /tmp/codex-root/current /tmp/codex-root/sibling /tmp/agent-relay-runtime
+            chown -R agent:agent /tmp/codex-root /tmp/agent-relay-runtime
             runuser -u agent -- git -C /tmp/codex-root/current init
             printf sibling-private > /tmp/codex-root/sibling/private
-            printf stale-temp-state > /tmp/stale-agent-context
-            printf stale-var-temp-state > /var/tmp/stale-agent-context
-            chown agent:agent /tmp/codex-root/sibling/private /tmp/stale-agent-context /var/tmp/stale-agent-context
+            printf unrelated-temp > /tmp/unrelated-context
+            printf unrelated-var-temp > /var/tmp/unrelated-context
+            printf stale-runtime > /tmp/agent-relay-runtime/stale-context
+            chown agent:agent /tmp/codex-root/sibling/private /tmp/unrelated-context /var/tmp/unrelated-context /tmp/agent-relay-runtime/stale-context
             printf stale-codex-state > /home/agent/.codex/sentinel
             printf stale-tool-state > /home/agent/stale-context
             chown agent:agent /home/agent/.codex/sentinel /home/agent/stale-context
@@ -94,19 +95,21 @@ jobs:
               -c features.memories=false \
               -c "default_permissions=\"relay\"" \
               -c "permissions.relay.extends=\":workspace\"" \
-              -c "permissions.relay.filesystem={\"/home/agent/.codex\"=\"deny\",\"/app\"=\"deny\",\"/home/relay\"=\"deny\",\"/tmp/codex-root\"=\"deny\",\"/tmp/codex-root/current\"=\"write\",\"/tmp/codex-root/current/.git\"=\"read\"}" \
+              -c "permissions.relay.filesystem={\"/home/agent/.codex\"=\"deny\",\"/app\"=\"deny\",\"/home/relay\"=\"deny\",\"/tmp\"=\"deny\",\"/var/tmp\"=\"deny\",\"/tmp/agent-relay-runtime\"=\"write\",\"/tmp/codex-root\"=\"deny\",\"/tmp/codex-root/current\"=\"write\",\"/tmp/codex-root/current/.git\"=\"read\"}" \
               -c permissions.relay.network.enabled=true \
               sandbox -P relay -C /tmp/codex-root/current \
-              /bin/bash -lc "git status --short >/dev/null && test ! -r /home/agent/.codex/sentinel && test ! -r /tmp/codex-root/sibling/private && test ! -r /app/dist/src/server.js && touch workspace-write-ok && ! touch .git/sandbox-write-denied"
+              /bin/bash -lc "git status --short >/dev/null && test ! -r /home/agent/.codex/sentinel && test ! -r /tmp/codex-root/sibling/private && test ! -r /tmp/unrelated-context && test ! -r /var/tmp/unrelated-context && test ! -r /app/dist/src/server.js && touch /tmp/agent-relay-runtime/runtime-write-ok && touch workspace-write-ok && ! touch .git/sandbox-write-denied"
+            test -f /tmp/agent-relay-runtime/runtime-write-ok
             test -f /tmp/codex-root/current/workspace-write-ok
             test ! -e /tmp/codex-root/current/.git/sandbox-write-denied
             runuser -u agent -- test ! -r /app/dist/src/server.js
             su -s /bin/bash relay -c "cd /tmp/codex-root/current && sudo -H -u agent -- /usr/local/bin/codex-run --version"
             test -d /tmp/codex-root/current
+            test -d /tmp/agent-relay-runtime
+            test ! -e /tmp/agent-relay-runtime/stale-context
+            test ! -e /tmp/agent-relay-runtime/runtime-write-ok
             test ! -e /home/agent/.codex/sentinel
             test ! -e /home/agent/stale-context
-            test ! -e /tmp/stale-agent-context
-            test ! -e /var/tmp/stale-agent-context
           ' > isolation.log 2>&1
       - name: Upload isolation log
         if: always()

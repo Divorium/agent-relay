@@ -81,6 +81,7 @@ test("runner finalize rejects invalid branches and commit messages before commit
     { name: "invalid branch", branch: "bad branch", message: "Valid message", expected: /not a valid branch name|invalid branch/i },
     { name: "control character", branch: "agent/test-flow", message: "Bad\tmessage", expected: /control characters/ },
     { name: "overlong message", branch: "agent/test-flow", message: "x".repeat(121), expected: /at most 120/ },
+    { name: "overlong Unicode message", branch: "agent/test-flow", message: "🚀".repeat(121), expected: /at most 120/ },
   ]) {
     await t.test(currentCase.name, async () => {
       const current = await repositoryFixture(`validation-${currentCase.name}`);
@@ -99,6 +100,18 @@ test("runner finalize rejects invalid branches and commit messages before commit
         await rm(current.root, { recursive: true, force: true });
       }
     });
+  }
+});
+
+test("runner finalize accepts a 120-character Unicode commit message", async () => {
+  const current = await repositoryFixture("unicode-message");
+  try {
+    await writeFile(join(current.workspace, "tracked.txt"), "after\n");
+    const message = "🚀".repeat(120);
+    run(current.workspace, "bash", [join(process.cwd(), "runner", "finalize.sh")], finalizeEnv(current.workspace, current.branch, message));
+    assert.equal(run(current.workspace, "git", ["log", "-1", "--pretty=%s"]).trim(), message);
+  } finally {
+    await rm(current.root, { recursive: true, force: true });
   }
 });
 

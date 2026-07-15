@@ -14,12 +14,10 @@ fi
 
 : "${COMMIT_MESSAGE:?COMMIT_MESSAGE is required when the worktree changed}"
 : "${GITHUB_PUSH_TOKEN:?GITHUB_PUSH_TOKEN is required when the worktree changed}"
-case "$COMMIT_MESSAGE" in
-  *$'\n'*|*$'\r'*)
-    echo "COMMIT_MESSAGE must be one line" >&2
-    exit 1
-    ;;
-esac
+if (( ${#COMMIT_MESSAGE} > 120 )) || printf '%s' "$COMMIT_MESSAGE" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+  echo "COMMIT_MESSAGE must be one line without control characters and at most 120 characters" >&2
+  exit 1
+fi
 
 git diff --check
 git config user.name "github-actions[bot]"
@@ -32,6 +30,7 @@ if git diff --cached --quiet; then
 fi
 
 git diff --cached --check
+original_head="$(git rev-parse HEAD)"
 git commit -m "$COMMIT_MESSAGE"
 
 askpass="$(mktemp)"
@@ -50,4 +49,11 @@ esac
 SCRIPT
 chmod 0700 "$askpass"
 
+set +e
 GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 git -c credential.helper= push origin "HEAD:${TARGET_BRANCH}"
+push_status=$?
+set -e
+if (( push_status != 0 )); then
+  git reset --mixed "$original_head"
+  exit "$push_status"
+fi

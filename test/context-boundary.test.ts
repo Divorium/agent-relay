@@ -106,6 +106,8 @@ test("packaging exposes only current per-run context", async () => {
   assert.doesNotMatch(compose, /HOST_CODEX_DIR|:\/home\/agent\/\.codex\s*$/m);
 
   assert.match(dockerfile, /chmod 0700 \/var\/lib\/agent-relay \/home\/agent\/\.codex \/home\/relay/);
+  assert.match(dockerfile, /chown -R root:root \/home\/agent\/\.cargo \/home\/agent\/\.rustup/);
+  assert.match(dockerfile, /chmod -R a-w \/home\/agent\/\.cargo \/home\/agent\/\.rustup/);
   assert.match(dockerfile, /chmod -R o-rwx \/app/);
   assert.match(dockerfile, /relay ALL=\(agent\) NOPASSWD: \/usr\/local\/bin\/codex-run/);
   assert.match(launcher, /umask 0077/);
@@ -114,6 +116,8 @@ test("packaging exposes only current per-run context", async () => {
   assert.match(launcher, /runtime_tmp=\/tmp\/agent-relay-runtime/);
   assert.match(launcher, /rm -rf -- "\$runtime_tmp"/);
   assert.match(launcher, /mkdir -m 0700 "\$runtime_tmp"/);
+  assert.match(launcher, /CARGO_HOME=\/tmp\/agent-relay-runtime\/cargo/);
+  assert.match(launcher, /RUSTUP_HOME=\/home\/agent\/\.rustup/);
   assert.match(launcher, /TMPDIR=\/tmp\/agent-relay-runtime/);
   assert.match(launcher, /exec \/usr\/bin\/env -i/);
   assert.doesNotMatch(launcher, /\.agent-relay|result\.json/);
@@ -125,11 +129,14 @@ test("packaging exposes only current per-run context", async () => {
   assert.doesNotMatch(dockerignore, /\.agent-relay/);
 
   assert.match(ci, /docker run --rm --privileged --user root/);
+  assert.match(ci, /chmod 4755 "\$bwrap_path"/);
   assert.match(ci, /test ! -r \/tmp\/unrelated-context/);
   assert.match(ci, /test ! -r \/var\/tmp\/unrelated-context/);
   assert.match(ci, /touch \/tmp\/agent-relay-runtime\/runtime-write-ok/);
   assert.match(ci, /test ! -r \/tmp\/codex-root\/sibling\/private/);
   assert.match(ci, /test ! -r \/app\/dist\/src\/server\.js/);
+  assert.match(ci, /test ! -w \/home\/agent\/\.cargo/);
+  assert.match(ci, /test ! -w \/home\/agent\/\.rustup/);
   assert.match(ci, /touch \.git\/sandbox-write-denied/);
   assert.match(ci, /test ! -e \/home\/agent\/stale-context/);
   assert.match(ci, /test ! -e \/tmp\/agent-relay-runtime\/stale-context/);

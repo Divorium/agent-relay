@@ -2,7 +2,7 @@
 
 Agent Relay is a self-hosted bridge between a repository-scoped GitHub Actions runner and Codex CLI.
 
-A GitHub Actions workflow resolves an open, ready pull request, checks out its exact head revision without persisting credentials, and asks Agent Relay to execute Codex in the shared workspace. Codex edits the repository, runs commands available in the packaged task environment, and keeps the active ExecPlan current. Relay derives the technical job outcome from the child process. The runner decides from Git whether changes exist, derives a commit message from the active plan, and pushes through a finalization-only credential.
+A GitHub Actions workflow resolves an open, ready pull request, checks out its exact head revision without persisting credentials, and asks Agent Relay to execute Codex in the shared workspace. Codex edits the repository, runs commands available in the packaged task environment, and keeps the active ExecPlan current. Relay derives the technical job outcome from the child process. The runner derives a commit message from the active plan, and the finalizer commits and pushes only when Git reports repository changes.
 
 ## Components
 
@@ -45,7 +45,7 @@ Codex does not write a control or result artifact. Relay classifies execution fr
 - execution deadline: `timed_out`;
 - recovered in-flight job after restart: `interrupted`.
 
-The runner independently uses `git status --porcelain` to determine whether work exists. A terminal `completed` job with a clean worktree is treated as a failed implementation run, not as a successful no-op. When changes exist, the runner derives the commit message from the first level-one heading in the active ExecPlan, with `Apply active ExecPlan` as the fallback.
+A terminal `completed` job is successful whether or not the worktree changed. The finalizer uses Git as the source of truth: a clean worktree exits successfully without a commit, while a changed worktree is validated, committed, and pushed. The runner derives the commit message from the first non-empty level-one heading in the active ExecPlan, normalizes it to one line, limits it to 120 Unicode characters, and uses `Apply active ExecPlan` as the fallback.
 
 ## Security boundary
 
@@ -80,24 +80,14 @@ MAX_OUTPUT_BYTES=10000000
 
 ## Automated validation
 
-Mandatory pull-request CI runs on the existing containerized self-hosted runner:
+Mandatory pull-request validation runs:
 
 ```bash
 npm ci
 npm run check
 ```
 
-This suite covers type safety, application and runner behavior, failure paths, shell syntax, workflow contracts, packaging structure, Dockerfile `COPY` sources, Compose isolation contracts, and the instruction boundary. It does not claim to build or run Docker images because the runner container has no Docker daemon or socket.
-
-## Docker integration validation
-
-The original Compose, image-build, toolchain, excluded-tool, and runner-image checks are retained in:
-
-```bash
-bash scripts/host-validation.sh
-```
-
-Run this script explicitly on the Docker host when packaging or deployment files change. No GitHub workflow routes to the host, and this manual gate is not reported as automated CI coverage.
+The suite validates repository-owned TypeScript, shell scripts, runner behavior, HTTP contracts, failure paths, workflow text contracts, packaging definitions, persistence, path boundaries, and redaction. Tests use local fixtures only and do not invoke or validate Docker, Compose, GitHub APIs, hosted runners, network services, or credentials.
 
 Operational setup, dispatch, recovery, logs, and credential rotation are documented in `docs/operations/README.md`.
 

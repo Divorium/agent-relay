@@ -39,64 +39,43 @@ test("create-job contract has one active-plan instruction channel", () => {
   assert.throws(() => validateCreateJobRequest({ ...request, planPath: "docs/other.md" }), /docs\/exec-plans\/active/);
 });
 
-test("Codex environment is a minimal allowlist", () => {
+test("executor passes only locale to the root-owned launcher", () => {
   assert.deepEqual(createCodexEnvironment({
-    PATH: "/usr/bin",
+    PATH: "/host/bin",
     HOME: "/home/relay",
-    USER: "relay",
-    LOGNAME: "relay",
-    SHELL: "/bin/bash",
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
-    JAVA_HOME: "/opt/java/openjdk",
-    CARGO_HOME: "/home/agent/.cargo",
-    RUSTUP_HOME: "/home/agent/.rustup",
-    TERM: "xterm",
-    TMPDIR: "/host/tmp",
-    PYTHONPATH: "/host/python",
-    VIRTUAL_ENV: "/host/venv",
-    GOPATH: "/host/go",
-    SSL_CERT_FILE: "/host/cert.pem",
-    NODE_EXTRA_CA_CERTS: "/host/node-ca.pem",
+    JAVA_HOME: "/host/java",
     AGENT_RELAY_TOKEN: "relay-secret",
-    SHARED_WORKSPACE_ROOT: "/runner/_work",
-    AGENT_RELAY_STATE_DIR: "/var/lib/agent-relay",
-    CODEX_TIMEOUT_MS: "1000",
     GITHUB_TOKEN: "github-secret",
-    RUNNER_TOKEN: "runner-secret",
-    GITHUB_RUN_ID: "123",
-    APPLICATION_MODE: "internal",
   }), {
-    PATH: "/usr/bin",
-    HOME: "/home/relay",
-    USER: "relay",
-    LOGNAME: "relay",
-    SHELL: "/bin/bash",
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
-    JAVA_HOME: "/opt/java/openjdk",
-    CARGO_HOME: "/home/agent/.cargo",
-    RUSTUP_HOME: "/home/agent/.rustup",
   });
 });
 
-test("Codex arguments deny Codex home and make repository Git metadata read-only", () => {
-  const args = createCodexArgs("/work/repository", "task prompt");
-  assert.ok(args.includes("default_permissions=\"relay\""));
-  assert.ok(args.includes("permissions.relay.extends=\":workspace\""));
-  assert.ok(args.includes("permissions.relay.filesystem={\"/home/agent/.codex\"=\"deny\",\"/work/repository/.git\"=\"read\"}"));
+test("Codex arguments isolate the selected repository", () => {
+  const args = createCodexArgs("/work/root/repository", "task prompt", "/work/root");
+  const filesystem = args.find((value) => value.startsWith("permissions.relay.filesystem="));
+  assert.ok(filesystem);
+  assert.match(filesystem, /"\/home\/agent\/\.codex"="deny"/);
+  assert.match(filesystem, /"\/app"="deny"/);
+  assert.match(filesystem, /"\/home\/relay"="deny"/);
+  assert.match(filesystem, /"\/work\/root"="deny"/);
+  assert.match(filesystem, /"\/work\/root\/repository"="write"/);
+  assert.match(filesystem, /"\/work\/root\/repository\/\.git"="read"/);
   assert.ok(args.includes("permissions.relay.network.enabled=true"));
   assert.ok(!args.includes("danger-full-access"));
 });
 
-test("packaged execution uses the fixed launcher and isolated local user", async () => {
+test("packaged execution uses the fixed launcher, user and workspace root", async () => {
   assert.deepEqual(createCodexInvocation("/usr/local/bin/codex-run", ["exec"], "agent"), {
     command: "/usr/bin/sudo",
     args: ["-H", "-u", "agent", "--", "/usr/local/bin/codex-run", "exec"],
   });
   const server = await readFile("src/server.ts", "utf8");
   const config = await readFile("src/config/config.ts", "utf8");
-  assert.match(server, /"\/usr\/local\/bin\/codex-run"[\s\S]*"agent"/);
+  assert.match(server, /"\/usr\/local\/bin\/codex-run"[\s\S]*"agent"[\s\S]*config\.workspaceRoot/);
   assert.doesNotMatch(config, /CODEX_COMMAND|CODEX_RUN_AS_USER|codexCommand|codexRunAsUser/);
 });
 
@@ -129,8 +108,8 @@ test("packaging exposes only current per-run context", async () => {
   assert.match(compose, /HOST_CODEX_AUTH_FILE.*:\/home\/agent\/\.codex\/auth\.json:ro/);
   assert.doesNotMatch(compose, /HOST_CODEX_DIR|:\/home\/agent\/\.codex\s*$/m);
 
-  assert.match(dockerfile, /USER relay/);
-  assert.match(dockerfile, /chmod 0700 \/var\/lib\/agent-relay \/home\/agent\/\.codex/);
+  assert.match(dockerfile, /chmod 0700 \/var\/lib\/agent-relay \/home\/agent\/\.codex \/home\/relay/);
+  assert.match(dockerfile, /chmod -R o-rwx \/app/);
   assert.match(dockerfile, /relay ALL=\(agent\) NOPASSWD: \/usr\/local\/bin\/codex-run/);
   assert.match(launcher, /umask 0077/);
   assert.match(launcher, /find "\$codex_home"[\s\S]*! -name auth\.json[\s\S]*rm -rf/);
@@ -143,8 +122,8 @@ test("packaging exposes only current per-run context", async () => {
   assert.doesNotMatch(gitignore, /\.agent-relay/);
   assert.doesNotMatch(dockerignore, /\.agent-relay/);
 
-  assert.match(ci, /Verify isolated Codex boundary/);
-  assert.match(ci, /test ! -r \/home\/agent\/\.codex\/sentinel/);
+  assert.match(ci, /test ! -r \/tmp\/codex-root\/sibling\/private/);
+  assert.match(ci, /test ! -r \/app\/dist\/src\/server\.js/);
   assert.match(ci, /touch \.git\/sandbox-write-denied/);
   assert.match(ci, /test ! -e \/home\/agent\/\.codex\/sentinel/);
 });

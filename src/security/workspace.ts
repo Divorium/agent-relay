@@ -1,4 +1,4 @@
-import { lstat, realpath, stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import { RelayError } from "../contracts/errors.js";
 
@@ -32,18 +32,18 @@ export async function assertActivePlanFile(workspace: string, planPath: string):
     throw new RelayError("INVALID_REQUEST", "Active ExecPlan must be a direct file under docs/exec-plans/active", 400);
   }
 
-  let info;
+  let resolvedCandidate: string;
   try {
-    info = await lstat(candidate);
+    resolvedCandidate = await realpath(candidate);
   } catch {
     throw new RelayError("INVALID_REQUEST", "Active ExecPlan does not exist", 400);
   }
-  if (!info.isFile() || info.isSymbolicLink()) {
-    throw new RelayError("INVALID_REQUEST", "Active ExecPlan must be a regular file", 400);
-  }
-
-  const resolvedCandidate = await realpath(candidate);
   if (resolvedCandidate !== candidate) {
     throw new RelayError("INVALID_REQUEST", "Active ExecPlan must not traverse symbolic links", 400);
+  }
+
+  const info = await stat(resolvedCandidate);
+  if (!info.isFile()) {
+    throw new RelayError("INVALID_REQUEST", "Active ExecPlan must be a regular file", 400);
   }
 }

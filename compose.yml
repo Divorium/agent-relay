@@ -13,7 +13,6 @@ services:
       RUNNER_NAME: ${RUNNER_NAME:-agent-relay-runner}
       RUNNER_LABELS: ${RUNNER_LABELS:-agent-relay}
       AGENT_RELAY_URL: http://agent-relay:8080
-      AGENT_RELAY_TOKEN: ${AGENT_RELAY_TOKEN}
     volumes:
       - workspace:/runner/_work
     networks:
@@ -39,7 +38,7 @@ services:
     volumes:
       - workspace:/runner/_work
       - relay-state:/var/lib/agent-relay
-      - ${HOST_CODEX_DIR}:/home/agent/.codex
+      - ${HOST_CODEX_AUTH_FILE}:/home/agent/.codex/auth.json:ro
     networks:
       - relay
     expose:

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { appendFile, readFile, rm } from "node:fs/promises";
-import { spawnSync } from "node:child_process";
+import { appendFile, lstat, readFile, realpath } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { relative, resolve, sep } from "node:path";
 
 const baseUrl = process.env.AGENT_RELAY_URL ?? "http://agent-relay:8080";
 const token = process.env.AGENT_RELAY_TOKEN;
@@ -8,18 +9,18 @@ if (!token) throw new Error("AGENT_RELAY_TOKEN is required");
 const workspace = process.env.GITHUB_WORKSPACE;
 const workspaceRoot = process.env.AGENT_RELAY_WORKSPACE_ROOT ?? "/runner/_work";
 const planPath = process.env.AGENT_RELAY_PLAN_PATH;
-const mode = process.env.AGENT_RELAY_MODE ?? "implement";
-const requestId = process.env.AGENT_RELAY_REQUEST_ID ?? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
-if (!workspace || !planPath) throw new Error("GITHUB_WORKSPACE and AGENT_RELAY_PLAN_PATH are required");
+const githubOutput = process.env.GITHUB_OUTPUT;
+if (!workspace || !planPath || !githubOutput) {
+  throw new Error("GITHUB_WORKSPACE, AGENT_RELAY_PLAN_PATH and GITHUB_OUTPUT are required");
+}
 
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
-const SECRET_PATTERNS = [
-  /gh[pousr]_[A-Za-z0-9_]{20,}/g,
-  /github_pat_[A-Za-z0-9_]{20,}/g,
-  /sk-[A-Za-z0-9_-]{20,}/g,
-  /(authorization\s*[:=]\s*bearer\s+)[^\s"']+/gi,
-  /("?(?:token|password|secret|apiKey|api_key)"?\s*[:=]\s*(?:["']?))[^\s,"']+((?:["']?))/gi,
-];
+const CONTROL_CHARACTERS_GLOBAL = /[\u0000-\u001f\u007f]/g;
+const ACTIVE_PLAN_PATH = /^docs\/exec-plans\/active\/[A-Za-z0-9._-]+\.md$/;
+const JOB_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/;
+const JOB_STATUSES = new Set(["accepted", "running", "completed", "failed", "timed_out", "interrupted"]);
+const ACTIVE_JOB_STATUSES = new Set(["accepted", "running"]);
+const MAX_RESPONSE_BYTES = 64_000;
 
 function positiveInteger(name, fallback) {
   const raw = process.env[name];
@@ -28,18 +29,18 @@ function positiveInteger(name, fallback) {
   return value;
 }
 
+function requestId() {
+  if (process.env.AGENT_RELAY_REQUEST_ID) return process.env.AGENT_RELAY_REQUEST_ID;
+  const parts = [process.env.GITHUB_REPOSITORY_ID, process.env.GITHUB_RUN_ID, process.env.GITHUB_RUN_ATTEMPT];
+  if (parts.every((part) => typeof part === "string" && /^[1-9][0-9]*$/.test(part))) {
+    return `gha-${parts.join("-")}`;
+  }
+  return randomUUID();
+}
+
 const requestTimeoutMs = positiveInteger("AGENT_RELAY_REQUEST_TIMEOUT_MS", 30_000);
 const pollIntervalMs = positiveInteger("AGENT_RELAY_POLL_INTERVAL_MS", 5_000);
 const pollTimeoutMs = positiveInteger("AGENT_RELAY_POLL_TIMEOUT_MS", 21_900_000);
-
-function asObject(value, name) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${name} must be an object`);
-  return value;
-}
-
-function strictKeys(value, allowed, name) {
-  for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`Unknown ${name} field: ${key}`);
-}
 
 function requiredString(value, name, maxLength) {
   if (typeof value !== "string" || value.length === 0 || value.length > maxLength || CONTROL_CHARACTERS.test(value)) {
@@ -48,69 +49,76 @@ function requiredString(value, name, maxLength) {
   return value;
 }
 
-function stringArray(value, name, maxItems, maxLength) {
-  if (!Array.isArray(value) || value.length > maxItems) throw new Error(`Invalid ${name}`);
-  return value.map((item, index) => requiredString(item, `${name}[${index}]`, maxLength));
+function normalizedCommitSubject(value) {
+  const normalized = value.replace(CONTROL_CHARACTERS_GLOBAL, " ").replace(/\s+/gu, " ").trim();
+  return Array.from(normalized).slice(0, 120).join("").trim();
 }
 
-function validateValidation(value, index) {
-  const record = asObject(value, `validation[${index}]`);
-  strictKeys(record, new Set(["command", "status", "exitCode", "details"]), `validation[${index}]`);
-  const command = requiredString(record.command, `validation[${index}].command`, 500);
-  if (!["passed", "failed", "skipped"].includes(record.status)) throw new Error(`Invalid validation[${index}].status`);
-  const details = requiredString(record.details, `validation[${index}].details`, 2000);
-  if (record.exitCode !== undefined && (!Number.isInteger(record.exitCode) || record.exitCode < 0 || record.exitCode > 255)) {
-    throw new Error(`Invalid validation[${index}].exitCode`);
+function deriveCommitMessage(plan) {
+  const heading = plan.split(/\r?\n/u).find((line) => /^#[ \t]+\S/u.test(line));
+  const source = heading ? heading.replace(/^#[ \t]+/u, "") : "";
+  return requiredString(normalizedCommitSubject(source) || "Apply active ExecPlan", "commitMessage", 120);
+}
+
+function isOutside(root, candidate) {
+  const path = relative(root, candidate);
+  return path === ".." || path.startsWith(`..${sep}`) || resolve(root, path) !== candidate;
+}
+
+async function resolvePlanFile(resolvedWorkspace, requestedPlanPath) {
+  if (!ACTIVE_PLAN_PATH.test(requestedPlanPath)) {
+    throw new Error("AGENT_RELAY_PLAN_PATH must identify a file directly under docs/exec-plans/active");
   }
-  return { command, status: record.status, ...(record.exitCode === undefined ? {} : { exitCode: record.exitCode }), details };
+  const activeRoot = resolve(resolvedWorkspace, "docs", "exec-plans", "active");
+  const candidate = resolve(resolvedWorkspace, requestedPlanPath);
+  const path = relative(activeRoot, candidate);
+  if (!path || path.includes(sep) || isOutside(activeRoot, candidate)) throw new Error("Invalid active ExecPlan path");
+  const info = await lstat(candidate);
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error("Active ExecPlan must be a regular file");
+  if (await realpath(candidate) !== candidate) throw new Error("Active ExecPlan must not traverse symbolic links");
+  return candidate;
 }
 
-function assertNoSensitiveData(value) {
-  const serialized = JSON.stringify(value);
-  if (/auth\.json|\.ssh\/|BEGIN [A-Z ]*PRIVATE KEY/i.test(serialized)) throw new Error("Result contains sensitive data");
-  for (const pattern of SECRET_PATTERNS) {
-    pattern.lastIndex = 0;
-    if (pattern.test(serialized)) throw new Error("Result contains sensitive data");
+async function readBoundedText(response) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null) {
+    const parsed = Number(contentLength);
+    if (Number.isFinite(parsed) && parsed > MAX_RESPONSE_BYTES) {
+      throw new Error(`Agent Relay response exceeded ${MAX_RESPONSE_BYTES} bytes`);
+    }
   }
-}
+  if (!response.body) return "";
 
-function validateResult(value) {
-  assertNoSensitiveData(value);
-  const result = asObject(value, "result");
-  strictKeys(result, new Set(["schemaVersion", "requestId", "status", "commitMessage", "summary", "validation", "blockers", "limitations"]), "result");
-  if (result.schemaVersion !== 1 || result.requestId !== requestId) throw new Error("Result contract mismatch");
-  if (result.status !== "completed" && result.status !== "blocked") throw new Error("Invalid result status");
-
-  const summary = requiredString(result.summary, "summary", 4000);
-  if (!Array.isArray(result.validation) || result.validation.length > 100) throw new Error("Invalid validation");
-  const validation = result.validation.map(validateValidation);
-  const blockers = stringArray(result.blockers, "blockers", 50, 2000);
-  const limitations = stringArray(result.limitations, "limitations", 50, 2000);
-
-  let commitMessage;
-  if (result.status === "completed") {
-    commitMessage = requiredString(result.commitMessage, "commitMessage", 120);
-    if (commitMessage.includes("\n") || commitMessage.includes("\r")) throw new Error("Invalid commitMessage");
-  } else if (result.commitMessage !== undefined) {
-    throw new Error("Unexpected commitMessage");
+  const reader = response.body.getReader();
+  const chunks = [];
+  let bytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = Buffer.from(value);
+    bytes += chunk.length;
+    if (bytes > MAX_RESPONSE_BYTES) {
+      await reader.cancel();
+      throw new Error(`Agent Relay response exceeded ${MAX_RESPONSE_BYTES} bytes`);
+    }
+    chunks.push(chunk);
   }
-
-  return {
-    schemaVersion: 1,
-    requestId,
-    status: result.status,
-    ...(commitMessage === undefined ? {} : { commitMessage }),
-    summary,
-    validation,
-    blockers,
-    limitations,
-  };
+  return Buffer.concat(chunks, bytes).toString("utf8");
 }
 
-async function fetchJson(url, options = {}) {
+function hasJsonContentType(response) {
+  const contentType = response.headers.get("content-type") ?? "";
+  return /^application\/(?:[A-Za-z0-9!#$&^_.+-]+\+)?json(?:\s*;|$)/i.test(contentType);
+}
+
+async function fetchJson(url, expectedStatus, options = {}) {
   const response = await fetch(url, { ...options, signal: AbortSignal.timeout(requestTimeoutMs) });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`Agent Relay request failed: ${response.status} ${text}`);
+  const text = await readBoundedText(response);
+  if (response.status !== expectedStatus) {
+    throw new Error(`Agent Relay request failed with HTTP ${response.status}`);
+  }
+  if (!hasJsonContentType(response)) throw new Error("Agent Relay returned a non-JSON content type");
+  if (!text.trim()) throw new Error("Agent Relay returned an empty JSON response");
   try {
     return JSON.parse(text);
   } catch {
@@ -118,53 +126,60 @@ async function fetchJson(url, options = {}) {
   }
 }
 
-function logJobStatus(job) {
-  console.log(`Agent Relay job ${String(job.id ?? "unknown")}: ${String(job.status ?? "unknown")}`);
+function validateJob(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Agent Relay returned an invalid job object");
+  }
+  const job = value;
+  if (typeof job.id !== "string" || !JOB_ID.test(job.id)) throw new Error("Agent Relay returned an invalid job id");
+  if (typeof job.status !== "string" || !JOB_STATUSES.has(job.status)) {
+    throw new Error("Agent Relay returned an invalid job status");
+  }
+  if (job.errorCode !== undefined) requiredString(job.errorCode, "job.errorCode", 256);
+  if (job.errorMessage !== undefined) requiredString(job.errorMessage, "job.errorMessage", 2048);
+  return job;
 }
 
-const normalizedRoot = workspaceRoot.replace(/\/$/, "");
-const workspacePrefix = `${normalizedRoot}/`;
-if (!workspace.startsWith(workspacePrefix)) throw new Error(`GITHUB_WORKSPACE must be below ${workspacePrefix}`);
-const relativeWorkspace = workspace.slice(workspacePrefix.length);
+function logJobStatus(job) {
+  console.log(`Agent Relay job ${job.id}: ${job.status}`);
+}
+
+const resolvedRoot = await realpath(workspaceRoot);
+const resolvedWorkspace = await realpath(workspace);
+if (isOutside(resolvedRoot, resolvedWorkspace)) throw new Error("GITHUB_WORKSPACE must be below AGENT_RELAY_WORKSPACE_ROOT");
+const relativeWorkspace = relative(resolvedRoot, resolvedWorkspace).split(sep).join("/");
 if (!relativeWorkspace) throw new Error("GITHUB_WORKSPACE does not identify a repository workspace");
 
+const planFile = await resolvePlanFile(resolvedWorkspace, planPath);
+const commitMessage = deriveCommitMessage(await readFile(planFile, "utf8"));
+await appendFile(githubOutput, "", "utf8");
+
 const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
-let job = await fetchJson(`${baseUrl}/v1/jobs`, {
+let job = validateJob(await fetchJson(`${baseUrl}/v1/jobs`, 202, {
   method: "POST",
   headers,
-  body: JSON.stringify({ requestId, workspace: relativeWorkspace, planPath, mode }),
-});
+  body: JSON.stringify({ requestId: requestId(), workspace: relativeWorkspace, planPath }),
+}));
 logJobStatus(job);
 let previousStatus = job.status;
 
 const pollDeadline = Date.now() + pollTimeoutMs;
-while (["accepted", "running"].includes(job.status)) {
+while (ACTIVE_JOB_STATUSES.has(job.status)) {
+  const remaining = pollDeadline - Date.now();
+  if (remaining <= 0) throw new Error(`Agent Relay polling timed out after ${pollTimeoutMs}ms`);
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, Math.min(pollIntervalMs, remaining)));
   if (Date.now() >= pollDeadline) throw new Error(`Agent Relay polling timed out after ${pollTimeoutMs}ms`);
-  await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-  job = await fetchJson(`${baseUrl}/v1/jobs/${job.id}`, { headers: { authorization: `Bearer ${token}` } });
+  job = validateJob(await fetchJson(`${baseUrl}/v1/jobs/${job.id}`, 200, {
+    headers: { authorization: `Bearer ${token}` },
+  }));
   if (job.status !== previousStatus) {
     logJobStatus(job);
     previousStatus = job.status;
   }
 }
 
-if (job.status !== "completed" && job.status !== "blocked") {
+if (job.status !== "completed") {
   throw new Error(`Agent Relay job failed: ${job.status} ${job.errorCode ?? ""} ${job.errorMessage ?? ""}`);
 }
 
-const result = validateResult(JSON.parse(await readFile(`${workspace}/.agent-relay/result.json`, "utf8")));
-if (result.status === "blocked") throw new Error(`Codex blocked: ${result.blockers.join("; ")}`);
-const diff = spawnSync("git", ["status", "--porcelain"], { cwd: workspace, encoding: "utf8" });
-if (diff.status !== 0) throw new Error(diff.stderr || "git status failed");
-const hasChanges = diff.stdout.trim().length > 0;
-await rm(`${workspace}/.agent-relay`, { recursive: true, force: true });
-
-console.log(`Codex summary: ${result.summary}`);
-for (const validation of result.validation) {
-  console.log(`Validation ${validation.status}: ${validation.command} - ${validation.details}`);
-}
-
-if (!hasChanges) process.exit(0);
-const githubOutput = process.env.GITHUB_OUTPUT;
-if (!githubOutput) throw new Error("GITHUB_OUTPUT is required when the worktree changed");
-await appendFile(githubOutput, `commit_message=${result.commitMessage}\n`, "utf8");
+await appendFile(githubOutput, `commit_message=${commitMessage}\n`, "utf8");

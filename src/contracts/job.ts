@@ -1,19 +1,13 @@
-export const EXECUTION_MODES = ["implement", "revise", "finalize"] as const;
-export type ExecutionMode = (typeof EXECUTION_MODES)[number];
-
 export interface CreateJobRequest {
   requestId: string;
   workspace: string;
   planPath: string;
-  mode: ExecutionMode;
-  reviewFindings?: string[];
 }
 
 export type JobStatus =
   | "accepted"
   | "running"
   | "completed"
-  | "blocked"
   | "failed"
   | "timed_out"
   | "interrupted";
@@ -29,6 +23,5 @@ export interface JobRecord {
   exitCode?: number;
   errorCode?: string;
   errorMessage?: string;
-  resultPath: string;
   outputPath: string;
 }

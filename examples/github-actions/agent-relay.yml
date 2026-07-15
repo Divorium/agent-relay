@@ -14,15 +14,6 @@ on:
         description: Active ExecPlan path in the pull request workspace
         required: true
         type: string
-      mode:
-        description: Agent Relay execution mode
-        required: true
-        default: implement
-        type: choice
-        options:
-          - implement
-          - revise
-          - finalize
 
 permissions:
   contents: write
@@ -44,18 +35,15 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
           INPUT_PR_NUMBER: ${{ inputs.pr_number }}
-          INPUT_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
 
           case "${EVENT_NAME}" in
             pull_request)
               pr_number="${EVENT_PR_NUMBER}"
-              mode="implement"
               ;;
             workflow_dispatch)
               pr_number="${INPUT_PR_NUMBER}"
-              mode="${INPUT_MODE}"
               ;;
             *)
               echo "Unsupported event: ${EVENT_NAME}" >&2
@@ -68,15 +56,7 @@ jobs:
             exit 1
           fi
 
-          case "${mode}" in
-            implement|revise|finalize) ;;
-            *)
-              echo "Unsupported Agent Relay mode: ${mode}" >&2
-              exit 1
-              ;;
-          esac
-
-          printf 'pr_number=%s\nmode=%s\n' "${pr_number}" "${mode}" >> "${GITHUB_OUTPUT}"
+          printf 'pr_number=%s\n' "${pr_number}" >> "${GITHUB_OUTPUT}"
 
       - name: Resolve ready pull request
         id: pr
@@ -91,14 +71,30 @@ jobs:
         with:
           ref: ${{ steps.pr.outputs.head_sha }}
           fetch-depth: 0
-          token: ${{ secrets.AGENT_RELAY_PUSH_TOKEN || github.token }}
-          persist-credentials: true
+          token: ${{ github.token }}
+          persist-credentials: false
 
       - name: Verify resolved revision
         shell: bash
         env:
           EXPECTED_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD_SHA}"
+
+      - name: Verify credential-free checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null; then
+            echo "Checkout credentials must not remain in the repository config" >&2
+            exit 1
+          fi
+          remote_url="$(git remote get-url origin)"
+          case "${remote_url}" in
+            *://*@*)
+              echo "The repository remote must not contain embedded credentials" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Resolve active ExecPlan
         id: plan
@@ -138,29 +134,20 @@ jobs:
             exit 1
           fi
 
-          if [[ ! -f "${plan_path}" ]]; then
-            echo "ExecPlan does not exist: ${plan_path}" >&2
+          if [[ ! -f "${plan_path}" || -L "${plan_path}" ]]; then
+            echo "ExecPlan must be a regular, non-symlink file: ${plan_path}" >&2
             exit 1
           fi
 
           printf 'plan_path=%s\n' "${plan_path}" >> "${GITHUB_OUTPUT}"
-
-      - name: Exclude relay artifact
-        shell: bash
-        run: |
-          mkdir -p .agent-relay
-          printf '%s\n' '.agent-relay/' >> .git/info/exclude
-          rm -f .agent-relay/result.json
 
       - name: Run Codex through Agent Relay
         id: relay
         continue-on-error: true
         shell: bash
         env:
+          AGENT_RELAY_TOKEN: ${{ secrets.AGENT_RELAY_TOKEN }}
           AGENT_RELAY_PLAN_PATH: ${{ steps.plan.outputs.plan_path }}
-          AGENT_RELAY_MODE: ${{ steps.request.outputs.mode }}
-          AGENT_RELAY_REQUEST_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
-          AGENT_RELAY_OUTPUT_ARCHIVE_PATH: ${{ runner.temp }}/agent-relay-output.log
         run: |
           set -o pipefail
           node /runner/client.mjs 2>&1 | tee "${RUNNER_TEMP}/agent-relay-console.log"
@@ -170,9 +157,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: agent-relay-output
-          path: |
-            ${{ runner.temp }}/agent-relay-output.log
-            ${{ runner.temp }}/agent-relay-console.log
+          path: ${{ runner.temp }}/agent-relay-console.log
           if-no-files-found: warn
 
       - name: Fail when Agent Relay failed
@@ -185,4 +170,5 @@ jobs:
         env:
           COMMIT_MESSAGE: ${{ steps.relay.outputs.commit_message }}
           TARGET_BRANCH: ${{ steps.pr.outputs.head_ref }}
+          GITHUB_PUSH_TOKEN: ${{ github.token }}
         run: /runner/finalize.sh

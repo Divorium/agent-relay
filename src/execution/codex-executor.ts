@@ -1,23 +1,72 @@
 import { spawn } from "node:child_process";
-import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { RelayError } from "../contracts/errors.js";
 import type { CreateJobRequest } from "../contracts/job.js";
-import { validateCodexResult } from "../contracts/validators.js";
-import type { CodexResult } from "../contracts/result.js";
 import { buildCodexPrompt } from "./prompt.js";
-import { redactSensitiveText } from "../security/redaction.js";
+import { StreamingRedactor } from "../security/redaction.js";
 
-export interface ExecutionOutcome { exitCode: number; result: CodexResult; }
+export interface ExecutionOutcome { exitCode: number; }
 
-const CODEX_BLOCKED_ENVIRONMENT_VARIABLES = new Set(["AGENT_RELAY_TOKEN"]);
+const ISOLATED_CODEX_HOME = "/home/agent/.codex";
+const RELAY_APPLICATION_ROOT = "/app";
+const RELAY_HOME = "/home/relay";
+const RUNNER_ROOT = "/runner";
+const SYSTEM_TEMP_ROOT = "/tmp";
+const SYSTEM_VAR_TEMP_ROOT = "/var/tmp";
+const AGENT_TEMP_ROOT = "/tmp/agent-relay-runtime";
 
-export function createCodexEnvironment(source: Record<string, string | undefined> = process.env): Record<string, string> {
-  const environment: Record<string, string> = {};
-  for (const [name, value] of Object.entries(source)) {
-    if (value !== undefined && !CODEX_BLOCKED_ENVIRONMENT_VARIABLES.has(name)) environment[name] = value;
-  }
-  return environment;
+export function createCodexEnvironment(): Record<string, string> {
+  return {
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+  };
+}
+
+function permission(path: string, access: "deny" | "read" | "write"): string {
+  return `${JSON.stringify(path)}=${JSON.stringify(access)}`;
+}
+
+export function createCodexArgs(workspace: string, prompt: string, workspaceRoot = workspace): string[] {
+  const resolvedWorkspace = resolve(workspace);
+  const resolvedRoot = resolve(workspaceRoot);
+  const entries = [
+    permission(ISOLATED_CODEX_HOME, "deny"),
+    permission(RELAY_APPLICATION_ROOT, "deny"),
+    permission(RELAY_HOME, "deny"),
+    permission(RUNNER_ROOT, "deny"),
+    permission(SYSTEM_TEMP_ROOT, "deny"),
+    permission(SYSTEM_VAR_TEMP_ROOT, "deny"),
+    permission(AGENT_TEMP_ROOT, "write"),
+  ];
+  if (resolvedRoot !== resolvedWorkspace) entries.push(permission(resolvedRoot, "deny"));
+  entries.push(permission(resolvedWorkspace, "write"));
+  entries.push(permission(join(resolvedWorkspace, ".git"), "read"));
+
+  return [
+    "--ask-for-approval",
+    "never",
+    "-c",
+    "features.memories=false",
+    "-c",
+    "default_permissions=\"relay\"",
+    "-c",
+    "permissions.relay.extends=\":workspace\"",
+    "-c",
+    `permissions.relay.filesystem={${entries.join(",")}}`,
+    "-c",
+    "permissions.relay.network.enabled=true",
+    "exec",
+    "--cd",
+    resolvedWorkspace,
+    prompt,
+  ];
+}
+
+export function createCodexInvocation(command: string, args: string[], runAsUser?: string): { command: string; args: string[] } {
+  return runAsUser
+    ? { command: "/usr/bin/sudo", args: ["-H", "-u", runAsUser, "--", command, ...args] }
+    : { command, args };
 }
 
 export class CodexExecutor {
@@ -25,79 +74,84 @@ export class CodexExecutor {
     private readonly command: string,
     private readonly timeoutMs: number,
     private readonly maxOutputBytes: number,
+    private readonly runAsUser?: string,
+    private readonly workspaceRoot?: string,
   ) {}
 
   async run(request: CreateJobRequest, workspace: string, outputPath: string): Promise<ExecutionOutcome> {
-    const resultPath = join(workspace, ".agent-relay", "result.json");
-    await mkdir(dirname(resultPath), { recursive: true });
-    await rm(resultPath, { force: true });
     await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(outputPath, "", { mode: 0o600 });
 
-    const prompt = buildCodexPrompt(request, ".agent-relay/result.json");
-    const child = spawn(this.command, [
-      "--ask-for-approval",
-      "never",
-      "-c",
-      "features.memories=false",
-      "exec",
-      "--sandbox",
-      "danger-full-access",
-      "--cd",
-      workspace,
-      prompt,
-    ], {
+    const prompt = buildCodexPrompt(request);
+    const invocation = createCodexInvocation(
+      this.command,
+      createCodexArgs(workspace, prompt, this.workspaceRoot ?? workspace),
+      this.runAsUser,
+    );
+    const child = spawn(invocation.command, invocation.args, {
       cwd: workspace,
       env: createCodexEnvironment(),
       stdio: ["ignore", "pipe", "pipe"],
     });
 
     let outputBytes = 0;
+    let outputTruncated = false;
     let pendingWrite = Promise.resolve();
-    const collect = (chunk: unknown): void => {
-      if (outputBytes >= this.maxOutputBytes) return;
+    const stdoutRedactor = new StreamingRedactor();
+    const stderrRedactor = new StreamingRedactor();
+    const writeRedacted = (value: string): void => {
+      if (!value) return;
+      process.stdout.write(value);
+      pendingWrite = pendingWrite.then(() => appendFile(outputPath, value, { mode: 0o600 }));
+    };
+    const collect = (redactor: StreamingRedactor) => (chunk: unknown): void => {
+      if (outputBytes >= this.maxOutputBytes) {
+        outputTruncated = true;
+        return;
+      }
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
       const remaining = this.maxOutputBytes - outputBytes;
       const accepted = buffer.length > remaining ? buffer.subarray(0, remaining) : buffer;
       outputBytes += accepted.length;
-      const redacted = redactSensitiveText(accepted.toString("utf8"));
-      process.stdout.write(redacted);
-      pendingWrite = pendingWrite.then(() => appendFile(outputPath, redacted, { mode: 0o600 }));
+      if (accepted.length < buffer.length) outputTruncated = true;
+      writeRedacted(redactor.write(accepted));
     };
-    child.stdout?.on("data", collect);
-    child.stderr?.on("data", collect);
+    child.stdout?.on("data", collect(stdoutRedactor));
+    child.stderr?.on("data", collect(stderrRedactor));
 
     let timedOut = false;
-    let forceKillTimer: any;
-    const exitCode = await new Promise<number>((resolve, reject) => {
+    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+    const exitCode = await new Promise<number>((resolvePromise, reject) => {
       const timeoutTimer = setTimeout(() => {
         timedOut = true;
         child.kill("SIGTERM");
         forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 5000);
       }, this.timeoutMs);
 
-      child.on("error", (error: Error) => {
+      child.on("error", () => {
         clearTimeout(timeoutTimer);
         if (forceKillTimer) clearTimeout(forceKillTimer);
-        reject(new RelayError("CODEX_FAILED", error.message, 502));
+        reject(new RelayError("CODEX_FAILED", "Codex process could not be started", 502));
       });
       child.on("close", (code: number | null) => {
         clearTimeout(timeoutTimer);
         if (forceKillTimer) clearTimeout(forceKillTimer);
-        resolve(code ?? 1);
+        resolvePromise(code ?? 1);
       });
     });
+
+    if (outputTruncated) {
+      stdoutRedactor.discard();
+      stderrRedactor.discard();
+      writeRedacted("\n[OUTPUT TRUNCATED]\n");
+    } else {
+      writeRedacted(stdoutRedactor.end());
+      writeRedacted(stderrRedactor.end());
+    }
     await pendingWrite;
 
     if (timedOut) throw new RelayError("CODEX_TIMEOUT", "Codex execution timed out", 504);
     if (exitCode !== 0) throw new RelayError("CODEX_FAILED", `Codex exited with code ${exitCode}`, 502);
-
-    let raw: string;
-    try { raw = await readFile(resultPath, "utf8"); }
-    catch { throw new RelayError("RESULT_MISSING", "Codex did not write the required result file", 422); }
-    let parsed: unknown;
-    try { parsed = JSON.parse(raw); }
-    catch { throw new RelayError("RESULT_INVALID", "Codex result is not valid JSON", 422); }
-    return { exitCode, result: validateCodexResult(parsed, request.requestId) };
+    return { exitCode };
   }
 }

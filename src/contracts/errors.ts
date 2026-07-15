@@ -4,12 +4,11 @@ export type ErrorCode =
   | "WORKSPACE_OUTSIDE_ROOT"
   | "WORKSPACE_NOT_FOUND"
   | "JOB_ALREADY_RUNNING"
+  | "JOB_PREPARATION_FAILED"
   | "REQUEST_ID_CONFLICT"
   | "JOB_NOT_FOUND"
   | "CODEX_FAILED"
   | "CODEX_TIMEOUT"
-  | "RESULT_MISSING"
-  | "RESULT_INVALID"
   | "INTERNAL_ERROR";
 
 export class RelayError extends Error {

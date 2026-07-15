@@ -2,154 +2,66 @@
 
 Agent Relay is a self-hosted bridge between a repository-scoped GitHub Actions runner and Codex CLI.
 
-A GitHub Actions workflow resolves a specific pull request through the GitHub API, verifies that it is open and ready for review, and checks out the exact head revision returned by GitHub. The runner asks Agent Relay to execute Codex in the shared workspace. Codex edits and validates the repository and writes a structured result file. The runner validates that result, creates a commit when the Git worktree changed, and pushes it to the API-derived pull-request branch.
+A GitHub Actions workflow resolves an open, ready pull request, checks out its exact head revision without persisting credentials, and asks Agent Relay to execute Codex in the shared workspace. Codex edits the repository, runs commands available in the packaged task environment, and keeps the active ExecPlan current. Relay derives the technical job outcome from the child process. The runner derives a commit message from the active plan, and the finalizer commits and pushes only when Git reports repository changes.
 
-## Status
+## Components
 
-The MVP includes:
+Each deployment contains:
 
-- a Node.js 22 and TypeScript relay service;
-- authenticated asynchronous job creation and polling APIs;
-- one active Codex execution per deployment;
-- persistent file-backed job state and interrupted-job recovery;
-- controlled `codex exec` process execution;
-- a versioned Codex-to-runner result contract;
-- a repository-scoped GitHub Actions runner image and client;
-- a pull-request readiness gate backed by the GitHub API;
-- Docker Compose packaging with a shared workspace;
-- CI, contract tests, integration tests, workflow-gate tests, and image toolchain checks.
+- `runner`: the single self-hosted GitHub Actions runner, registered with the `agent-relay` label, which owns checkout, commit, push, and GitHub credentials;
+- `agent-relay`: authenticates requests, launches Codex, enforces execution limits, persists redacted process output, and owns technical job state;
+- `Codex`: follows `.agent/PLANS.md`, implements the selected active ExecPlan, updates its living state, and runs repository-local validation.
 
-## Architecture
+The runner and Relay are separate containers sharing one workspace volume. Relay runs as the `relay` user. Codex runs as the separate `agent` user. Relay state is mode `0700`. Only the host Codex `auth.json` file is mounted into the agent home, read-only. Generated agent-home state is removed before every execution.
 
-Each deployment supports one target repository and contains two services:
+## Workflow inputs
 
-- `runner`: a repository-scoped self-hosted runner;
-- `agent-relay`: the HTTP service and Codex CLI environment.
+The production workflow is `.github/workflows/agent-relay.yml`. Manual dispatch accepts only:
 
-The services share one Docker network and one workspace volume. The runner owns checkout, GitHub credentials, commit, and push. Agent Relay never clones repositories, chooses branches, stores GitHub credentials, or pushes changes.
+- `pr_number`: the open pull request to update;
+- `plan_path`: a regular, non-symlink Markdown file directly under `docs/exec-plans/active/`.
 
-```text
-Operator or automation
-   -> workflow_dispatch with PR number and ExecPlan path
-   -> GitHub API readiness resolution
-   -> self-hosted runner: checkout exact PR head SHA
-   -> Agent Relay: codex exec in shared workspace
-   -> Codex: .agent-relay/result.json
-   -> runner: validate worktree, commit when changed, and push to PR head ref
-   -> review
-```
+The workflow does not accept an arbitrary branch, a secondary execution mode, a result schema, or commit intent. `.agent/PLANS.md` defines reusable plan semantics and the selected active ExecPlan is the sole task authority.
 
-## Pull-request readiness rule
+Before checkout, `/runner/resolve-pr.mjs` verifies that the pull request exists, is open, is not a draft, belongs to the configured target repository, and has valid head ref and SHA values. Checkout uses the API-derived head SHA. Finalization pushes to the API-derived head ref.
 
-The production workflow is `.github/workflows/agent-relay.yml`. It is started with:
+## Living ExecPlan
 
-- `pr_number`: the pull request to update;
-- `plan_path`: the active ExecPlan inside the pull-request workspace;
-- `mode`: `implement`, `revise`, or `finalize`.
+An incomplete item remains unchecked. A real blocker is marked `[blocked]` in `Progress` with:
 
-Before checkout, `/runner/resolve-pr.mjs` retrieves the pull request from the GitHub API. Execution is allowed only when all of these conditions are true:
+- cause;
+- impact;
+- evidence;
+- concrete unblock condition.
 
-- the pull request exists;
-- `state == open`;
-- `draft == false`;
-- the head repository is the configured target repository;
-- the head ref and SHA are valid.
+Codex continues all unaffected work. A blocker is plan documentation only; it is not a Codex result or Relay job status. A plan with any unchecked or `[blocked]` item remains active.
 
-The workflow does not accept an arbitrary branch. Checkout uses the head SHA returned by the API, while commit and push use the head ref returned by the same response. Draft, closed, missing, and foreign-repository pull requests fail before checkout and before Agent Relay is invoked.
+## Execution outcome
 
-## Responsibility split
+Codex does not write a control or result artifact. Relay classifies execution from observable runtime facts:
 
-### Runner
+- zero exit code: `completed`;
+- non-zero exit or spawn failure: `failed`;
+- execution deadline: `timed_out`;
+- recovered in-flight job after restart: `interrupted`.
 
-The runner:
+A terminal `completed` job is successful whether or not the worktree changed. The finalizer uses Git as the source of truth: a clean worktree exits successfully without a commit, while a changed worktree is validated, committed, and pushed. The runner derives the commit message from the first non-empty level-one heading in the active ExecPlan, normalizes it to one line, limits it to 120 Unicode characters, and uses `Apply active ExecPlan` as the fallback.
 
-- registers with the configured target repository;
-- resolves the selected pull request through the GitHub API;
-- checks out the resolved head SHA;
-- prepares and locally excludes `.agent-relay/`;
-- submits and polls an Agent Relay job;
-- validates the complete result contract;
-- verifies the actual Git worktree independently;
-- removes the relay artifact before staging;
-- decides whether a commit is needed exclusively from `git status --porcelain`;
-- commits with the validated Codex-proposed message when repository changes exist;
-- pushes to the resolved pull-request head ref.
+## Security boundary
 
-### Agent Relay
-
-Agent Relay:
-
-- exposes `GET /health`, `POST /v1/jobs`, and `GET /v1/jobs/{jobId}`;
-- requires bearer authentication for job APIs;
-- accepts only validated, fixed-shape requests;
-- rejects workspace traversal and paths outside the shared root;
-- enforces one active job per deployment;
-- persists job records atomically;
-- marks incomplete running jobs as interrupted after restart;
-- starts a fresh `codex exec` process per job;
-- applies timeout and output-size limits;
-- redacts sensitive output before persistence;
-- validates the required result JSON before completing the job.
-
-### Codex
-
-Codex:
-
-- reads `AGENTS.md` and the active ExecPlan;
-- implements and validates the requested change;
-- updates the active plan;
-- never runs `git commit`, `git push`, or equivalent commit-publishing commands;
-- does not receive GitHub credentials;
-- writes `.agent-relay/result.json` before exit.
-
-## GitHub log output
-
-The workflow runs the runner client through `tee`. Everything written by `runner/client.mjs` to stdout or stderr is visible in the GitHub Actions step log and stored in the `agent-relay-output` artifact.
-
-The client writes control data such as `commit_message` directly to `$GITHUB_OUTPUT`, so normal log output cannot corrupt GitHub step outputs. The current client emits Agent Relay job-state changes, the validated Codex summary, and validation results. A future relay-side Codex-output streaming implementation can write to the same stdout channel without another workflow redesign.
-
-The complete redacted Codex process output is currently persisted under the Agent Relay state volume and is not yet streamed through the polling API.
-
-## Result contract
-
-Codex writes `.agent-relay/result.json`:
-
-```json
-{
-  "schemaVersion": 1,
-  "requestId": "owner-repo-run-123-attempt-1",
-  "status": "completed",
-  "commitMessage": "Implement the active ExecPlan",
-  "summary": "Implemented the requested behavior and updated the active plan.",
-  "validation": [
-    {
-      "command": "npm test",
-      "status": "passed",
-      "exitCode": 0,
-      "details": "All tests passed."
-    }
-  ],
-  "blockers": [],
-  "limitations": []
-}
-```
-
-A completed result must include a valid one-line `commitMessage`; a blocked result must omit it. The runner validates the schema version, matching request ID, allowed status combination, commit-message format, field sizes, and sensitive-data rules. The result does not contain `shouldCommit`: the runner determines whether a commit is needed exclusively from the actual Git worktree. The artifact is deleted before staging and must never enter a repository commit.
-
-## Authentication and access boundaries
-
-- `RUNNER_TOKEN` is a short-lived registration token used only when the runner has no existing registration.
-- GitHub Actions job credentials remain in the runner.
-- Agent Relay uses a separate `AGENT_RELAY_TOKEN` for runner-to-relay authentication.
-- The operator's existing `~/.codex` directory is mounted at `/home/agent/.codex`.
-- `CODEX_HOME` is not set.
-- Codex receives no GitHub token, Docker socket, or service lifecycle controls.
-
-The workflow uses `github.token` for normal repository updates. If an ExecPlan may modify `.github/workflows/`, configure the repository secret `AGENT_RELAY_PUSH_TOKEN` with permission to update repository contents and workflow files. The checkout step automatically prefers that secret and falls back to `github.token` when it is absent.
+- Checkout uses `persist-credentials: false` and verifies that no credential helper, authorization header, or credential-bearing remote remains before Codex starts.
+- CI and Agent Relay workflows run only on the existing `[self-hosted, agent-relay]` runner and reject fork-origin pull requests before executing repository code.
+- The Relay bearer token is supplied only to the workflow client step; it is not part of the runner service environment.
+- The push token exists only in the finalization step and is consumed through a temporary askpass helper.
+- Codex receives no GitHub token, runner registration token, Relay token, Docker socket, or Relay state.
+- The packaged service always launches the root-owned wrapper as the fixed `agent` user; command and user overrides are not configuration inputs.
+- The wrapper exclusively defines the final tool environment and clears generated agent-home state before each run while preserving the read-only `auth.json` mount.
+- The permissions profile denies the shared workspace root, Relay application directory, Relay home, and agent home; it re-allows writes only in the selected repository and reads only from that repository's Git metadata.
+- Image permissions independently prevent the `agent` user from reading `/app` and `/home/relay`.
 
 ## Configuration
 
-Copy `.env.example` to `.env` and provide:
+Copy `.env.example` to `.env`, configure `AGENT_RELAY_TOKEN` with the same value as the repository Actions secret, and provide:
 
 ```env
 RUNNER_TOKEN=
@@ -157,38 +69,37 @@ RUNNER_REPOSITORY_URL=https://github.com/owner/repository
 RUNNER_NAME=agent-relay-runner
 RUNNER_LABELS=agent-relay
 AGENT_RELAY_TOKEN=
-HOST_CODEX_DIR=/absolute/path/to/.codex
+HOST_CODEX_AUTH_FILE=/absolute/path/to/.codex/auth.json
 HOST_UID=1000
 HOST_GID=1000
 CODEX_TIMEOUT_MS=21600000
 MAX_OUTPUT_BYTES=10000000
 ```
 
-`HOST_CODEX_DIR` must point to the actual Codex directory containing `auth.json` and `config.toml`. `HOST_UID` and `HOST_GID` should match its owner.
+`HOST_UID` and `HOST_GID` must match the owner of the authentication file and the runner workspace.
 
-## Build and validation
+## Automated validation
+
+Mandatory pull-request validation runs:
 
 ```bash
 npm ci
 npm run check
-docker compose config
-docker build -t agent-relay:local .
-docker build -f Dockerfile.runner -t agent-relay-runner:local .
-docker run --rm --entrypoint /bin/bash agent-relay:local /app/scripts/toolchain-smoke.sh
 ```
 
-## Run
+The suite validates repository-owned TypeScript, HTTP contracts, failure paths, workflow and packaging definitions, persistence, path boundaries, redaction, and every executable repository script. It launches the actual runner client, pull-request resolver, finalizer, runner entrypoint, Codex wrapper, and toolchain smoke script against local HTTP, process, filesystem, command, and Git fixtures. Tests do not invoke or validate Docker, Compose, GitHub APIs, hosted runners, external network services, or credentials. Node's built-in coverage report is printed in the check log and published in the GitHub Actions job summary.
 
-```bash
-cp .env.example .env
-docker compose up --build -d
-```
-
-Copy `examples/github-actions/agent-relay.yml` into a target repository when Agent Relay is deployed separately. Registration, recovery, dispatch, and troubleshooting instructions are in `docs/operations/README.md`.
+Operational setup, dispatch, recovery, logs, and credential rotation are documented in `docs/operations/README.md`.
 
 ## ExecPlans
 
-There are no active ExecPlans. Completed plans:
+Active:
+
+- None.
+
+Completed:
 
 - `docs/exec-plans/completed/2026-07-13-agent-relay-mvp.md`
 - `docs/exec-plans/completed/2026-07-13-ready-pr-gate.md`
+- `docs/exec-plans/completed/2026-07-15-audit-codex-context.md`
+- `docs/exec-plans/completed/2026-07-15-review-9-script-integration.md`

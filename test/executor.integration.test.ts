@@ -6,13 +6,15 @@ import { tmpdir } from "node:os";
 import { CodexExecutor, createCodexArgs, createCodexEnvironment } from "../src/execution/codex-executor.js";
 import { RelayError } from "../src/contracts/errors.js";
 
+const planPath = "docs/exec-plans/active/plan.md";
+
 async function createRoot(name: string) {
   const root = join(tmpdir(), `agent-relay-${name}-${process.pid}-${Date.now()}`);
   const workspace = join(root, "workspace");
   const outputPath = join(root, "state", "job.log");
-  await mkdir(workspace, { recursive: true });
+  await mkdir(join(workspace, "docs", "exec-plans", "active"), { recursive: true });
   await mkdir(join(workspace, ".git"), { recursive: true });
-  await writeFile(join(workspace, "plan.md"), "# Plan\n");
+  await writeFile(join(workspace, planPath), "# Plan\n");
   return { root, workspace, outputPath };
 }
 
@@ -53,6 +55,7 @@ case "$args" in *'"/home/agent/.codex"="deny"'*) ;; *) exit 23 ;; esac
 case "$args" in *'"${workspace}/.git"="read"'*) ;; *) exit 24 ;; esac
 case "$args" in *'danger-full-access'*) exit 25 ;; esac
 case "$args" in *'result.json'*) exit 26 ;; esac
+case "$args" in *'.agent/PLANS.md'*) ;; *) exit 27 ;; esac
 while [ "$1" != "--cd" ]; do shift; done
 workspace="$2"
 [ "$workspace" = "${workspace}" ]
@@ -69,7 +72,7 @@ printf 'changed\n' > "$workspace/changed.txt"
   process.env.APPLICATION_MODE = "test";
   const executor = new CodexExecutor(executable, 5_000, 100_000);
   try {
-    const outcome = await executor.run({ requestId: "executor-request", workspace: "workspace", planPath: "plan.md" }, workspace, outputPath);
+    const outcome = await executor.run({ requestId: "executor-request", workspace: "workspace", planPath }, workspace, outputPath);
     assert.equal(outcome.exitCode, 0);
     assert.equal(await readFile(join(workspace, "changed.txt"), "utf8"), "changed\n");
     const log = await readFile(outputPath, "utf8");
@@ -98,7 +101,7 @@ while true; do sleep 1; done
   const executor = new CodexExecutor(executable, 50, 100_000);
   try {
     await assert.rejects(
-      () => executor.run({ requestId: "timeout-request", workspace: "workspace", planPath: "plan.md" }, workspace, outputPath),
+      () => executor.run({ requestId: "timeout-request", workspace: "workspace", planPath }, workspace, outputPath),
       (error: unknown) => error instanceof RelayError && error.code === "CODEX_TIMEOUT",
     );
     assert.equal(await readFile(marker, "utf8"), "terminated");

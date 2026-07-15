@@ -3,7 +3,6 @@ import type { CreateJobRequest } from "./job.js";
 
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-const RELATIVE_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$)).+$/;
 const ACTIVE_PLAN_PATH = /^docs\/exec-plans\/active\/[A-Za-z0-9._-]+\.md$/;
 
 function asObject(value: unknown, name: string): Record<string, unknown> {
@@ -27,6 +26,12 @@ function requiredString(value: unknown, name: string, max: number): string {
   return value;
 }
 
+function isSafeRelativePath(value: string): boolean {
+  if (value.startsWith("/") || value.endsWith("/") || value.includes("\\")) return false;
+  const segments = value.split("/");
+  return segments.length > 0 && segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+
 export function validateCreateJobRequest(value: unknown): CreateJobRequest {
   const object = asObject(value, "request");
   rejectUnknownFields(object, ["requestId", "workspace", "planPath"]);
@@ -35,7 +40,7 @@ export function validateCreateJobRequest(value: unknown): CreateJobRequest {
   if (!REQUEST_ID.test(requestId)) throw new RelayError("INVALID_REQUEST", "requestId has invalid format", 400);
 
   const workspace = requiredString(object.workspace, "workspace", 512);
-  if (!RELATIVE_PATH.test(workspace)) throw new RelayError("INVALID_REQUEST", "workspace must be a safe relative path", 400);
+  if (!isSafeRelativePath(workspace)) throw new RelayError("INVALID_REQUEST", "workspace must be a safe relative path", 400);
 
   const planPath = requiredString(object.planPath, "planPath", 512);
   if (!ACTIVE_PLAN_PATH.test(planPath)) {

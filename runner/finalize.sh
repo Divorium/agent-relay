@@ -21,6 +21,7 @@ case "$COMMIT_MESSAGE" in
     ;;
 esac
 
+git diff --check
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 git add --all
@@ -30,6 +31,7 @@ if git diff --cached --quiet; then
   exit 0
 fi
 
+git diff --cached --check
 git commit -m "$COMMIT_MESSAGE"
 
 askpass="$(mktemp)"

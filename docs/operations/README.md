@@ -1,7 +1,5 @@
 # Agent Relay Operations
 
-All commands in this document run on the Docker host. They are never task-agent validation commands and must not be executed by Codex or by the containerized GitHub runner.
-
 ## Configure
 
 Copy `.env.example` to `.env` and provide:
@@ -17,7 +15,26 @@ Configure the same Relay bearer token as the repository Actions secret `AGENT_RE
 
 Only `auth.json` is mounted into the Codex home directory, read-only. Do not mount the complete host `~/.codex` directory. The launcher removes all generated agent-home content except `auth.json` before every execution.
 
-## Start and verify
+## Execution profiles
+
+The container profile is the default Agent Relay deployment:
+
+- the GitHub runner and Relay run in separate containers;
+- Codex runs as the isolated `agent` user inside the Relay container;
+- no Docker socket is mounted;
+- validation is limited to tools installed in that container.
+
+The host profile is a separate trusted deployment for plans that require host-level Docker or Compose access:
+
+- install a GitHub Actions runner directly on the Docker host;
+- label it `agent-relay-host`;
+- run the agent process directly on that host under a dedicated account;
+- grant Docker access only to that trusted account;
+- do not reuse the container-profile Relay service as a Docker socket proxy.
+
+The active ExecPlan is written for the workflow that selects it. `.agent/PLANS.md` intentionally contains no global Docker policy.
+
+## Start and verify the container profile
 
 ```bash
 docker compose build
@@ -40,6 +57,28 @@ sudo -H -u agent -- test -r /home/agent/.codex/auth.json
 sudo -H -u agent -- test ! -w /home/agent/.codex/auth.json
 '
 ```
+
+## Validate images on a native Docker host
+
+Mandatory pull-request CI runs `npm run check` without requiring a Docker daemon. Real packaging validation is retained separately.
+
+Run the manual `Host validation` workflow on a native runner labeled `agent-relay-host`, or execute:
+
+```bash
+npm ci
+npm run check
+./scripts/host-validation.sh
+```
+
+The host validation script performs:
+
+- `docker compose config`;
+- Agent Relay image build;
+- packaged toolchain smoke tests;
+- image ownership and excluded-tool checks;
+- runner image build and entrypoint verification.
+
+It does not use `--privileged`, nested containers, or a mounted Docker socket inside the container profile.
 
 ## Install and dispatch the workflow
 

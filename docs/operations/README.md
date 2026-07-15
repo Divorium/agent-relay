@@ -39,30 +39,16 @@ sudo -H -u agent -- test ! -w /home/agent/.codex/auth.json
 '
 ```
 
-## Validation
+## Repository validation
 
-Mandatory pull-request CI runs on the existing containerized runner labeled `agent-relay`:
+Run the repository-owned validation suite after code or contract changes:
 
 ```bash
 npm ci
 npm run check
 ```
 
-The runner container has no Docker daemon or socket. Real packaging validation therefore remains an explicit Docker-host operation:
-
-```bash
-bash scripts/host-validation.sh
-```
-
-The script preserves the checks that previously ran successfully on GitHub-hosted Ubuntu:
-
-- `docker compose config`;
-- Agent Relay image build;
-- packaged toolchain smoke tests;
-- image ownership and excluded-tool checks;
-- runner image build and entrypoint verification.
-
-There is no workflow route from the containerized runner to the host. Running the script is a manual gate when Dockerfile, Compose, packaging, or deployment files change.
+The suite uses local fixtures and validates only code and definitions stored in this repository. It does not invoke or validate Docker, Compose, GitHub APIs, hosted runners, network services, or credentials. Deployment commands above are operator procedures, not automated acceptance tests.
 
 ## Install and dispatch the workflow
 
@@ -108,13 +94,13 @@ Codex does not write a result file. Relay sets the technical outcome from the pr
 - deadline exceeded → `timed_out`;
 - in-flight job recovered after restart → `interrupted`.
 
-A completed process with a clean worktree is rejected by the runner client. A task-level blocker is recorded only in the active ExecPlan. The item remains unchecked and includes cause, impact, evidence, and unblock condition. Codex continues unaffected work. The plan remains active until every item is completed.
+A completed process with a clean worktree succeeds without creating a commit. A task-level blocker is recorded only in the active ExecPlan. The item remains unchecked and includes cause, impact, evidence, and unblock condition. Codex continues unaffected work. The plan remains active until every item is completed.
 
 ## Recovery
 
 A Relay container restart interrupts an active Codex process. The job is not resumed in memory. Dispatch a new run against the current pull request and active plan.
 
-Do not dispatch another run while preserving unpushed changes from a failed finalization step. A new checkout may clean the shared workspace.
+When publication fails after a local commit, the finalizer resets that commit and restores the working-tree changes before returning failure. Correct the publication problem and retry without discarding those changes.
 
 Inspect the latest persisted Codex log as the Relay user:
 

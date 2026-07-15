@@ -48,7 +48,10 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
 
 USER root
 COPY scripts/codex-run /usr/local/bin/codex-run
-RUN chown root:root /usr/local/bin/codex-run && chmod 0755 /usr/local/bin/codex-run
+RUN chown -R root:root /home/agent/.cargo /home/agent/.rustup \
+  && chmod -R a-w /home/agent/.cargo /home/agent/.rustup \
+  && chown root:root /usr/local/bin/codex-run \
+  && chmod 0755 /usr/local/bin/codex-run
 
 ENV HOME=/home/relay
 USER relay

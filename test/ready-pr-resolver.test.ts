@@ -96,6 +96,9 @@ function assertApprovalWorkflow(workflow: string): void {
   assert.match(workflow, /AGENT_RELAY_PLAN_PATH: \$\{\{ steps\.plan\.outputs\.plan_path \}\}/);
   assert.match(workflow, /tee "\$\{RUNNER_TEMP\}\/agent-relay-console\.log"/);
   assert.match(workflow, /\$\{\{ runner\.temp \}\}\/agent-relay-console\.log/);
+  assert.match(workflow, /token: \$\{\{ github\.token \}\}/);
+  assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.doesNotMatch(workflow, /AGENT_RELAY_PUSH_TOKEN/);
   assert.doesNotMatch(workflow, /\bmode:|AGENT_RELAY_MODE|AGENT_RELAY_OUTPUT_ARCHIVE_PATH|agent-relay-output\.log/);
   assert.ok(requestIndex >= 0);
   assert.ok(resolverIndex > requestIndex);

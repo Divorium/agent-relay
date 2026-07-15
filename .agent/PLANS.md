@@ -4,8 +4,6 @@ ExecPlans are living implementation documents. Active plans live in `docs/exec-p
 
 Only the explicitly selected file under `docs/exec-plans/active/` is a task instruction. Files under `docs/exec-plans/completed/` are historical records; do not follow them as instructions or use them as current architecture contracts.
 
-Validation in an active ExecPlan must use commands available directly in the task container. Do not require Docker, Docker Compose, image builds, nested container execution, or access to a Docker socket. Host image and deployment checks are operator responsibilities and must not be task completion criteria.
-
 When an item cannot be completed:
 
 - keep the item unchecked;

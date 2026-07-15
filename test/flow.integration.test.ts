@@ -52,10 +52,12 @@ set -eu
 args="$*"
 case "$args" in *'default_permissions="relay"'*) ;; *) exit 31 ;; esac
 case "$args" in *'"/home/agent/.codex"="deny"'*) ;; *) exit 32 ;; esac
-case "$args" in *'"${workspace}/.git"="read"'*) ;; *) exit 33 ;; esac
-case "$args" in *'danger-full-access'*) exit 34 ;; esac
-case "$args" in *'result.json'*) exit 35 ;; esac
-case "$args" in *'.agent/PLANS.md'*) ;; *) exit 36 ;; esac
+case "$args" in *'"${workspaceRoot}"="deny"'*) ;; *) exit 33 ;; esac
+case "$args" in *'"${workspace}"="write"'*) ;; *) exit 34 ;; esac
+case "$args" in *'"${workspace}/.git"="read"'*) ;; *) exit 35 ;; esac
+case "$args" in *'danger-full-access'*) exit 36 ;; esac
+case "$args" in *'result.json'*) exit 37 ;; esac
+case "$args" in *'.agent/PLANS.md'*) ;; *) exit 38 ;; esac
 while [ "$1" != "--cd" ]; do shift; done
 workspace="$2"
 printf 'after\n' > "$workspace/tracked.txt"
@@ -72,7 +74,7 @@ printf 'after\n' > "$workspace/tracked.txt"
     maxOutputBytes: 100_000,
   };
   const store = new JobStore(stateDir);
-  const executor = new CodexExecutor(fakeCodex, config.codexTimeoutMs, config.maxOutputBytes);
+  const executor = new CodexExecutor(fakeCodex, config.codexTimeoutMs, config.maxOutputBytes, undefined, workspaceRoot);
   const jobs = new JobService(workspaceRoot, stateDir, store, executor);
   await jobs.init();
   const server = createRelayServer(config, jobs);

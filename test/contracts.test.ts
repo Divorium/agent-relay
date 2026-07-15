@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { validateCreateJobRequest } from "../src/contracts/validators.js";
@@ -83,8 +84,9 @@ test("accepts only a regular non-symlink active plan file", async () => {
   await mkdir(activeDir, { recursive: true });
   await writeFile(join(activeDir, "plan.md"), "# Plan\n");
   await assert.doesNotReject(() => assertActivePlanFile(workspace, "docs/exec-plans/active/plan.md"));
-  await symlink("plan.md", join(activeDir, "link.md"));
-  await assert.rejects(() => assertActivePlanFile(workspace, "docs/exec-plans/active/link.md"), /regular file/);
+  const linked = spawnSync("ln", ["-s", "plan.md", join(activeDir, "link.md")], { encoding: "utf8" });
+  assert.equal(linked.status, 0, linked.stderr);
+  await assert.rejects(() => assertActivePlanFile(workspace, "docs/exec-plans/active/link.md"), /symbolic links/);
   await rm(workspace, { recursive: true, force: true });
 });
 

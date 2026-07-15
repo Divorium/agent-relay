@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import { spawnSync } from "node:child_process";
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { validateCreateJobRequest } from "../src/contracts/validators.js";
@@ -9,7 +8,7 @@ import { requireBearerToken } from "../src/security/auth.js";
 import { assertActivePlanFile, resolveWorkspace } from "../src/security/workspace.js";
 import { loadConfig } from "../src/config/config.js";
 import { buildCodexPrompt } from "../src/execution/prompt.js";
-import { redactSensitiveText } from "../src/security/redaction.js";
+import { redactSensitiveText, StreamingRedactor } from "../src/security/redaction.js";
 import { JobStore } from "../src/persistence/job-store.js";
 import type { JobRecord } from "../src/contracts/job.js";
 
@@ -25,12 +24,26 @@ test("rejects alternate instruction fields", () => {
   assert.throws(() => validateCreateJobRequest({ ...validRequest, mode: "implement" }), /Unknown field: mode/);
   assert.throws(() => validateCreateJobRequest({ ...validRequest, reviewFindings: [] }), /Unknown field: reviewFindings/);
 });
-test("rejects absolute and traversing workspace paths", () => {
-  assert.throws(() => validateCreateJobRequest({ ...validRequest, workspace: "/tmp/repo" }), /safe relative path/);
-  assert.throws(() => validateCreateJobRequest({ ...validRequest, workspace: "../repo" }), /safe relative path/);
+test("rejects invalid request IDs", () => {
+  for (const requestId of ["", "-starts-with-dash", "contains space", "x".repeat(129), "line\nbreak"]) {
+    assert.throws(() => validateCreateJobRequest({ ...validRequest, requestId }), /requestId/);
+  }
+});
+test("rejects unsafe workspace paths", () => {
+  for (const workspace of ["/tmp/repo", "../repo", ".", "repo/..", "repo/./child", "repo//child", "repo/", "repo\\child"]) {
+    assert.throws(() => validateCreateJobRequest({ ...validRequest, workspace }), /safe relative path/);
+  }
 });
 test("accepts only a direct active ExecPlan path", () => {
-  for (const planPath of ["plan.md", "docs/plan.md", "docs/exec-plans/completed/plan.md", "docs/exec-plans/active/nested/plan.md"]) {
+  for (const planPath of [
+    "plan.md",
+    "docs/plan.md",
+    "docs/exec-plans/completed/plan.md",
+    "docs/exec-plans/active/nested/plan.md",
+    "docs/exec-plans/active/../plan.md",
+    "docs\\exec-plans\\active\\plan.md",
+    "docs/exec-plans/active/plan.txt",
+  ]) {
     assert.throws(() => validateCreateJobRequest({ ...validRequest, planPath }), /directly under docs\/exec-plans\/active/);
   }
 });
@@ -64,6 +77,20 @@ test("redacts common token formats from process output", () => {
   const output = redactSensitiveText("authorization: Bearer abcdefghijklmnopqrstuvwxyz token=super-secret-value");
   assert.doesNotMatch(output, /abcdefghijklmnopqrstuvwxyz|super-secret-value/);
 });
+test("streaming redaction preserves split UTF-8 and redacts split secrets", () => {
+  const redactor = new StreamingRedactor();
+  const text = Buffer.from("zażółć authorization: Bearer abcdefghijklmnopqrstuvwxyz\n", "utf8");
+  const splitInsideUnicode = text.indexOf(Buffer.from("ż", "utf8")) + 1;
+  const splitInsideSecret = text.indexOf(Buffer.from("abcdefghijklmnopqrstuvwxyz", "utf8")) + 8;
+  const output = [
+    redactor.write(text.subarray(0, splitInsideUnicode)),
+    redactor.write(text.subarray(splitInsideUnicode, splitInsideSecret)),
+    redactor.write(text.subarray(splitInsideSecret)),
+    redactor.end(),
+  ].join("");
+  assert.match(output, /zażółć authorization: Bearer \[REDACTED\]/);
+  assert.doesNotMatch(output, /abcdefghijklmnopqrstuvwxyz/);
+});
 
 test("resolves a workspace below the shared root", async () => {
   const root = join(tmpdir(), `agent-relay-workspace-${process.pid}`);
@@ -78,15 +105,26 @@ test("rejects files as workspaces", async () => {
   await assert.rejects(() => resolveWorkspace(root, "file"), /not a directory/);
   await rm(root, { recursive: true, force: true });
 });
+test("rejects a workspace symlink that escapes the shared root", async () => {
+  const root = join(tmpdir(), `agent-relay-workspace-link-${process.pid}-${Date.now()}`);
+  const workspaceRoot = join(root, "workspaces");
+  const external = join(root, "external");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(external, { recursive: true });
+  await symlink(external, join(workspaceRoot, "linked"));
+  await assert.rejects(() => resolveWorkspace(workspaceRoot, "linked"), /outside shared root/);
+  await rm(root, { recursive: true, force: true });
+});
 test("accepts only a regular non-symlink active plan file", async () => {
   const workspace = join(tmpdir(), `agent-relay-plan-${process.pid}-${Date.now()}`);
   const activeDir = join(workspace, "docs", "exec-plans", "active");
   await mkdir(activeDir, { recursive: true });
   await writeFile(join(activeDir, "plan.md"), "# Plan\n");
   await assert.doesNotReject(() => assertActivePlanFile(workspace, "docs/exec-plans/active/plan.md"));
-  const linked = spawnSync("ln", ["-s", "plan.md", join(activeDir, "link.md")], { encoding: "utf8" });
-  assert.equal(linked.status, 0, linked.stderr);
+  await symlink("plan.md", join(activeDir, "link.md"));
   await assert.rejects(() => assertActivePlanFile(workspace, "docs/exec-plans/active/link.md"), /symbolic links/);
+  await mkdir(join(activeDir, "directory.md"));
+  await assert.rejects(() => assertActivePlanFile(workspace, "docs/exec-plans/active/directory.md"), /regular file/);
   await rm(workspace, { recursive: true, force: true });
 });
 

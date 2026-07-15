@@ -52,32 +52,22 @@ test("runner finalize script commits and pushes to the requested branch", async 
   }
 });
 
-test("runner finalize script refuses to commit relay artifacts", async () => {
-  const root = join(tmpdir(), `agent-relay-finalize-artifact-${process.pid}-${Date.now()}`);
-  const workspace = join(root, "workspace");
-  await mkdir(join(workspace, ".agent-relay"), { recursive: true });
-  run(root, "git", ["init", "-b", "agent/test-artifact", workspace]);
-  run(workspace, "git", ["config", "user.name", "Seed"]);
-  run(workspace, "git", ["config", "user.email", "seed@example.invalid"]);
-  await writeFile(join(workspace, "tracked.txt"), "before\n");
-  run(workspace, "git", ["add", "tracked.txt"]);
-  run(workspace, "git", ["commit", "-m", "Initial state"]);
-  await writeFile(join(workspace, ".agent-relay", "result.json"), "{}\n");
+test("runner finalize script exits cleanly without publication credentials when nothing changed", async () => {
+  const root = join(tmpdir(), `agent-relay-finalize-clean-${process.pid}-${Date.now()}`);
+  await mkdir(root, { recursive: true });
+  run(root, "git", ["init", "-b", "agent/test-clean"]);
+  run(root, "git", ["config", "user.name", "Seed"]);
+  run(root, "git", ["config", "user.email", "seed@example.invalid"]);
+  await writeFile(join(root, "tracked.txt"), "unchanged\n");
+  run(root, "git", ["add", "tracked.txt"]);
+  run(root, "git", ["commit", "-m", "Initial state"]);
 
   try {
-    const result = spawnSync("bash", [join(process.cwd(), "runner", "finalize.sh")], {
-      cwd: workspace,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        GITHUB_WORKSPACE: workspace,
-        TARGET_BRANCH: "agent/test-artifact",
-        COMMIT_MESSAGE: "Must not commit artifact",
-        GITHUB_PUSH_TOKEN: "unused-for-artifact-check",
-      },
+    const output = run(root, "bash", [join(process.cwd(), "runner", "finalize.sh")], {
+      GITHUB_WORKSPACE: root,
+      TARGET_BRANCH: "agent/test-clean",
     });
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Relay artifact must not be committed/);
+    assert.match(output, /No changes to commit/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

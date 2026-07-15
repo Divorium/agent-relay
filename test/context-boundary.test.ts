@@ -55,6 +55,7 @@ test("Codex arguments isolate the selected repository and temporary storage", ()
   assert.match(filesystem, /"\/home\/agent\/\.codex"="deny"/);
   assert.match(filesystem, /"\/app"="deny"/);
   assert.match(filesystem, /"\/home\/relay"="deny"/);
+  assert.match(filesystem, /"\/runner"="deny"/);
   assert.match(filesystem, /"\/tmp"="deny"/);
   assert.match(filesystem, /"\/var\/tmp"="deny"/);
   assert.match(filesystem, /"\/tmp\/agent-relay-runtime"="write"/);
@@ -105,6 +106,8 @@ test("packaging exposes only current per-run context", async () => {
   assert.match(compose, /HOST_CODEX_AUTH_FILE.*:\/home\/agent\/\.codex\/auth\.json:ro/);
   assert.doesNotMatch(compose, /HOST_CODEX_DIR|:\/home\/agent\/\.codex\s*$/m);
 
+  assert.match(dockerfile, /chown root:root \/runner/);
+  assert.match(dockerfile, /chmod 0755 \/runner/);
   assert.match(dockerfile, /chmod 0700 \/var\/lib\/agent-relay \/home\/agent\/\.codex \/home\/relay/);
   assert.match(dockerfile, /chown -R root:root \/home\/agent\/\.cargo \/home\/agent\/\.rustup/);
   assert.match(dockerfile, /chmod -R a-w \/home\/agent\/\.cargo \/home\/agent\/\.rustup/);
@@ -130,6 +133,9 @@ test("packaging exposes only current per-run context", async () => {
 
   assert.match(ci, /docker run --rm --privileged --user root/);
   assert.match(ci, /chmod 4755 "\$bwrap_path"/);
+  assert.match(ci, /test ! -w \/runner/);
+  assert.match(ci, /test ! -r \/var\/lib\/agent-relay\/private/);
+  assert.match(ci, /test ! -r "\/proc\/\$relay_pid\/environ"/);
   assert.match(ci, /test ! -r \/tmp\/unrelated-context/);
   assert.match(ci, /test ! -r \/var\/tmp\/unrelated-context/);
   assert.match(ci, /touch \/tmp\/agent-relay-runtime\/runtime-write-ok/);

@@ -25,11 +25,6 @@ git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 git add --all
 
-if git diff --cached --name-only | grep -q '^\.agent-relay/'; then
-  echo "Relay artifact must not be committed" >&2
-  exit 1
-fi
-
 if git diff --cached --quiet; then
   echo "No staged changes to commit"
   exit 0

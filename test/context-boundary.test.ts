@@ -11,14 +11,11 @@ const request = {
   planPath: "docs/exec-plans/active/task.md",
 };
 
-test("runtime prompt contains only the active-plan execution contract", () => {
-  const prompt = buildCodexPrompt(request);
-  assert.equal(prompt, [
-    "Implement the active ExecPlan at docs/exec-plans/active/task.md in the current checked-out repository.",
-    "Maintain it according to .agent/PLANS.md.",
-    "Run the validation required by the active plan.",
-    "Do not run commands that create or publish Git commits.",
-  ].join("\n"));
+test("runtime prompt contains only the active plan pointer", () => {
+  assert.equal(
+    buildCodexPrompt(request),
+    "Follow the active ExecPlan at docs/exec-plans/active/task.md in the current checked-out repository.",
+  );
 });
 
 test("repository instructions contain only durable code rules", async () => {
@@ -123,6 +120,7 @@ test("packaging exposes only a read-only Codex credential file and keeps Relay s
   assert.match(dockerfile, /chmod 0700 \/var\/lib\/agent-relay \/home\/agent\/\.codex/);
   assert.match(dockerfile, /relay ALL=\(agent\) NOPASSWD: \/usr\/local\/bin\/codex-run/);
   assert.match(launcher, /exec \/usr\/bin\/env -i/);
+  assert.doesNotMatch(launcher, /\.agent-relay|result\.json/);
 
   assert.match(finalizer, /GIT_ASKPASS/);
   assert.match(finalizer, /GITHUB_PUSH_TOKEN/);

@@ -41,7 +41,7 @@ async function assertCopySourcesExist(path: string): Promise<void> {
   }
 }
 
-test("service image defines the required toolchain and isolation users", async () => {
+test("service image definition contains the required toolchain and isolation users", async () => {
   const dockerfile = await text("Dockerfile");
   const parsed = instructions(dockerfile);
 
@@ -57,7 +57,7 @@ test("service image defines the required toolchain and isolation users", async (
   await assertCopySourcesExist("Dockerfile");
 });
 
-test("runner image contains the expected runner-owned entrypoints", async () => {
+test("runner image definition contains the expected runner-owned entrypoints", async () => {
   const dockerfile = await text("Dockerfile.runner");
   const parsed = instructions(dockerfile);
 
@@ -69,7 +69,7 @@ test("runner image contains the expected runner-owned entrypoints", async () => 
   await assertCopySourcesExist("Dockerfile.runner");
 });
 
-test("Compose separates runner, Relay state and credentials", async () => {
+test("Compose definition separates runner, Relay state and credentials", async () => {
   const compose = await text("compose.yml");
   const runner = compose.match(/\n  runner:\n([\s\S]*?)\n  agent-relay:/)?.[1] ?? "";
   const relay = compose.match(/\n  agent-relay:\n([\s\S]*?)\nvolumes:/)?.[1] ?? "";
@@ -83,7 +83,7 @@ test("Compose separates runner, Relay state and credentials", async () => {
   assert.doesNotMatch(compose, /docker\.sock|privileged:\s*true/);
 });
 
-test("mandatory CI uses only the existing same-repository self-hosted runner", async () => {
+test("mandatory CI definition uses only the existing same-repository self-hosted runner", async () => {
   const workflow = await text(".github/workflows/ci.yml");
 
   assert.match(workflow, /runs-on: \[self-hosted, agent-relay\]/);
@@ -94,14 +94,9 @@ test("mandatory CI uses only the existing same-repository self-hosted runner", a
   assert.doesNotMatch(workflow, /ubuntu-latest|\bdocker\b|privileged|agent-relay-host/i);
 });
 
-test("Docker integration remains an explicit operator script, not a dead workflow", async () => {
-  const script = await text("scripts/host-validation.sh");
-
-  assert.match(script, /docker info/);
-  assert.match(script, /docker compose config/);
-  assert.match(script, /docker build --tag agent-relay:host-validation/);
-  assert.match(script, /docker run --rm --entrypoint \/bin\/bash agent-relay:host-validation \/app\/scripts\/toolchain-smoke\.sh/);
-  assert.match(script, /docker build --file Dockerfile\.runner/);
-  assert.doesNotMatch(script, /--privileged|docker\.sock/);
+test("repository validation does not invoke Docker or GitHub APIs", async () => {
+  const packageJson = await text("package.json");
+  assert.doesNotMatch(packageJson, /host-validation|docker compose|docker build|gh api|api\.github\.com/i);
+  await assert.rejects(readFile("scripts/host-validation.sh", "utf8"), /ENOENT/);
   await assert.rejects(readFile(".github/workflows/host-validation.yml", "utf8"), /ENOENT/);
 });

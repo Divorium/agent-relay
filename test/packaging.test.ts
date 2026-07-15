@@ -67,7 +67,7 @@ test("real image validation is retained on a native Docker host runner", async (
 
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /runs-on: \[self-hosted, agent-relay-host\]/);
-  assert.match(workflow, /\.\/scripts\/host-validation\.sh/);
+  assert.match(workflow, /bash scripts\/host-validation\.sh/);
   assert.doesNotMatch(workflow, /pull_request:|--privileged|docker\.sock/);
 
   assert.match(script, /docker info/);

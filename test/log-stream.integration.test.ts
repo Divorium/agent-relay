@@ -9,7 +9,8 @@ const planPath = "docs/exec-plans/active/plan.md";
 
 test("Codex output reaches Docker stdout and the job log before process completion", async () => {
   const root = join(tmpdir(), `agent-relay-live-log-${process.pid}-${Date.now()}`);
-  const workspace = join(root, "workspace");
+  const workspaceRoot = join(root, "workspaces");
+  const workspace = join(workspaceRoot, "workspace");
   const outputPath = join(root, "state", "job.log");
   const executable = join(root, "fake-codex");
   await mkdir(join(workspace, "docs", "exec-plans", "active"), { recursive: true });
@@ -20,10 +21,12 @@ set -eu
 args="$*"
 case "$args" in *'default_permissions="relay"'*) ;; *) exit 41 ;; esac
 case "$args" in *'"/home/agent/.codex"="deny"'*) ;; *) exit 42 ;; esac
-case "$args" in *'"${workspace}/.git"="read"'*) ;; *) exit 43 ;; esac
-case "$args" in *'danger-full-access'*) exit 44 ;; esac
-case "$args" in *'result.json'*) exit 45 ;; esac
-case "$args" in *'.agent/PLANS.md'*) ;; *) exit 46 ;; esac
+case "$args" in *'"${workspaceRoot}"="deny"'*) ;; *) exit 43 ;; esac
+case "$args" in *'"${workspace}"="write"'*) ;; *) exit 44 ;; esac
+case "$args" in *'"${workspace}/.git"="read"'*) ;; *) exit 45 ;; esac
+case "$args" in *'danger-full-access'*) exit 46 ;; esac
+case "$args" in *'result.json'*) exit 47 ;; esac
+case "$args" in *'.agent/PLANS.md'*) ;; *) exit 48 ;; esac
 while [ "$1" != "--cd" ]; do shift; done
 workspace="$2"
 printf 'first live line\n'
@@ -40,7 +43,7 @@ printf 'changed\n' > "$workspace/changed.txt"
   }) as any;
 
   try {
-    const execution = new CodexExecutor(executable, 5_000, 100_000).run({
+    const execution = new CodexExecutor(executable, 5_000, 100_000, undefined, workspaceRoot).run({
       requestId: "live-log-request",
       workspace: "workspace",
       planPath,

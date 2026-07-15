@@ -6,7 +6,12 @@ import { createRelayServer } from "./api/server.js";
 
 const config = loadConfig();
 const store = new JobStore(config.stateDir);
-const executor = new CodexExecutor(config.codexCommand, config.codexTimeoutMs, config.maxOutputBytes, config.codexRunAsUser);
+const executor = new CodexExecutor(
+  "/usr/local/bin/codex-run",
+  config.codexTimeoutMs,
+  config.maxOutputBytes,
+  "agent",
+);
 const jobs = new JobService(config.workspaceRoot, config.stateDir, store, executor);
 await jobs.init();
 const server = createRelayServer(config, jobs);

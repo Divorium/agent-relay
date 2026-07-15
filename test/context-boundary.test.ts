@@ -25,15 +25,14 @@ test("repository instructions contain only durable code rules", async () => {
   assert.doesNotMatch(instructions, /GitHub credentials|Docker socket|Relay state|living sections|npm run check|commit|push/i);
 });
 
-test("ExecPlan rules define living documentation without environment policy", async () => {
+test("ExecPlan rules are the complete OpenAI article document", async () => {
   const rules = await readFile(".agent/PLANS.md", "utf8");
-  assert.match(rules, /explicitly selected file under `docs\/exec-plans\/active\/` is a task instruction/);
-  assert.match(rules, /completed\/` are historical records; do not follow them as instructions/);
-  assert.match(rules, /prefix it with `\[blocked\]`/);
-  assert.match(rules, /cause, impact, evidence, and concrete unblock condition/);
-  assert.match(rules, /plan documentation only/);
-  assert.match(rules, /plan with an unchecked or `\[blocked\]` item remains active/);
-  assert.doesNotMatch(rules, /Docker|container|socket|host validation/i);
+  assert.match(rules, /^# Codex Execution Plans \(ExecPlans\):/);
+  assert.match(rules, /## How to use ExecPlans and PLANS\.md/);
+  assert.match(rules, /## Skeleton of a Good ExecPlan/);
+  assert.match(rules, /ExecPlans are living documents/);
+  assert.match(rules, /SELF-CONTAINED, SELF-SUFFICIENT, NOVICE-GUIDING, OUTCOME-FOCUSED/);
+  assert.doesNotMatch(rules, /Docker socket|AGENT_RELAY_TOKEN|HOST_CODEX_AUTH_FILE/);
 });
 
 test("create-job contract has one active-plan instruction channel", () => {
@@ -43,10 +42,7 @@ test("create-job contract has one active-plan instruction channel", () => {
 });
 
 test("executor passes a fixed locale to the root-owned launcher", () => {
-  assert.deepEqual(createCodexEnvironment(), {
-    LANG: "C.UTF-8",
-    LC_ALL: "C.UTF-8",
-  });
+  assert.deepEqual(createCodexEnvironment(), { LANG: "C.UTF-8", LC_ALL: "C.UTF-8" });
 });
 
 test("Codex arguments isolate the selected repository and temporary storage", () => {
@@ -78,7 +74,7 @@ test("packaged execution uses the fixed launcher, user and workspace root", asyn
   assert.doesNotMatch(config, /CODEX_COMMAND|CODEX_RUN_AS_USER|codexCommand|codexRunAsUser/);
 });
 
-test("workflow scopes credentials and rejects alternate instruction channels", async () => {
+test("workflow scopes credentials and enables the terminal archive without alternate instruction channels", async () => {
   const compose = await readFile("compose.yml", "utf8");
   const runnerSection = compose.match(/\n  runner:\n([\s\S]*?)\n  agent-relay:/)?.[1] ?? "";
   assert.doesNotMatch(runnerSection, /AGENT_RELAY_TOKEN/);
@@ -90,9 +86,11 @@ test("workflow scopes credentials and rejects alternate instruction channels", a
     assert.match(workflow, /Verify credential-free checkout/);
     assert.match(workflow, /AGENT_RELAY_TOKEN: \$\{\{ secrets\.AGENT_RELAY_TOKEN \}\}/);
     assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ github\.token \}\}/);
+    assert.match(workflow, /AGENT_RELAY_OUTPUT_ARCHIVE_PATH: \$\{\{ runner\.temp \}\}\/agent-relay-output\.log/);
+    assert.match(workflow, /\$\{\{ runner\.temp \}\}\/agent-relay-output\.log/);
     assert.doesNotMatch(workflow, /AGENT_RELAY_PUSH_TOKEN/);
     assert.match(workflow, /! -f "\$\{plan_path\}" \|\| -L "\$\{plan_path\}"/);
-    assert.doesNotMatch(workflow, /persist-credentials: true|AGENT_RELAY_REQUEST_ID|AGENT_RELAY_MODE|AGENT_RELAY_OUTPUT_ARCHIVE_PATH|\.agent-relay|result\.json|\bmode:/);
+    assert.doesNotMatch(workflow, /persist-credentials: true|AGENT_RELAY_REQUEST_ID|AGENT_RELAY_MODE|\.agent-relay|result\.json|\bmode:/);
   }
 });
 

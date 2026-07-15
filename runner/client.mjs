@@ -1,28 +1,27 @@
 #!/usr/bin/env node
-import { appendFile, mkdir, open, readFile, rm } from "node:fs/promises";
-import { spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { dirname } from "node:path";
+import { appendFile, lstat, mkdir, open, readFile, realpath, rename, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { dirname, relative, resolve, sep } from "node:path";
 import { once } from "node:events";
 
 const baseUrl = process.env.AGENT_RELAY_URL ?? "http://agent-relay:8080";
 const token = process.env.AGENT_RELAY_TOKEN;
-if (!token) throw new Error("AGENT_RELAY_TOKEN is required");
 const workspace = process.env.GITHUB_WORKSPACE;
 const workspaceRoot = process.env.AGENT_RELAY_WORKSPACE_ROOT ?? "/runner/_work";
 const planPath = process.env.AGENT_RELAY_PLAN_PATH;
-const mode = process.env.AGENT_RELAY_MODE ?? "implement";
-const requestId = process.env.AGENT_RELAY_REQUEST_ID ?? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
-if (!workspace || !planPath) throw new Error("GITHUB_WORKSPACE and AGENT_RELAY_PLAN_PATH are required");
+const githubOutput = process.env.GITHUB_OUTPUT;
+const archivePath = process.env.AGENT_RELAY_OUTPUT_ARCHIVE_PATH;
+if (!token) throw new Error("AGENT_RELAY_TOKEN is required");
+if (!workspace || !planPath || !githubOutput) throw new Error("GITHUB_WORKSPACE, AGENT_RELAY_PLAN_PATH and GITHUB_OUTPUT are required");
 
+const ACTIVE_PLAN_PATH = /^docs\/exec-plans\/active\/[A-Za-z0-9._-]+\.md$/;
+const JOB_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/;
+const JOB_STATUSES = new Set(["accepted", "running", "completed", "failed", "timed_out", "interrupted"]);
+const ACTIVE_JOB_STATUSES = new Set(["accepted", "running"]);
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
-const SECRET_PATTERNS = [
-  /gh[pousr]_[A-Za-z0-9_]{20,}/g,
-  /github_pat_[A-Za-z0-9_]{20,}/g,
-  /sk-[A-Za-z0-9_-]{20,}/g,
-  /(authorization\s*[:=]\s*bearer\s+)[^\s"']+/gi,
-  /("?(?:token|password|secret|apiKey|api_key)"?\s*[:=]\s*(?:["']?))[^\s,"']+((?:["']?))/gi,
-];
+const CONTROL_CHARACTERS_GLOBAL = /[\u0000-\u001f\u007f]/g;
+const MAX_RESPONSE_BYTES = 64_000;
+const MAX_REMOTE_ERROR_BODY_BYTES = 8192;
 
 function positiveInteger(name, fallback) {
   const raw = process.env[name];
@@ -34,23 +33,13 @@ function positiveInteger(name, fallback) {
 const requestTimeoutMs = positiveInteger("AGENT_RELAY_REQUEST_TIMEOUT_MS", 30_000);
 const pollIntervalMs = positiveInteger("AGENT_RELAY_POLL_INTERVAL_MS", 5_000);
 const pollTimeoutMs = positiveInteger("AGENT_RELAY_POLL_TIMEOUT_MS", 21_900_000);
-const outputIdleMs = positiveInteger("AGENT_RELAY_OUTPUT_IDLE_MS", 60_000);
-const githubLogBytes = positiveInteger("AGENT_RELAY_GITHUB_LOG_BYTES", 10_000_000);
-const githubTailBytes = positiveInteger("AGENT_RELAY_GITHUB_TAIL_BYTES", 1_000_000);
-const outputArchivePath = process.env.AGENT_RELAY_OUTPUT_ARCHIVE_PATH;
-const normalizedWorkspaceRoot = workspaceRoot.replace(/\/$/, "");
-const workspacePrefix = `${normalizedWorkspaceRoot}/`;
-if (!workspace.startsWith(workspacePrefix)) throw new Error(`GITHUB_WORKSPACE must be below ${workspacePrefix}`);
-const relativeWorkspace = workspace.slice(workspacePrefix.length);
-if (!relativeWorkspace) throw new Error("GITHUB_WORKSPACE does not identify a repository workspace");
 
-function asObject(value, name) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${name} must be an object`);
-  return value;
-}
-
-function strictKeys(value, allowed, name) {
-  for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`Unknown ${name} field: ${key}`);
+function requestId() {
+  if (process.env.AGENT_RELAY_REQUEST_ID) return process.env.AGENT_RELAY_REQUEST_ID;
+  const parts = [process.env.GITHUB_REPOSITORY_ID, process.env.GITHUB_RUN_ID, process.env.GITHUB_RUN_ATTEMPT];
+  return parts.every((part) => typeof part === "string" && /^[1-9][0-9]*$/.test(part))
+    ? `gha-${parts.join("-")}`
+    : randomUUID();
 }
 
 function requiredString(value, name, maxLength) {
@@ -60,438 +49,168 @@ function requiredString(value, name, maxLength) {
   return value;
 }
 
-function stringArray(value, name, maxItems, maxLength) {
-  if (!Array.isArray(value) || value.length > maxItems) throw new Error(`Invalid ${name}`);
-  return value.map((item, index) => requiredString(item, `${name}[${index}]`, maxLength));
+function deriveCommitMessage(plan) {
+  const heading = plan.split(/\r?\n/u).find((line) => /^#[ \t]+\S/u.test(line));
+  const source = heading ? heading.replace(/^#[ \t]+/u, "") : "";
+  const normalized = source.replace(CONTROL_CHARACTERS_GLOBAL, " ").replace(/\s+/gu, " ").trim();
+  return requiredString(Array.from(normalized).slice(0, 120).join("").trim() || "Apply active ExecPlan", "commitMessage", 120);
 }
 
-function validateValidation(value, index) {
-  const record = asObject(value, `validation[${index}]`);
-  strictKeys(record, new Set(["command", "status", "exitCode", "details"]), `validation[${index}]`);
-  const command = requiredString(record.command, `validation[${index}].command`, 500);
-  if (!["passed", "failed", "skipped"].includes(record.status)) throw new Error(`Invalid validation[${index}].status`);
-  const details = requiredString(record.details, `validation[${index}].details`, 2000);
-  if (record.exitCode !== undefined && (!Number.isInteger(record.exitCode) || record.exitCode < 0 || record.exitCode > 255)) {
-    throw new Error(`Invalid validation[${index}].exitCode`);
+function isOutside(root, candidate) {
+  const path = relative(root, candidate);
+  return path === ".." || path.startsWith(`..${sep}`) || resolve(root, path) !== candidate;
+}
+
+async function resolvePlanFile(resolvedWorkspace, requestedPlanPath) {
+  if (!ACTIVE_PLAN_PATH.test(requestedPlanPath)) throw new Error("AGENT_RELAY_PLAN_PATH must identify a file directly under docs/exec-plans/active");
+  const activeRoot = resolve(resolvedWorkspace, "docs", "exec-plans", "active");
+  const candidate = resolve(resolvedWorkspace, requestedPlanPath);
+  const relativePath = relative(activeRoot, candidate);
+  if (!relativePath || relativePath.includes(sep) || isOutside(activeRoot, candidate)) throw new Error("Invalid active ExecPlan path");
+  const info = await lstat(candidate);
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error("Active ExecPlan must be a regular file");
+  if (await realpath(candidate) !== candidate) throw new Error("Active ExecPlan must not traverse symbolic links");
+  return candidate;
+}
+
+async function readBoundedText(response, limit = MAX_RESPONSE_BYTES) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null && Number(contentLength) > limit) throw new Error(`Agent Relay response exceeded ${limit} bytes`);
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks = [];
+  let bytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = Buffer.from(value);
+    bytes += chunk.length;
+    if (bytes > limit) {
+      await reader.cancel();
+      throw new Error(`Agent Relay response exceeded ${limit} bytes`);
+    }
+    chunks.push(chunk);
   }
-  return { command, status: record.status, ...(record.exitCode === undefined ? {} : { exitCode: record.exitCode }), details };
+  return Buffer.concat(chunks, bytes).toString("utf8");
 }
 
-function assertNoSensitiveData(value) {
-  const serialized = JSON.stringify(value);
-  if (/auth\.json|\.ssh\/|BEGIN [A-Z ]*PRIVATE KEY/i.test(serialized)) throw new Error("Result contains sensitive data");
-  for (const pattern of SECRET_PATTERNS) {
-    pattern.lastIndex = 0;
-    if (pattern.test(serialized)) throw new Error("Result contains sensitive data");
+function matchesContentType(response, mediaType) {
+  return new RegExp(`^${mediaType.replace("/", "\\/")}(?:\\s*;|$)`, "i").test(response.headers.get("content-type") ?? "");
+}
+
+async function fetchJson(url, expectedStatus, options = {}) {
+  const response = await fetch(url, { ...options, redirect: "error", signal: AbortSignal.timeout(requestTimeoutMs) });
+  const text = await readBoundedText(response);
+  if (response.status !== expectedStatus) throw new Error(`Agent Relay request failed with HTTP ${response.status}`);
+  if (!matchesContentType(response, "application/json") && !/\+json(?:\s*;|$)/i.test(response.headers.get("content-type") ?? "")) {
+    throw new Error("Agent Relay returned a non-JSON content type");
+  }
+  if (!text.trim()) throw new Error("Agent Relay returned an empty JSON response");
+  try { return JSON.parse(text); } catch { throw new Error("Agent Relay returned invalid JSON"); }
+}
+
+function validateJob(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Agent Relay returned an invalid job object");
+  if (typeof value.id !== "string" || !JOB_ID.test(value.id)) throw new Error("Agent Relay returned an invalid job id");
+  if (typeof value.status !== "string" || !JOB_STATUSES.has(value.status)) throw new Error("Agent Relay returned an invalid job status");
+  if (value.errorCode !== undefined) requiredString(value.errorCode, "job.errorCode", 256);
+  if (value.errorMessage !== undefined) requiredString(value.errorMessage, "job.errorMessage", 2048);
+  return value;
+}
+
+function logJobStatus(job) { console.log(`Agent Relay job ${job.id}: ${job.status}`); }
+
+async function writeFully(handle, chunk) {
+  let offset = 0;
+  while (offset < chunk.length) {
+    const { bytesWritten } = await handle.write(chunk, offset, chunk.length - offset, null);
+    if (bytesWritten <= 0) throw new Error("Archive write made no progress");
+    offset += bytesWritten;
   }
 }
 
-function validateResult(value) {
-  assertNoSensitiveData(value);
-  const result = asObject(value, "result");
-  strictKeys(result, new Set(["schemaVersion", "requestId", "status", "commitMessage", "summary", "validation", "blockers", "limitations"]), "result");
-  if (result.schemaVersion !== 1 || result.requestId !== requestId) throw new Error("Result contract mismatch");
-  if (result.status !== "completed" && result.status !== "blocked") throw new Error("Invalid result status");
-
-  const summary = requiredString(result.summary, "summary", 4000);
-  if (!Array.isArray(result.validation) || result.validation.length > 100) throw new Error("Invalid validation");
-  const validation = result.validation.map(validateValidation);
-  const blockers = stringArray(result.blockers, "blockers", 50, 2000);
-  const limitations = stringArray(result.limitations, "limitations", 50, 2000);
-
-  let commitMessage;
-  if (result.status === "completed") {
-    commitMessage = requiredString(result.commitMessage, "commitMessage", 120);
-    if (commitMessage.includes("\n") || commitMessage.includes("\r")) throw new Error("Invalid commitMessage");
-  } else if (result.commitMessage !== undefined) {
-    throw new Error("Unexpected commitMessage");
-  }
-
-  return {
-    schemaVersion: 1,
-    requestId,
-    status: result.status,
-    ...(commitMessage === undefined ? {} : { commitMessage }),
-    summary,
-    validation,
-    blockers,
-    limitations,
-  };
+async function writeStdout(chunk) {
+  if (process.stdout.destroyed || process.stdout.writableEnded) throw new Error("stdout is unavailable");
+  if (process.stdout.write(chunk)) return;
+  await Promise.race([
+    once(process.stdout, "drain"),
+    once(process.stdout, "error").then(([error]) => Promise.reject(error)),
+    once(process.stdout, "close").then(() => Promise.reject(new Error("stdout closed"))),
+  ]);
 }
 
-async function fetchJson(url, options = {}) {
-  const response = await fetch(url, { ...options, signal: AbortSignal.timeout(requestTimeoutMs) });
-  const text = await response.text();
-  if (!response.ok) {
-    const error = new Error(`Agent Relay request failed: ${response.status} ${text}`);
-    error.status = response.status;
-    error.body = text;
+async function streamOutput(jobId, finalPath) {
+  const final = resolve(finalPath);
+  const temporary = `${final}.tmp-${process.pid}-${randomUUID()}`;
+  await mkdir(dirname(final), { recursive: true });
+  await rm(final, { force: true });
+  const handle = await open(temporary, "wx", 0o600);
+  let closed = false;
+  try {
+    const response = await fetch(`${baseUrl}/v1/jobs/${jobId}/output?offset=0`, {
+      redirect: "error",
+      headers: { authorization: `Bearer ${token}`, accept: "application/octet-stream", "accept-encoding": "identity" },
+      signal: AbortSignal.timeout(pollTimeoutMs),
+    });
+    if (response.status !== 200) {
+      await readBoundedText(response, MAX_REMOTE_ERROR_BODY_BYTES).catch(() => "");
+      throw new Error(`Agent Relay output request failed with HTTP ${response.status}`);
+    }
+    if (!matchesContentType(response, "application/octet-stream")) throw new Error("Agent Relay returned a non-octet-stream output content type");
+    const encoding = response.headers.get("content-encoding");
+    if (encoding && encoding.toLowerCase() !== "identity") throw new Error("Agent Relay returned transformed output");
+    if (response.headers.get("x-agent-relay-output-offset") !== "0") throw new Error("Agent Relay returned an invalid output offset acknowledgement");
+    if (!response.body) throw new Error("Agent Relay returned an empty output body");
+    const reader = response.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      await writeFully(handle, chunk);
+      await writeStdout(chunk);
+    }
+    await handle.sync();
+    await handle.close();
+    closed = true;
+    await rename(temporary, final);
+  } catch (error) {
+    if (!closed) await handle.close().catch(() => undefined);
+    await rm(temporary, { force: true }).catch(() => undefined);
+    await rm(final, { force: true }).catch(() => undefined);
     throw error;
   }
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error("Agent Relay returned invalid JSON");
+}
+
+const resolvedRoot = await realpath(workspaceRoot);
+const resolvedWorkspace = await realpath(workspace);
+if (isOutside(resolvedRoot, resolvedWorkspace)) throw new Error("GITHUB_WORKSPACE must be below AGENT_RELAY_WORKSPACE_ROOT");
+const relativeWorkspace = relative(resolvedRoot, resolvedWorkspace).split(sep).join("/");
+if (!relativeWorkspace) throw new Error("GITHUB_WORKSPACE does not identify a repository workspace");
+const planFile = await resolvePlanFile(resolvedWorkspace, planPath);
+const commitMessage = deriveCommitMessage(await readFile(planFile, "utf8"));
+await appendFile(githubOutput, "", "utf8");
+
+const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+let job = validateJob(await fetchJson(`${baseUrl}/v1/jobs`, 202, {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ requestId: requestId(), workspace: relativeWorkspace, planPath }),
+}));
+logJobStatus(job);
+let previousStatus = job.status;
+const outputPromise = archivePath ? streamOutput(job.id, archivePath) : undefined;
+const deadline = Date.now() + pollTimeoutMs;
+while (ACTIVE_JOB_STATUSES.has(job.status)) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error(`Agent Relay polling timed out after ${pollTimeoutMs}ms`);
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, Math.min(pollIntervalMs, remaining)));
+  if (Date.now() >= deadline) throw new Error(`Agent Relay polling timed out after ${pollTimeoutMs}ms`);
+  job = validateJob(await fetchJson(`${baseUrl}/v1/jobs/${job.id}`, 200, { headers: { authorization: `Bearer ${token}` } }));
+  if (job.status !== previousStatus) {
+    logJobStatus(job);
+    previousStatus = job.status;
   }
 }
-
-async function writeBuffer(stream, buffer) {
-  if (buffer.length === 0) return;
-  if (!stream.write(buffer)) await once(stream, "drain");
-}
-
-async function writeText(stream, text) {
-  if (text.length === 0) return;
-  if (!stream.write(text)) await once(stream, "drain");
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isTerminalStatus(status) {
-  return status === "completed" || status === "blocked" || status === "failed" || status === "timed_out" || status === "interrupted";
-}
-
-function logJobStatus(job) {
-  console.log(`Agent Relay job ${String(job.id ?? "unknown")}: ${String(job.status ?? "unknown")}`);
-}
-
-async function runGitStatus(workspaceDir) {
-  const diff = spawnSync("git", ["status", "--porcelain"], { cwd: workspaceDir, encoding: "utf8" });
-  if (diff.status !== 0) throw new Error(diff.stderr || "git status failed");
-  return diff.stdout.trim().length > 0;
-}
-
-async function openArchiveIfConfigured() {
-  if (!outputArchivePath) return undefined;
-  try {
-    await mkdir(dirname(outputArchivePath), { recursive: true });
-    return await open(outputArchivePath, "w", 0o600);
-  } catch (error) {
-    await writeText(process.stderr, `[Agent Relay] raw archive unavailable, switching to tail-only mode: ${error.message ?? error}\n`);
-    return undefined;
-  }
-}
-
-function appendToTail(state, chunk) {
-  state.tailChunks.push(chunk);
-  state.tailBytes += chunk.length;
-  while (state.tailBytes > githubTailBytes && state.tailChunks.length > 0) {
-    const first = state.tailChunks[0];
-    const overflow = state.tailBytes - githubTailBytes;
-    if (first.length <= overflow) {
-      state.tailChunks.shift();
-      state.tailBytes -= first.length;
-      continue;
-    }
-    state.tailChunks[0] = first.subarray(overflow);
-    state.tailBytes -= overflow;
-  }
-}
-
-function buildTailBuffer(state) {
-  if (state.tailBytes === 0) return Buffer.alloc(0);
-  return Buffer.concat(state.tailChunks, state.tailBytes);
-}
-
-async function writeFully(handle, buffer) {
-  let written = 0;
-  while (written < buffer.length) {
-    const result = await handle.write(buffer.subarray(written));
-    if (result.bytesWritten <= 0) throw new Error("archive write returned no progress");
-    written += result.bytesWritten;
-  }
-}
-
-async function appendArchive(handle, buffer) {
-  await writeFully(handle, buffer);
-}
-
-async function fetchOutputResponse(jobId, offset, signal) {
-  return await fetch(`${baseUrl}/v1/jobs/${jobId}/output?offset=${offset}`, {
-    method: "GET",
-    headers: {
-      authorization: `Bearer ${token}`,
-      accept: "application/octet-stream",
-    },
-    signal,
-  });
-}
-
-async function streamOnce(state, jobId, deadlineAt) {
-  if (Date.now() >= deadlineAt) throw new Error(`Agent Relay output drain timed out after ${pollTimeoutMs}ms`);
-  const controller = new AbortController();
-  let idleTimer;
-  let deadlineTimer;
-  let idleExpired = false;
-  let deadlineExpired = false;
-
-  const armIdleTimer = () => {
-    clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => {
-      idleExpired = true;
-      controller.abort();
-    }, outputIdleMs);
-  };
-
-  try {
-    deadlineTimer = setTimeout(() => {
-      deadlineExpired = true;
-      controller.abort();
-    }, Math.max(1, deadlineAt - Date.now()));
-    armIdleTimer();
-
-    let response;
-    try {
-      response = await fetchOutputResponse(jobId, state.confirmedOffset, controller.signal);
-    } catch (error) {
-      if (idleExpired) return { kind: "idle" };
-      if (deadlineExpired || controller.signal.aborted) throw new Error(`Agent Relay output drain timed out after ${pollTimeoutMs}ms`);
-      return { kind: "request-failed", error };
-    }
-
-    if (response.status === 416) {
-      const text = await response.text();
-      return { kind: "offset-too-high", error: new Error(`Agent Relay output request rejected: ${response.status} ${text}`) };
-    }
-    if (!response.ok) {
-      const text = await response.text();
-      return { kind: "request-failed", error: new Error(`Agent Relay output request failed: ${response.status} ${text}`) };
-    }
-
-    const reader = response.body?.getReader();
-    if (!reader) return { kind: "request-failed", error: new Error("Agent Relay returned a response without a body") };
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) return { kind: "eof" };
-        armIdleTimer();
-        const chunk = Buffer.from(value);
-        await handleRawChunk(state, chunk);
-      }
-    } catch (error) {
-      if (idleExpired) return { kind: "idle" };
-      if (deadlineExpired || controller.signal.aborted) throw new Error(`Agent Relay output drain timed out after ${pollTimeoutMs}ms`);
-      return { kind: "disconnect", error };
-    } finally {
-      await reader.cancel().catch(() => undefined);
-    }
-  } finally {
-    clearTimeout(idleTimer);
-    clearTimeout(deadlineTimer);
-  }
-}
-
-async function handleRawChunk(state, chunk) {
-  if (state.archiveHandle) {
-    try {
-      await appendArchive(state.archiveHandle, chunk);
-    } catch (error) {
-      await closeAndRemoveArchive(state);
-      state.archiveFallback = true;
-      await writeText(process.stderr, `[Agent Relay] raw archive write failed, switching to tail-only mode: ${error.message ?? error}\n`);
-      appendToTail(state, chunk);
-      state.confirmedOffset += chunk.length;
-      state.totalReceived += chunk.length;
-      return;
-    }
-  }
-
-  appendToTail(state, chunk);
-  if (state.archiveHandle && state.livePrinted < githubLogBytes) {
-    const liveBytes = Math.min(chunk.length, githubLogBytes - state.livePrinted);
-    if (liveBytes > 0) {
-      await ensureRawDisplayStarted(state);
-      const slice = chunk.subarray(0, liveBytes);
-      await writeBuffer(process.stdout, slice);
-      state.livePrinted += slice.length;
-      state.lastRawByte = slice[slice.length - 1];
-    }
-  }
-
-  state.confirmedOffset += chunk.length;
-  state.totalReceived += chunk.length;
-  if (chunk.length > 0) state.lastRawByte = chunk[chunk.length - 1];
-}
-
-async function ensureRawDisplayStarted(state) {
-  if (state.rawDisplayStarted) return;
-  await writeText(process.stdout, `::stop-commands::${state.stopCommandsToken}\n`);
-  state.rawDisplayStarted = true;
-}
-
-async function closeAndRemoveArchive(state) {
-  if (!state.archiveHandle) return;
-  const handle = state.archiveHandle;
-  state.archiveHandle = undefined;
-  await handle.close().catch(() => undefined);
-  if (state.archivePath) await rm(state.archivePath, { force: true }).catch(() => undefined);
-}
-
-async function finalizeOutput(state) {
-  let finalMarkerNeeded = false;
-  let finalMarkerText = "";
-  let finalTail = Buffer.alloc(0);
-  if (state.archiveHandle) {
-    try {
-      await state.archiveHandle.sync().catch(() => undefined);
-      await state.archiveHandle.close();
-      state.archiveComplete = true;
-    } catch (error) {
-      state.archiveComplete = false;
-      await rm(state.archivePath, { force: true }).catch(() => undefined);
-      await writeText(process.stderr, `[Agent Relay] complete archive could not be finalized and was removed: ${error.message ?? error}\n`);
-    } finally {
-      state.archiveHandle = undefined;
-    }
-  }
-
-  const suppressionExists = state.totalReceived > state.livePrinted;
-  if (!state.archiveComplete || suppressionExists) {
-    finalMarkerNeeded = true;
-    finalMarkerText = state.archiveComplete
-      ? "[Agent Relay] live raw output was truncated; the final tail follows.\n"
-      : "[Agent Relay] complete archive is unavailable; the final tail follows.\n";
-    finalTail = buildTailBuffer(state);
-    const tailStart = state.totalReceived - finalTail.length;
-    const finalTailStart = Math.max(state.livePrinted, tailStart);
-    finalTail = finalTail.subarray(finalTailStart - tailStart);
-  }
-
-  if (finalMarkerNeeded || finalTail.length > 0 || state.rawDisplayStarted) {
-    await ensureRawDisplayStarted(state);
-  }
-
-  if (finalMarkerNeeded) {
-    if (state.lastRawByte !== undefined && state.lastRawByte !== 10) {
-      await writeText(process.stdout, "\n");
-    }
-    await writeText(process.stdout, finalMarkerText);
-  }
-
-  if (finalTail.length > 0) {
-    if (state.lastRawByte !== undefined && state.lastRawByte !== 10) {
-      await writeText(process.stdout, "\n");
-    }
-    await writeBuffer(process.stdout, finalTail);
-    state.lastRawByte = finalTail[finalTail.length - 1];
-  }
-
-  if (state.rawDisplayStarted) {
-    if (state.lastRawByte !== undefined && state.lastRawByte !== 10) {
-      await writeText(process.stdout, "\n");
-    }
-    await writeText(process.stdout, `::${state.stopCommandsToken}::\n`);
-  }
-
-  state.archiveComplete = state.archiveComplete && !state.archiveFallback;
-}
-
-function createOutputState() {
-  return {
-    confirmedOffset: 0,
-    totalReceived: 0,
-    livePrinted: 0,
-    tailChunks: [],
-    tailBytes: 0,
-    archiveHandle: undefined,
-    archivePath: outputArchivePath,
-    archiveComplete: !outputArchivePath,
-    archiveFallback: false,
-    rawDisplayStarted: false,
-    stopCommandsToken: randomBytes(32).toString("hex"),
-    lastRawByte: undefined,
-  };
-}
-
-async function runOutputPipeline(state, job) {
-  const deadlineAt = Date.now() + pollTimeoutMs;
-  let status = job;
-
-  while (Date.now() < deadlineAt) {
-    const outcome = await streamOnce(state, job.id, deadlineAt);
-    if (outcome.kind === "request-failed") {
-      const statusAfterFailure = await fetchJson(`${baseUrl}/v1/jobs/${job.id}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (statusAfterFailure.status !== status.status) {
-        logJobStatus(statusAfterFailure);
-      }
-      status = statusAfterFailure;
-      if (Date.now() >= deadlineAt) break;
-      await sleep(Math.min(pollIntervalMs, 1000));
-      continue;
-    }
-    if (outcome.kind === "offset-too-high" || outcome.kind === "disconnect" || outcome.kind === "idle" || outcome.kind === "eof") {
-      const nextStatus = await fetchJson(`${baseUrl}/v1/jobs/${job.id}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (nextStatus.status !== status.status) logJobStatus(nextStatus);
-      status = nextStatus;
-      if (isTerminalStatus(status.status) && outcome.kind === "eof") {
-        return status;
-      }
-      if (Date.now() >= deadlineAt) break;
-      await sleep(Math.min(pollIntervalMs, 1000));
-      continue;
-    }
-    throw outcome.error;
-  }
-
-  throw new Error(`Agent Relay output drain timed out after ${pollTimeoutMs}ms`);
-}
-
-async function main() {
-  const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
-  const job = await fetchJson(`${baseUrl}/v1/jobs`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ requestId, workspace: relativeWorkspace, planPath, mode }),
-  });
-  logJobStatus(job);
-
-  const outputState = createOutputState();
-  outputState.archiveHandle = await openArchiveIfConfigured();
-  if (!outputState.archiveHandle && outputArchivePath) outputState.archiveFallback = true;
-
-  let failure;
-  try {
-    await runOutputPipeline(outputState, job);
-
-    const finalJob = await fetchJson(`${baseUrl}/v1/jobs/${job.id}`, {
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (finalJob.status !== "completed" && finalJob.status !== "blocked") {
-      throw new Error(`Agent Relay job failed: ${finalJob.status} ${finalJob.errorCode ?? ""} ${finalJob.errorMessage ?? ""}`);
-    }
-
-    const result = validateResult(JSON.parse(await readFile(`${workspace}/.agent-relay/result.json`, "utf8")));
-    if (result.status === "blocked") throw new Error(`Codex blocked: ${result.blockers.join("; ")}`);
-
-    const hasChanges = await runGitStatus(workspace);
-    await rm(`${workspace}/.agent-relay`, { recursive: true, force: true });
-
-    console.log(`Codex summary: ${result.summary}`);
-    for (const validation of result.validation) {
-      console.log(`Validation ${validation.status}: ${validation.command} - ${validation.details}`);
-    }
-
-    if (!hasChanges) return;
-    const githubOutput = process.env.GITHUB_OUTPUT;
-    if (!githubOutput) throw new Error("GITHUB_OUTPUT is required when the worktree changed");
-    await appendFile(githubOutput, `commit_message=${result.commitMessage}\n`, "utf8");
-  } catch (error) {
-    failure = error;
-  } finally {
-    try {
-      await finalizeOutput(outputState);
-    } catch (error) {
-      if (!failure) failure = error;
-    }
-  }
-  if (failure) throw failure;
-}
-
-await main();
+if (outputPromise) await outputPromise;
+if (job.status !== "completed") throw new Error(`Agent Relay job failed: ${job.status} ${job.errorCode ?? ""} ${job.errorMessage ?? ""}`);
+await appendFile(githubOutput, `commit_message=${commitMessage}\n`, "utf8");

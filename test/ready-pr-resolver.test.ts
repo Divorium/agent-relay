@@ -27,7 +27,6 @@ async function runResolver(statusCode: number, responseBody: Record<string, unkn
   const outputPath = join(root, "github-output");
   await mkdir(root, { recursive: true });
   await writeFile(outputPath, "");
-
   const server = createServer((req: any, res: any) => {
     assert.equal(req.method, "GET");
     assert.equal(req.url, `/repos/${repository}/pulls/${pullRequestNumber}`);
@@ -36,11 +35,9 @@ async function runResolver(statusCode: number, responseBody: Record<string, unkn
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify(responseBody));
   });
-
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address === "object");
-
   try {
     const result = await runProcess(process.execPath, [join(process.cwd(), "runner", "resolve-pr.mjs")], {
       cwd: process.cwd(),
@@ -66,11 +63,7 @@ function pullRequest(overrides: Record<string, unknown> = {}): Record<string, un
     number: pullRequestNumber,
     state: "open",
     draft: false,
-    head: {
-      ref: "agent/change",
-      sha: headSha,
-      repo: { full_name: repository },
-    },
+    head: { ref: "agent/change", sha: headSha, repo: { full_name: repository } },
     ...overrides,
   };
 }
@@ -81,7 +74,6 @@ function assertApprovalWorkflow(workflow: string): void {
   const checkoutIndex = workflow.indexOf("actions/checkout@v4");
   const planIndex = workflow.indexOf("Resolve active ExecPlan");
   const relayIndex = workflow.indexOf("node /runner/client.mjs");
-
   assert.match(workflow, /pull_request:\s*\n\s*types:\s*\n\s*- ready_for_review/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.doesNotMatch(workflow, /^\s*-\s+(?:synchronize|opened|reopened)\s*$/m);
@@ -94,12 +86,14 @@ function assertApprovalWorkflow(workflow: string): void {
   assert.match(workflow, /\$\{BASE_SHA\}\.\.\.\$\{HEAD_SHA\}/);
   assert.match(workflow, /Expected exactly one added or modified active ExecPlan/);
   assert.match(workflow, /AGENT_RELAY_PLAN_PATH: \$\{\{ steps\.plan\.outputs\.plan_path \}\}/);
+  assert.match(workflow, /AGENT_RELAY_OUTPUT_ARCHIVE_PATH: \$\{\{ runner\.temp \}\}\/agent-relay-output\.log/);
   assert.match(workflow, /tee "\$\{RUNNER_TEMP\}\/agent-relay-console\.log"/);
+  assert.match(workflow, /\$\{\{ runner\.temp \}\}\/agent-relay-output\.log/);
   assert.match(workflow, /\$\{\{ runner\.temp \}\}\/agent-relay-console\.log/);
   assert.match(workflow, /token: \$\{\{ github\.token \}\}/);
   assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ github\.token \}\}/);
   assert.doesNotMatch(workflow, /AGENT_RELAY_PUSH_TOKEN/);
-  assert.doesNotMatch(workflow, /\bmode:|AGENT_RELAY_MODE|AGENT_RELAY_OUTPUT_ARCHIVE_PATH|agent-relay-output\.log/);
+  assert.doesNotMatch(workflow, /\bmode:|AGENT_RELAY_MODE|AGENT_RELAY_REQUEST_ID|\.agent-relay|result\.json/);
   assert.ok(requestIndex >= 0);
   assert.ok(resolverIndex > requestIndex);
   assert.ok(checkoutIndex > resolverIndex);
@@ -137,13 +131,7 @@ test("missing pull request is rejected", async () => {
 });
 
 test("foreign head repository is rejected", async () => {
-  const result = await runResolver(200, pullRequest({
-    head: {
-      ref: "agent/change",
-      sha: headSha,
-      repo: { full_name: "fork/repository" },
-    },
-  }));
+  const result = await runResolver(200, pullRequest({ head: { ref: "agent/change", sha: headSha, repo: { full_name: "fork/repository" } } }));
   assert.equal(result.status, 1);
   assert.match(result.stderr, /head must belong to the target repository/);
   assert.equal(result.output, "");
@@ -152,7 +140,6 @@ test("foreign head repository is rejected", async () => {
 test("production and example workflows enforce the approval contract", async () => {
   const production = await readFile(join(process.cwd(), ".github", "workflows", "agent-relay.yml"), "utf8");
   const example = await readFile(join(process.cwd(), "examples", "github-actions", "agent-relay.yml"), "utf8");
-
   assertApprovalWorkflow(production);
   assertApprovalWorkflow(example);
   assert.equal(example, production);

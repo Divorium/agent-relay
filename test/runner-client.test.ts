@@ -4,12 +4,9 @@ import { createServer } from "node:http";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 
-function runGit(cwd: string, args: string[]): void {
-  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
-  assert.equal(result.status, 0, result.stderr || result.stdout);
-}
+const planPath = "docs/exec-plans/active/plan.md";
 
 function runProcess(command: string, args: string[], options: Record<string, unknown>): Promise<{ status: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -23,182 +20,118 @@ function runProcess(command: string, args: string[], options: Record<string, unk
   });
 }
 
-async function initializeRepository(workspace: string): Promise<void> {
-  await mkdir(join(workspace, ".agent-relay"), { recursive: true });
-  await writeFile(join(workspace, "plan.md"), "# Plan\n");
-  await writeFile(join(workspace, "tracked.txt"), "before\n");
-  runGit(workspace, ["init"]);
-  runGit(workspace, ["config", "user.name", "Test Runner"]);
-  runGit(workspace, ["config", "user.email", "runner@example.invalid"]);
-  await writeFile(join(workspace, ".git", "info", "exclude"), ".agent-relay/\n");
-  runGit(workspace, ["add", "plan.md", "tracked.txt"]);
-  runGit(workspace, ["commit", "-m", "Initial state"]);
+async function fixture(name: string) {
+  const root = join(tmpdir(), `agent-relay-runner-${name}-${process.pid}-${Date.now()}-${Math.random()}`);
+  const workspaceRoot = join(root, "workspaces");
+  const workspace = join(workspaceRoot, "owner", "repo");
+  const githubOutput = join(root, "github-output");
+  await mkdir(join(workspace, "docs", "exec-plans", "active"), { recursive: true });
+  await writeFile(join(workspace, planPath), "# Implement streaming output\n");
+  await writeFile(githubOutput, "");
+  return { root, workspaceRoot, workspace, githubOutput };
 }
 
-function createCompletedRelayServer(jobId: string, onSubmit?: (value: Record<string, unknown>) => void) {
-  return createServer(async (req: any, res: any) => {
-    if (req.method === "POST" && req.url === "/v1/jobs") {
-      let body = "";
-      for await (const chunk of req) body += String(chunk);
-      const submitted = JSON.parse(body) as Record<string, unknown>;
-      onSubmit?.(submitted);
-      assert.equal(req.headers.authorization, "Bearer relay-token");
-      res.statusCode = 202;
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ id: jobId, status: "completed" }));
-      return;
-    }
-    if (req.method === "GET" && req.url === `/v1/jobs/${jobId}/output?offset=0`) {
-      assert.equal(req.headers.authorization, "Bearer relay-token");
-      res.statusCode = 200;
-      res.setHeader("content-type", "application/octet-stream");
-      res.setHeader("cache-control", "no-store");
-      res.end();
-      return;
-    }
-    if (req.method === "GET" && req.url === `/v1/jobs/${jobId}`) {
-      assert.equal(req.headers.authorization, "Bearer relay-token");
-      res.statusCode = 200;
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ id: jobId, status: "completed" }));
-      return;
-    }
-    throw new Error(`Unexpected request: ${req.method} ${req.url}`);
+async function runClient(baseUrl: string, current: Awaited<ReturnType<typeof fixture>>, extraEnv: Record<string, string> = {}) {
+  return runProcess(process.execPath, [join(process.cwd(), "runner", "client.mjs")], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      AGENT_RELAY_URL: baseUrl,
+      AGENT_RELAY_TOKEN: "relay-token",
+      AGENT_RELAY_PLAN_PATH: planPath,
+      AGENT_RELAY_REQUEST_ID: "request-1",
+      AGENT_RELAY_WORKSPACE_ROOT: current.workspaceRoot,
+      GITHUB_WORKSPACE: current.workspace,
+      GITHUB_OUTPUT: current.githubOutput,
+      AGENT_RELAY_REQUEST_TIMEOUT_MS: "5000",
+      AGENT_RELAY_POLL_INTERVAL_MS: "10",
+      AGENT_RELAY_POLL_TIMEOUT_MS: "5000",
+      ...extraEnv,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
   });
 }
 
-test("runner client submits a job, validates the result and writes the commit message when Git reports changes", async () => {
-  const root = join(tmpdir(), `agent-relay-runner-client-${process.pid}-${Date.now()}`);
-  const workspaceRoot = join(root, "workspaces");
-  const workspace = join(workspaceRoot, "repository", "repository");
-  const githubOutput = join(root, "github-output");
-  const requestId = "12345-67890-1";
-  await mkdir(workspace, { recursive: true });
-  await writeFile(githubOutput, "");
-  await initializeRepository(workspace);
-  await writeFile(join(workspace, "tracked.txt"), "after\n");
-  await writeFile(join(workspace, ".agent-relay", "result.json"), `${JSON.stringify({
-    schemaVersion: 1,
-    requestId,
-    status: "completed",
-    commitMessage: "Apply the active plan",
-    summary: "Completed the controlled integration test.",
-    validation: [{ command: "npm test", status: "passed", exitCode: 0, details: "Passed." }],
-    blockers: [],
-    limitations: [],
-  })}\n`);
+async function withServer(handler: (req: any, res: any) => Promise<void> | void, callback: (baseUrl: string) => Promise<void>) {
+  const server = createServer(handler);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  try { await callback(`http://127.0.0.1:${address.port}`); }
+  finally { await new Promise<void>((resolve, reject) => server.close((error: Error | undefined) => error ? reject(error) : resolve())); }
+}
 
+function sendJson(res: any, status: number, value: unknown): void {
+  res.statusCode = status;
+  res.setHeader("content-type", "application/json");
+  res.end(JSON.stringify(value));
+}
+
+test("runner submits the result-free request and derives the commit subject from the active plan", async () => {
+  const current = await fixture("result-free");
   let submitted: Record<string, unknown> | undefined;
-  const server = createCompletedRelayServer("job-1", (value) => { submitted = value; });
-
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  assert.ok(address && typeof address === "object");
-
   try {
-    const result = await runProcess(process.execPath, [join(process.cwd(), "runner", "client.mjs")], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        AGENT_RELAY_URL: `http://127.0.0.1:${address.port}`,
-        AGENT_RELAY_TOKEN: "relay-token",
-        AGENT_RELAY_PLAN_PATH: "plan.md",
-        AGENT_RELAY_MODE: "implement",
-        AGENT_RELAY_REQUEST_ID: requestId,
-        AGENT_RELAY_WORKSPACE_ROOT: workspaceRoot,
-        GITHUB_WORKSPACE: workspace,
-        GITHUB_OUTPUT: githubOutput,
-        AGENT_RELAY_REQUEST_TIMEOUT_MS: "5000",
-        AGENT_RELAY_POLL_INTERVAL_MS: "10",
-        AGENT_RELAY_POLL_TIMEOUT_MS: "5000",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
+    await withServer(async (req, res) => {
+      assert.equal(req.method, "POST");
+      let body = "";
+      for await (const chunk of req) body += String(chunk);
+      submitted = JSON.parse(body) as Record<string, unknown>;
+      sendJson(res, 202, { id: "job-1", status: "completed" });
+    }, async (baseUrl) => {
+      const result = await runClient(baseUrl, current);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(submitted, { requestId: "request-1", workspace: "owner/repo", planPath });
+      assert.equal(await readFile(current.githubOutput, "utf8"), "commit_message=Implement streaming output\n");
     });
-
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /Agent Relay job job-1: completed/);
-    assert.match(result.stdout, /Codex summary: Completed the controlled integration test\./);
-    assert.match(result.stdout, /Validation passed: npm test - Passed\./);
-    assert.equal(await readFile(githubOutput, "utf8"), "commit_message=Apply the active plan\n");
-    assert.deepEqual(submitted, {
-      requestId,
-      workspace: "repository/repository",
-      planPath: "plan.md",
-      mode: "implement",
-    });
-    await assert.rejects(() => stat(join(workspace, ".agent-relay")));
-    assert.equal(await readFile(join(workspace, "tracked.txt"), "utf8"), "after\n");
-  } finally {
-    await new Promise<void>((resolve, reject) => server.close((error: Error | undefined) => error ? reject(error) : resolve()));
-    await rm(root, { recursive: true, force: true });
-  }
+  } finally { await rm(current.root, { recursive: true, force: true }); }
 });
 
-test("runner client leaves GITHUB_OUTPUT empty when Git reports a clean worktree", async () => {
-  const root = join(tmpdir(), `agent-relay-runner-client-clean-${process.pid}-${Date.now()}`);
-  const workspaceRoot = join(root, "workspaces");
-  const workspace = join(workspaceRoot, "repository", "repository");
-  const githubOutput = join(root, "github-output");
-  const requestId = "12345-67890-2";
-  await mkdir(workspace, { recursive: true });
-  await writeFile(githubOutput, "");
-  await initializeRepository(workspace);
-  await writeFile(join(workspace, ".agent-relay", "result.json"), `${JSON.stringify({
-    schemaVersion: 1,
-    requestId,
-    status: "completed",
-    commitMessage: "Unused because the worktree is clean",
-    summary: "No repository files required changes.",
-    validation: [],
-    blockers: [],
-    limitations: [],
-  })}\n`);
-
-  const server = createCompletedRelayServer("job-2");
-
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  assert.ok(address && typeof address === "object");
-
+test("runner publishes a byte-identical archive only after a valid terminal output response", async () => {
+  const current = await fixture("archive");
+  const archive = join(current.root, "output", "agent-relay-output.log");
+  const bytes = Buffer.from([0x00, 0x66, 0x6f, 0x80, 0xff, 0x0a]);
   try {
-    const result = await runProcess(process.execPath, [join(process.cwd(), "runner", "client.mjs")], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        AGENT_RELAY_URL: `http://127.0.0.1:${address.port}`,
-        AGENT_RELAY_TOKEN: "relay-token",
-        AGENT_RELAY_PLAN_PATH: "plan.md",
-        AGENT_RELAY_MODE: "implement",
-        AGENT_RELAY_REQUEST_ID: requestId,
-        AGENT_RELAY_WORKSPACE_ROOT: workspaceRoot,
-        GITHUB_WORKSPACE: workspace,
-        GITHUB_OUTPUT: githubOutput,
-        AGENT_RELAY_REQUEST_TIMEOUT_MS: "5000",
-        AGENT_RELAY_POLL_INTERVAL_MS: "10",
-        AGENT_RELAY_POLL_TIMEOUT_MS: "5000",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
+    await withServer(async (req, res) => {
+      if (req.method === "POST" && req.url === "/v1/jobs") {
+        for await (const _chunk of req) { /* consume */ }
+        sendJson(res, 202, { id: "job-1", status: "running" });
+        return;
+      }
+      if (req.method === "GET" && req.url === "/v1/jobs/job-1/output?offset=0") {
+        assert.equal(req.headers.accept, "application/octet-stream");
+        assert.equal(req.headers["accept-encoding"], "identity");
+        res.statusCode = 200;
+        res.setHeader("content-type", "application/octet-stream");
+        res.setHeader("x-agent-relay-output-offset", "0");
+        res.end(bytes);
+        return;
+      }
+      if (req.method === "GET" && req.url === "/v1/jobs/job-1") {
+        sendJson(res, 200, { id: "job-1", status: "completed" });
+        return;
+      }
+      throw new Error(`Unexpected request: ${req.method} ${req.url}`);
+    }, async (baseUrl) => {
+      const result = await runClient(baseUrl, current, { AGENT_RELAY_OUTPUT_ARCHIVE_PATH: archive });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(await readFile(archive), bytes);
+      assert.ok((await stat(archive)).isFile());
+      assert.equal(await readFile(current.githubOutput, "utf8"), "commit_message=Implement streaming output\n");
     });
-
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(await readFile(githubOutput, "utf8"), "");
-    await assert.rejects(() => stat(join(workspace, ".agent-relay")));
-    assert.equal(spawnSync("git", ["status", "--porcelain"], { cwd: workspace, encoding: "utf8" }).stdout.trim(), "");
-  } finally {
-    await new Promise<void>((resolve, reject) => server.close((error: Error | undefined) => error ? reject(error) : resolve()));
-    await rm(root, { recursive: true, force: true });
-  }
+  } finally { await rm(current.root, { recursive: true, force: true }); }
 });
 
-test("workflow template resolves a specific ready pull request and keeps logs separate from GITHUB_OUTPUT", async () => {
+test("workflow template keeps the result contract removed and uploads both output artifacts", async () => {
   const workflow = await readFile(join(process.cwd(), "examples", "github-actions", "agent-relay.yml"), "utf8");
   assert.match(workflow, /pr_number:/);
-  assert.doesNotMatch(workflow, /inputs\.branch/);
-  assert.match(workflow, /run: node \/runner\/resolve-pr\.mjs/);
-  assert.match(workflow, /ref: \$\{\{ steps\.pr\.outputs\.head_sha \}\}/);
-  assert.match(workflow, /TARGET_BRANCH: \$\{\{ steps\.pr\.outputs\.head_ref \}\}/);
-  assert.match(workflow, /secrets\.AGENT_RELAY_PUSH_TOKEN \|\| github\.token/);
+  assert.match(workflow, /AGENT_RELAY_OUTPUT_ARCHIVE_PATH: \$\{\{ runner\.temp \}\}\/agent-relay-output\.log/);
+  assert.match(workflow, /\$\{\{ runner\.temp \}\}\/agent-relay-output\.log/);
+  assert.match(workflow, /\$\{\{ runner\.temp \}\}\/agent-relay-console\.log/);
+  assert.doesNotMatch(workflow, /inputs\.branch|\bmode:|AGENT_RELAY_REQUEST_ID|AGENT_RELAY_MODE|\.agent-relay|result\.json/);
+  assert.match(workflow, /persist-credentials: false/);
+  assert.match(workflow, /AGENT_RELAY_TOKEN: \$\{\{ secrets\.AGENT_RELAY_TOKEN \}\}/);
+  assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.doesNotMatch(workflow, /AGENT_RELAY_PUSH_TOKEN/);
   assert.match(workflow, /node \/runner\/client\.mjs 2>&1 \| tee/);
-  assert.doesNotMatch(workflow, /client\.mjs[^\n]*GITHUB_OUTPUT/);
   assert.match(workflow, /run: \/runner\/finalize\.sh/);
 });

@@ -83,6 +83,9 @@ jobs:
             bwrap_path="$(command -v bwrap)"
             chown root:root "$bwrap_path"
             chmod 4755 "$bwrap_path"
+            runuser -u agent -- test ! -w /home/agent/.cargo
+            runuser -u agent -- test ! -w /home/agent/.rustup
+            runuser -u agent -- /home/agent/.cargo/bin/cargo --version
             mkdir -p /tmp/codex-root/current /tmp/codex-root/sibling /tmp/agent-relay-runtime
             chown -R agent:agent /tmp/codex-root /tmp/agent-relay-runtime
             runuser -u agent -- git -C /tmp/codex-root/current init

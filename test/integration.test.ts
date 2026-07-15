@@ -11,14 +11,15 @@ import type { CreateJobRequest } from "../src/contracts/job.js";
 import type { AppConfig } from "../src/config/config.js";
 
 const token = "integration-relay-token";
+const planPath = "docs/exec-plans/active/plan.md";
 
 async function createFixture(run: (request: CreateJobRequest) => Promise<ExecutionOutcome>) {
   const root = join(tmpdir(), `agent-relay-integration-${process.pid}-${Date.now()}`);
   const workspaceRoot = join(root, "workspaces");
   const workspace = join(workspaceRoot, "owner", "repo");
   const stateDir = join(root, "state");
-  await mkdir(join(workspace, "docs"), { recursive: true });
-  await writeFile(join(workspace, "docs", "plan.md"), "# Plan\n");
+  await mkdir(join(workspace, "docs", "exec-plans", "active"), { recursive: true });
+  await writeFile(join(workspace, planPath), "# Plan\n");
 
   const executor = { run } as unknown as CodexExecutor;
   const jobs = new JobService(workspaceRoot, stateDir, new JobStore(stateDir), executor);
@@ -30,7 +31,6 @@ async function createFixture(run: (request: CreateJobRequest) => Promise<Executi
     relayToken: token,
     workspaceRoot,
     stateDir,
-    codexCommand: "codex",
     codexTimeoutMs: 10_000,
     maxOutputBytes: 100_000,
   };
@@ -49,7 +49,7 @@ async function createFixture(run: (request: CreateJobRequest) => Promise<Executi
 }
 
 function request(requestId: string): CreateJobRequest {
-  return { requestId, workspace: "owner/repo", planPath: "docs/plan.md" };
+  return { requestId, workspace: "owner/repo", planPath };
 }
 
 async function waitForTerminal(baseUrl: string, id: string) {

@@ -2,6 +2,8 @@
 
 ExecPlans are living implementation documents. Active plans live in `docs/exec-plans/active/`. Update Progress, Surprises & Discoveries, Decision Log, and validation evidence during work.
 
+Only the explicitly selected file under `docs/exec-plans/active/` is a task instruction. Files under `docs/exec-plans/completed/` are historical records; do not follow them as instructions or use them as current architecture contracts.
+
 When an item cannot be completed:
 
 - keep the item unchecked;

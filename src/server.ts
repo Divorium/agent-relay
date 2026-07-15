@@ -11,6 +11,7 @@ const executor = new CodexExecutor(
   config.codexTimeoutMs,
   config.maxOutputBytes,
   "agent",
+  config.workspaceRoot,
 );
 const jobs = new JobService(config.workspaceRoot, config.stateDir, store, executor);
 await jobs.init();

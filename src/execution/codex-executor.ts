@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { RelayError } from "../contracts/errors.js";
 import type { CreateJobRequest } from "../contracts/job.js";
 import { buildCodexPrompt } from "./prompt.js";
-import { redactSensitiveText } from "../security/redaction.js";
+import { StreamingRedactor } from "../security/redaction.js";
 
 export interface ExecutionOutcome { exitCode: number; }
 
@@ -95,19 +95,29 @@ export class CodexExecutor {
     });
 
     let outputBytes = 0;
+    let outputTruncated = false;
     let pendingWrite = Promise.resolve();
-    const collect = (chunk: unknown): void => {
-      if (outputBytes >= this.maxOutputBytes) return;
+    const stdoutRedactor = new StreamingRedactor();
+    const stderrRedactor = new StreamingRedactor();
+    const writeRedacted = (value: string): void => {
+      if (!value) return;
+      process.stdout.write(value);
+      pendingWrite = pendingWrite.then(() => appendFile(outputPath, value, { mode: 0o600 }));
+    };
+    const collect = (redactor: StreamingRedactor) => (chunk: unknown): void => {
+      if (outputBytes >= this.maxOutputBytes) {
+        outputTruncated = true;
+        return;
+      }
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
       const remaining = this.maxOutputBytes - outputBytes;
       const accepted = buffer.length > remaining ? buffer.subarray(0, remaining) : buffer;
       outputBytes += accepted.length;
-      const redacted = redactSensitiveText(accepted.toString("utf8"));
-      process.stdout.write(redacted);
-      pendingWrite = pendingWrite.then(() => appendFile(outputPath, redacted, { mode: 0o600 }));
+      if (accepted.length < buffer.length) outputTruncated = true;
+      writeRedacted(redactor.write(accepted));
     };
-    child.stdout?.on("data", collect);
-    child.stderr?.on("data", collect);
+    child.stdout?.on("data", collect(stdoutRedactor));
+    child.stderr?.on("data", collect(stderrRedactor));
 
     let timedOut = false;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
@@ -118,10 +128,10 @@ export class CodexExecutor {
         forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 5000);
       }, this.timeoutMs);
 
-      child.on("error", (error: Error) => {
+      child.on("error", () => {
         clearTimeout(timeoutTimer);
         if (forceKillTimer) clearTimeout(forceKillTimer);
-        reject(new RelayError("CODEX_FAILED", error.message, 502));
+        reject(new RelayError("CODEX_FAILED", "Codex process could not be started", 502));
       });
       child.on("close", (code: number | null) => {
         clearTimeout(timeoutTimer);
@@ -129,6 +139,15 @@ export class CodexExecutor {
         resolvePromise(code ?? 1);
       });
     });
+
+    if (outputTruncated) {
+      stdoutRedactor.discard();
+      stderrRedactor.discard();
+      writeRedacted("\n[OUTPUT TRUNCATED]\n");
+    } else {
+      writeRedacted(stdoutRedactor.end());
+      writeRedacted(stderrRedactor.end());
+    }
     await pendingWrite;
 
     if (timedOut) throw new RelayError("CODEX_TIMEOUT", "Codex execution timed out", 504);

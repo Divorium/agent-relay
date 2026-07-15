@@ -85,8 +85,9 @@ jobs:
             runuser -u agent -- git -C /tmp/codex-root/current init
             printf sibling-private > /tmp/codex-root/sibling/private
             chown agent:agent /tmp/codex-root/sibling/private
-            printf stale-home-state > /home/agent/.codex/sentinel
-            chown agent:agent /home/agent/.codex/sentinel
+            printf stale-codex-state > /home/agent/.codex/sentinel
+            printf stale-tool-state > /home/agent/stale-context
+            chown agent:agent /home/agent/.codex/sentinel /home/agent/stale-context
             runuser -u agent -- /usr/local/bin/codex \
               -c features.memories=false \
               -c "default_permissions=\"relay\"" \
@@ -100,6 +101,7 @@ jobs:
             runuser -u agent -- test ! -r /app/dist/src/server.js
             su -s /bin/bash relay -c "cd /tmp/codex-root/current && sudo -H -u agent -- /usr/local/bin/codex-run --version"
             test ! -e /home/agent/.codex/sentinel
+            test ! -e /home/agent/stale-context
           ' > isolation.log 2>&1
       - name: Upload isolation log
         if: always()

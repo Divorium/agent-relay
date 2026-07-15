@@ -12,10 +12,10 @@ const ISOLATED_CODEX_HOME = "/home/agent/.codex";
 const RELAY_APPLICATION_ROOT = "/app";
 const RELAY_HOME = "/home/relay";
 
-export function createCodexEnvironment(source: Record<string, string | undefined> = process.env): Record<string, string> {
+export function createCodexEnvironment(): Record<string, string> {
   return {
-    LANG: source.LANG ?? "C.UTF-8",
-    LC_ALL: source.LC_ALL ?? "C.UTF-8",
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
   };
 }
 

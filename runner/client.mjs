@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { appendFile, lstat, readFile, realpath } from "node:fs/promises";
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { relative, resolve, sep } from "node:path";
 
@@ -16,7 +15,12 @@ if (!workspace || !planPath || !githubOutput) {
 }
 
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+const CONTROL_CHARACTERS_GLOBAL = /[\u0000-\u001f\u007f]/g;
 const ACTIVE_PLAN_PATH = /^docs\/exec-plans\/active\/[A-Za-z0-9._-]+\.md$/;
+const JOB_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/;
+const JOB_STATUSES = new Set(["accepted", "running", "completed", "failed", "timed_out", "interrupted"]);
+const ACTIVE_JOB_STATUSES = new Set(["accepted", "running"]);
+const MAX_RESPONSE_BYTES = 64_000;
 
 function positiveInteger(name, fallback) {
   const raw = process.env[name];
@@ -45,11 +49,15 @@ function requiredString(value, name, maxLength) {
   return value;
 }
 
+function normalizedCommitSubject(value) {
+  const normalized = value.replace(CONTROL_CHARACTERS_GLOBAL, " ").replace(/\s+/gu, " ").trim();
+  return Array.from(normalized).slice(0, 120).join("").trim();
+}
+
 function deriveCommitMessage(plan) {
-  const heading = plan.split(/\r?\n/).find((line) => /^#\s+\S/.test(line));
-  const source = heading ? heading.replace(/^#\s+/, "") : "Apply active ExecPlan";
-  const normalized = source.replace(/\s+/g, " ").trim().slice(0, 120).trim();
-  return requiredString(normalized || "Apply active ExecPlan", "commitMessage", 120);
+  const heading = plan.split(/\r?\n/u).find((line) => /^#[ \t]+\S/u.test(line));
+  const source = heading ? heading.replace(/^#[ \t]+/u, "") : "";
+  return requiredString(normalizedCommitSubject(source) || "Apply active ExecPlan", "commitMessage", 120);
 }
 
 function isOutside(root, candidate) {
@@ -71,10 +79,46 @@ async function resolvePlanFile(resolvedWorkspace, requestedPlanPath) {
   return candidate;
 }
 
-async function fetchJson(url, options = {}) {
+async function readBoundedText(response) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null) {
+    const parsed = Number(contentLength);
+    if (Number.isFinite(parsed) && parsed > MAX_RESPONSE_BYTES) {
+      throw new Error(`Agent Relay response exceeded ${MAX_RESPONSE_BYTES} bytes`);
+    }
+  }
+  if (!response.body) return "";
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let bytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = Buffer.from(value);
+    bytes += chunk.length;
+    if (bytes > MAX_RESPONSE_BYTES) {
+      await reader.cancel();
+      throw new Error(`Agent Relay response exceeded ${MAX_RESPONSE_BYTES} bytes`);
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, bytes).toString("utf8");
+}
+
+function hasJsonContentType(response) {
+  const contentType = response.headers.get("content-type") ?? "";
+  return /^application\/(?:[A-Za-z0-9!#$&^_.+-]+\+)?json(?:\s*;|$)/i.test(contentType);
+}
+
+async function fetchJson(url, expectedStatus, options = {}) {
   const response = await fetch(url, { ...options, signal: AbortSignal.timeout(requestTimeoutMs) });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`Agent Relay request failed: ${response.status} ${text.slice(0, 8192)}`);
+  const text = await readBoundedText(response);
+  if (response.status !== expectedStatus) {
+    throw new Error(`Agent Relay request failed with HTTP ${response.status}`);
+  }
+  if (!hasJsonContentType(response)) throw new Error("Agent Relay returned a non-JSON content type");
+  if (!text.trim()) throw new Error("Agent Relay returned an empty JSON response");
   try {
     return JSON.parse(text);
   } catch {
@@ -82,8 +126,22 @@ async function fetchJson(url, options = {}) {
   }
 }
 
+function validateJob(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Agent Relay returned an invalid job object");
+  }
+  const job = value;
+  if (typeof job.id !== "string" || !JOB_ID.test(job.id)) throw new Error("Agent Relay returned an invalid job id");
+  if (typeof job.status !== "string" || !JOB_STATUSES.has(job.status)) {
+    throw new Error("Agent Relay returned an invalid job status");
+  }
+  if (job.errorCode !== undefined) requiredString(job.errorCode, "job.errorCode", 256);
+  if (job.errorMessage !== undefined) requiredString(job.errorMessage, "job.errorMessage", 2048);
+  return job;
+}
+
 function logJobStatus(job) {
-  console.log(`Agent Relay job ${String(job.id ?? "unknown")}: ${String(job.status ?? "unknown")}`);
+  console.log(`Agent Relay job ${job.id}: ${job.status}`);
 }
 
 const resolvedRoot = await realpath(workspaceRoot);
@@ -97,19 +155,23 @@ const commitMessage = deriveCommitMessage(await readFile(planFile, "utf8"));
 await appendFile(githubOutput, "", "utf8");
 
 const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
-let job = await fetchJson(`${baseUrl}/v1/jobs`, {
+let job = validateJob(await fetchJson(`${baseUrl}/v1/jobs`, 202, {
   method: "POST",
   headers,
   body: JSON.stringify({ requestId: requestId(), workspace: relativeWorkspace, planPath }),
-});
+}));
 logJobStatus(job);
 let previousStatus = job.status;
 
 const pollDeadline = Date.now() + pollTimeoutMs;
-while (["accepted", "running"].includes(job.status)) {
+while (ACTIVE_JOB_STATUSES.has(job.status)) {
+  const remaining = pollDeadline - Date.now();
+  if (remaining <= 0) throw new Error(`Agent Relay polling timed out after ${pollTimeoutMs}ms`);
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, Math.min(pollIntervalMs, remaining)));
   if (Date.now() >= pollDeadline) throw new Error(`Agent Relay polling timed out after ${pollTimeoutMs}ms`);
-  await new Promise((resolvePromise) => setTimeout(resolvePromise, pollIntervalMs));
-  job = await fetchJson(`${baseUrl}/v1/jobs/${job.id}`, { headers: { authorization: `Bearer ${token}` } });
+  job = validateJob(await fetchJson(`${baseUrl}/v1/jobs/${job.id}`, 200, {
+    headers: { authorization: `Bearer ${token}` },
+  }));
   if (job.status !== previousStatus) {
     logJobStatus(job);
     previousStatus = job.status;
@@ -118,12 +180,6 @@ while (["accepted", "running"].includes(job.status)) {
 
 if (job.status !== "completed") {
   throw new Error(`Agent Relay job failed: ${job.status} ${job.errorCode ?? ""} ${job.errorMessage ?? ""}`);
-}
-
-const diff = spawnSync("git", ["status", "--porcelain"], { cwd: resolvedWorkspace, encoding: "utf8" });
-if (diff.status !== 0) throw new Error(diff.stderr || "git status failed");
-if (diff.stdout.trim().length === 0) {
-  throw new Error("Agent Relay completed without repository changes; the active ExecPlan remains unresolved");
 }
 
 await appendFile(githubOutput, `commit_message=${commitMessage}\n`, "utf8");

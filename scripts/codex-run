@@ -20,8 +20,9 @@ find "$agent_home" -mindepth 1 -maxdepth 1 \
 find "$codex_home" -mindepth 1 -maxdepth 1 ! -name auth.json -exec rm -rf -- {} +
 rm -rf -- "$runtime_tmp"
 mkdir -m 0700 "$runtime_tmp"
-mkdir -m 0700 "$runtime_tmp/.git"
-mkdir -m 0700 "$runtime_tmp/.agents"
+git -C "$runtime_tmp" init --quiet
+mkdir -p "$runtime_tmp/.agents/workflows" "$runtime_tmp/.agents/skills"
+chmod 0700 "$runtime_tmp/.agents" "$runtime_tmp/.agents/workflows" "$runtime_tmp/.agents/skills"
 
 exec /usr/bin/env -i \
   HOME=/home/agent \
@@ -36,5 +37,6 @@ exec /usr/bin/env -i \
   TMPDIR=/tmp/agent-relay-runtime \
   TMP=/tmp/agent-relay-runtime \
   TEMP=/tmp/agent-relay-runtime \
+  GIT_OPTIONAL_LOCKS=0 \
   PATH=/opt/java/openjdk/bin:/usr/local/go/bin:/home/agent/.cargo/bin:/usr/local/bin:/usr/bin:/bin \
   /usr/local/bin/codex "$@"

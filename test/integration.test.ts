@@ -14,7 +14,7 @@ const token = "integration-relay-token";
 const planPath = "docs/exec-plans/active/plan.md";
 
 async function createFixture(run: (request: CreateJobRequest) => Promise<ExecutionOutcome>) {
-  const root = join(tmpdir(), `agent-relay-integration-${process.pid}-${Date.now()}`);
+  const root = join(tmpdir(), `agent-relay-integration-${process.pid}-${Date.now()}-${Math.random()}`);
   const workspaceRoot = join(root, "workspaces");
   const workspace = join(workspaceRoot, "owner", "repo");
   const stateDir = join(root, "state");
@@ -50,6 +50,14 @@ async function createFixture(run: (request: CreateJobRequest) => Promise<Executi
 
 function request(requestId: string): CreateJobRequest {
   return { requestId, workspace: "owner/repo", planPath };
+}
+
+async function postJob(baseUrl: string, body: CreateJobRequest) {
+  return fetch(`${baseUrl}/v1/jobs`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 async function waitForTerminal(baseUrl: string, id: string) {
@@ -88,22 +96,14 @@ test("HTTP create and poll derives completed state and preserves idempotency", a
   });
   try {
     const body = request("integration-request-1");
-    const first = await fetch(`${fixture.baseUrl}/v1/jobs`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const first = await postJob(fixture.baseUrl, body);
     assert.equal(first.status, 202);
     const accepted = await first.json() as { id: string };
     const terminal = await waitForTerminal(fixture.baseUrl, accepted.id) as { status: string; exitCode?: number };
     assert.equal(terminal.status, "completed");
     assert.equal(terminal.exitCode, 0);
 
-    const repeated = await fetch(`${fixture.baseUrl}/v1/jobs`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const repeated = await postJob(fixture.baseUrl, body);
     assert.equal(repeated.status, 202);
     assert.equal((await repeated.json() as { id: string }).id, accepted.id);
     assert.equal(executions, 1);
@@ -120,14 +120,9 @@ test("parallel job submission allows only one active job", async () => {
     return { exitCode: 0 };
   });
   try {
-    const post = (body: CreateJobRequest) => fetch(`${fixture.baseUrl}/v1/jobs`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const first = await post(request("parallel-request-1"));
+    const first = await postJob(fixture.baseUrl, request("parallel-request-1"));
     assert.equal(first.status, 202);
-    const second = await post(request("parallel-request-2"));
+    const second = await postJob(fixture.baseUrl, request("parallel-request-2"));
     assert.equal(second.status, 409);
     assert.equal((await second.json() as any).error.code, "JOB_ALREADY_RUNNING");
     release();
@@ -135,6 +130,31 @@ test("parallel job submission allows only one active job", async () => {
     assert.equal((await waitForTerminal(fixture.baseUrl, accepted.id) as { status: string }).status, "completed");
   } finally {
     release();
+    await fixture.close();
+  }
+});
+
+test("executor failure releases the active-job lock for the next request", async () => {
+  let executions = 0;
+  const fixture = await createFixture(async () => {
+    executions += 1;
+    if (executions === 1) throw new Error("synthetic executor failure");
+    return { exitCode: 0 };
+  });
+  try {
+    const first = await postJob(fixture.baseUrl, request("failing-request"));
+    assert.equal(first.status, 202);
+    const firstJob = await first.json() as { id: string };
+    const failed = await waitForTerminal(fixture.baseUrl, firstJob.id) as { status: string; errorCode?: string };
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.errorCode, "INTERNAL_ERROR");
+
+    const second = await postJob(fixture.baseUrl, request("recovery-request"));
+    assert.equal(second.status, 202);
+    const secondJob = await second.json() as { id: string };
+    assert.equal((await waitForTerminal(fixture.baseUrl, secondJob.id) as { status: string }).status, "completed");
+    assert.equal(executions, 2);
+  } finally {
     await fixture.close();
   }
 });

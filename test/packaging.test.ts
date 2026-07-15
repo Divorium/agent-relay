@@ -14,12 +14,12 @@ test("service image keeps the required toolchain and isolation users", async () 
   assert.match(dockerfile, /npm install --global[\s\S]*@openai\/codex@\$\{CODEX_VERSION\}/);
   assert.match(dockerfile, /useradd[\s\S]*agent/);
   assert.match(dockerfile, /useradd[\s\S]*relay/);
+  assert.match(dockerfile, /apt-get purge -y openssh-client/);
   assert.match(dockerfile, /relay ALL=\(agent\) NOPASSWD: \/usr\/local\/bin\/codex-run/);
   assert.match(dockerfile, /chown -R root:root \/home\/agent\/\.cargo \/home\/agent\/\.rustup/);
   assert.match(dockerfile, /chmod -R a-w \/home\/agent\/\.cargo \/home\/agent\/\.rustup/);
   assert.match(dockerfile, /chmod -R o-rwx \/app/);
   assert.match(dockerfile, /CMD \["node", "dist\/src\/server\.js"\]/);
-  assert.doesNotMatch(dockerfile, /openssh-client(?![\s\S]*apt-get purge)/);
   assert.doesNotMatch(dockerfile, /dotnet-sdk/);
 });
 
@@ -63,14 +63,17 @@ test("mandatory CI is daemon-independent and still runs the full repository suit
 
 test("real image validation is retained on a native Docker host runner", async () => {
   const workflow = await text(".github/workflows/host-validation.yml");
+  const script = await text("scripts/host-validation.sh");
 
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /runs-on: \[self-hosted, agent-relay-host\]/);
-  assert.match(workflow, /docker info/);
-  assert.match(workflow, /docker compose config/);
-  assert.match(workflow, /docker build --tag agent-relay:host-validation/);
-  assert.match(workflow, /docker run --rm --entrypoint \/bin\/bash agent-relay:host-validation \/app\/scripts\/toolchain-smoke\.sh/);
-  assert.match(workflow, /docker build --file Dockerfile\.runner/);
-  assert.doesNotMatch(workflow, /--privileged|docker\.sock/);
-  assert.doesNotMatch(workflow, /pull_request:/);
+  assert.match(workflow, /\.\/scripts\/host-validation\.sh/);
+  assert.doesNotMatch(workflow, /pull_request:|--privileged|docker\.sock/);
+
+  assert.match(script, /docker info/);
+  assert.match(script, /docker compose config/);
+  assert.match(script, /docker build --tag agent-relay:host-validation/);
+  assert.match(script, /docker run --rm --entrypoint \/bin\/bash agent-relay:host-validation \/app\/scripts\/toolchain-smoke\.sh/);
+  assert.match(script, /docker build --file Dockerfile\.runner/);
+  assert.doesNotMatch(script, /--privileged|docker\.sock/);
 });

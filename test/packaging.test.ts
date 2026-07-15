@@ -91,11 +91,14 @@ test("mandatory CI definition uses only the existing same-repository self-hosted
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /npm ci/);
   assert.match(workflow, /npm run check/);
+  assert.match(workflow, /GITHUB_STEP_SUMMARY/);
+  assert.match(workflow, /# start of coverage report/);
   assert.doesNotMatch(workflow, /ubuntu-latest|\bdocker\b|privileged|agent-relay-host/i);
 });
 
 test("repository validation does not invoke Docker or GitHub APIs", async () => {
   const packageJson = await text("package.json");
+  assert.match(packageJson, /--experimental-test-coverage/);
   assert.doesNotMatch(packageJson, /host-validation|docker compose|docker build|gh api|api\.github\.com/i);
   await assert.rejects(readFile("scripts/host-validation.sh", "utf8"), /ENOENT/);
   await assert.rejects(readFile(".github/workflows/host-validation.yml", "utf8"), /ENOENT/);

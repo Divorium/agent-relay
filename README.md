@@ -95,9 +95,10 @@ Operational setup, dispatch, recovery, logs, and credential rotation are documen
 
 Active:
 
-- `docs/exec-plans/active/2026-07-15-audit-codex-context.md`
+- None.
 
 Completed:
 
 - `docs/exec-plans/completed/2026-07-13-agent-relay-mvp.md`
 - `docs/exec-plans/completed/2026-07-13-ready-pr-gate.md`
+- `docs/exec-plans/completed/2026-07-15-audit-codex-context.md`

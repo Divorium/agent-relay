@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { validateCreateJobRequest } from "../src/contracts/validators.js";
 import { requireBearerToken } from "../src/security/auth.js";
 import { assertActivePlanFile, resolveWorkspace } from "../src/security/workspace.js";
@@ -11,6 +12,11 @@ import { buildCodexPrompt } from "../src/execution/prompt.js";
 import { redactSensitiveText, StreamingRedactor } from "../src/security/redaction.js";
 import { JobStore } from "../src/persistence/job-store.js";
 import type { JobRecord } from "../src/contracts/job.js";
+
+function createSymlink(target: string, path: string): void {
+  const result = spawnSync("ln", ["-s", target, path], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+}
 
 const validRequest = {
   requestId: "repo-pr-1-attempt-1",
@@ -111,7 +117,7 @@ test("rejects a workspace symlink that escapes the shared root", async () => {
   const external = join(root, "external");
   await mkdir(workspaceRoot, { recursive: true });
   await mkdir(external, { recursive: true });
-  await symlink(external, join(workspaceRoot, "linked"));
+  createSymlink(external, join(workspaceRoot, "linked"));
   await assert.rejects(() => resolveWorkspace(workspaceRoot, "linked"), /outside shared root/);
   await rm(root, { recursive: true, force: true });
 });
@@ -121,7 +127,7 @@ test("accepts only a regular non-symlink active plan file", async () => {
   await mkdir(activeDir, { recursive: true });
   await writeFile(join(activeDir, "plan.md"), "# Plan\n");
   await assert.doesNotReject(() => assertActivePlanFile(workspace, "docs/exec-plans/active/plan.md"));
-  await symlink("plan.md", join(activeDir, "link.md"));
+  createSymlink("plan.md", join(activeDir, "link.md"));
   await assert.rejects(() => assertActivePlanFile(workspace, "docs/exec-plans/active/link.md"), /symbolic links/);
   await mkdir(join(activeDir, "directory.md"));
   await assert.rejects(() => assertActivePlanFile(workspace, "docs/exec-plans/active/directory.md"), /regular file/);

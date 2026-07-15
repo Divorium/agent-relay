@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { RelayError } from "../contracts/errors.js";
 import type { CreateJobRequest } from "../contracts/job.js";
 import { buildCodexPrompt } from "./prompt.js";
@@ -8,32 +8,33 @@ import { redactSensitiveText } from "../security/redaction.js";
 
 export interface ExecutionOutcome { exitCode: number; }
 
-const CODEX_ENVIRONMENT_VARIABLES = [
-  "PATH",
-  "HOME",
-  "USER",
-  "LOGNAME",
-  "SHELL",
-  "LANG",
-  "LC_ALL",
-  "JAVA_HOME",
-  "CARGO_HOME",
-  "RUSTUP_HOME",
-] as const;
-
-const ISOLATED_CODEX_HOME = join("/home", "agent", ".codex");
+const ISOLATED_CODEX_HOME = "/home/agent/.codex";
+const RELAY_APPLICATION_ROOT = "/app";
+const RELAY_HOME = "/home/relay";
 
 export function createCodexEnvironment(source: Record<string, string | undefined> = process.env): Record<string, string> {
-  const environment: Record<string, string> = {};
-  for (const name of CODEX_ENVIRONMENT_VARIABLES) {
-    const value = source[name];
-    if (value !== undefined) environment[name] = value;
-  }
-  return environment;
+  return {
+    LANG: source.LANG ?? "C.UTF-8",
+    LC_ALL: source.LC_ALL ?? "C.UTF-8",
+  };
 }
 
-export function createCodexArgs(workspace: string, prompt: string): string[] {
-  const filesystemPermissions = `permissions.relay.filesystem={"${ISOLATED_CODEX_HOME}"="deny","${join(workspace, ".git")}"="read"}`;
+function permission(path: string, access: "deny" | "read" | "write"): string {
+  return `${JSON.stringify(path)}=${JSON.stringify(access)}`;
+}
+
+export function createCodexArgs(workspace: string, prompt: string, workspaceRoot = workspace): string[] {
+  const resolvedWorkspace = resolve(workspace);
+  const resolvedRoot = resolve(workspaceRoot);
+  const entries = [
+    permission(ISOLATED_CODEX_HOME, "deny"),
+    permission(RELAY_APPLICATION_ROOT, "deny"),
+    permission(RELAY_HOME, "deny"),
+  ];
+  if (resolvedRoot !== resolvedWorkspace) entries.push(permission(resolvedRoot, "deny"));
+  entries.push(permission(resolvedWorkspace, "write"));
+  entries.push(permission(join(resolvedWorkspace, ".git"), "read"));
+
   return [
     "--ask-for-approval",
     "never",
@@ -44,12 +45,12 @@ export function createCodexArgs(workspace: string, prompt: string): string[] {
     "-c",
     "permissions.relay.extends=\":workspace\"",
     "-c",
-    filesystemPermissions,
+    `permissions.relay.filesystem={${entries.join(",")}}`,
     "-c",
     "permissions.relay.network.enabled=true",
     "exec",
     "--cd",
-    workspace,
+    resolvedWorkspace,
     prompt,
   ];
 }
@@ -66,6 +67,7 @@ export class CodexExecutor {
     private readonly timeoutMs: number,
     private readonly maxOutputBytes: number,
     private readonly runAsUser?: string,
+    private readonly workspaceRoot?: string,
   ) {}
 
   async run(request: CreateJobRequest, workspace: string, outputPath: string): Promise<ExecutionOutcome> {
@@ -73,7 +75,11 @@ export class CodexExecutor {
     await writeFile(outputPath, "", { mode: 0o600 });
 
     const prompt = buildCodexPrompt(request);
-    const invocation = createCodexInvocation(this.command, createCodexArgs(workspace, prompt), this.runAsUser);
+    const invocation = createCodexInvocation(
+      this.command,
+      createCodexArgs(workspace, prompt, this.workspaceRoot ?? workspace),
+      this.runAsUser,
+    );
     const child = spawn(invocation.command, invocation.args, {
       cwd: workspace,
       env: createCodexEnvironment(),
@@ -97,7 +103,7 @@ export class CodexExecutor {
 
     let timedOut = false;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
-    const exitCode = await new Promise<number>((resolve, reject) => {
+    const exitCode = await new Promise<number>((resolvePromise, reject) => {
       const timeoutTimer = setTimeout(() => {
         timedOut = true;
         child.kill("SIGTERM");
@@ -112,7 +118,7 @@ export class CodexExecutor {
       child.on("close", (code: number | null) => {
         clearTimeout(timeoutTimer);
         if (forceKillTimer) clearTimeout(forceKillTimer);
-        resolve(code ?? 1);
+        resolvePromise(code ?? 1);
       });
     });
     await pendingWrite;

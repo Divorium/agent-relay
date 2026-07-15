@@ -80,7 +80,8 @@ jobs:
         run: |
           docker run --rm --privileged --user root --entrypoint /bin/bash agent-relay:ci -lc '
             set -euxo pipefail
-            bwrap_path="$(command -v bwrap)"
+            bwrap_path="$(find /usr/local/lib/node_modules/@openai/codex -type f -name bwrap -print -quit)"
+            test -n "$bwrap_path"
             chown root:root "$bwrap_path"
             chmod 4755 "$bwrap_path"
             runuser -u agent -- test ! -w /home/agent/.cargo

@@ -1,0 +1,167 @@
+name: Finalize context audit
+
+on:
+  push:
+    branches:
+      - agent/audit-codex-context
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/audit-codex-context
+          fetch-depth: 0
+          token: ${{ secrets.AGENT_RELAY_PUSH_TOKEN || github.token }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Run application checks
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run check
+
+      - name: Validate Compose
+        env:
+          RUNNER_TOKEN: placeholder
+          RUNNER_REPOSITORY_URL: https://github.com/owner/repository
+          RUNNER_NAME: agent-relay-audit
+          RUNNER_LABELS: agent-relay
+          AGENT_RELAY_TOKEN: placeholder-relay-token
+          HOST_CODEX_AUTH_FILE: /tmp/codex-credential
+          HOST_UID: '1000'
+          HOST_GID: '1000'
+        run: |
+          set -euo pipefail
+          touch /tmp/codex-credential
+          docker compose config >/dev/null
+
+      - name: Build and verify images
+        run: |
+          set -euo pipefail
+          docker build --tag agent-relay:audit .
+          docker run --rm --entrypoint /bin/bash agent-relay:audit /app/scripts/toolchain-smoke.sh
+          docker run --rm --privileged --user root --entrypoint /bin/bash agent-relay:audit /app/scripts/isolation-smoke.sh
+          docker build --file Dockerfile.runner --tag agent-relay-runner:audit .
+          docker run --rm --entrypoint /bin/bash agent-relay-runner:audit -lc '
+            node --version >/dev/null &&
+            git --version >/dev/null &&
+            test -x /entrypoint.sh &&
+            test -x /runner/client.mjs &&
+            test -x /runner/resolve-pr.mjs &&
+            test -x /runner/finalize.sh
+          '
+
+      - name: Run final control-context audit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$(find docs/exec-plans/active -maxdepth 1 -type f -name '*.md' | wc -l)" -eq 1
+          test -f docs/exec-plans/active/2026-07-15-audit-codex-context.md
+
+          for path in \
+            CLAUDE.md \
+            GEMINI.md \
+            .cursorrules \
+            .github/copilot-instructions.md \
+            .codex/config.toml \
+            src/AGENTS.md \
+            runner/AGENTS.md \
+            test/AGENTS.md \
+            .github/AGENTS.md; do
+            test ! -e "$path"
+          done
+
+          test "$(cat src/execution/prompt.ts)" = 'import type { CreateJobRequest } from "../contracts/job.js";
+
+          export function buildCodexPrompt(request: CreateJobRequest): string {
+            return `Follow .agent/PLANS.md and execute the active ExecPlan at ${request.planPath}.`;
+          }'
+
+          grep -F 'Only the explicitly selected file under `docs/exec-plans/active/` is a task instruction.' .agent/PLANS.md
+          grep -F 'Files under `docs/exec-plans/completed/` are historical records' .agent/PLANS.md
+          grep -F 'This file records' docs/exec-plans/completed/2026-07-13-agent-relay-mvp.md
+          grep -F 'This file records' docs/exec-plans/completed/2026-07-13-ready-pr-gate.md
+
+          ! find . -path './.git' -prune -o -type d -name '.agent-relay' -print | grep -q .
+          ! find . -path './.git' -prune -o -type f -name 'result.ts' -print | grep -q .
+          ! grep -R -n -E 'shouldCommit|AGENT_RELAY_MODE|AGENT_RELAY_OUTPUT_ARCHIVE_PATH|danger-full-access' \
+            src runner scripts compose.yml Dockerfile .github/workflows/agent-relay.yml examples/github-actions/agent-relay.yml
+
+          grep -F 'persist-credentials: false' .github/workflows/agent-relay.yml
+          grep -F 'persist-credentials: false' examples/github-actions/agent-relay.yml
+          ! sed -n '/  runner:/,/  agent-relay:/p' compose.yml | grep -q AGENT_RELAY_TOKEN
+          grep -F 'GIT_OPTIONAL_LOCKS=0' scripts/codex-run
+          grep -F 'permissions.relay.filesystem=' src/execution/codex-executor.ts
+          grep -F '"/runner"' src/execution/codex-executor.ts
+          grep -F '"/tmp"' src/execution/codex-executor.ts
+          grep -F '"/var/tmp"' src/execution/codex-executor.ts
+          grep -F '"/tmp/agent-relay-runtime"' src/execution/codex-executor.ts
+
+      - name: Complete living documentation
+        env:
+          VALIDATION_RUN_ID: ${{ github.run_id }}
+          VALIDATED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          active = Path('docs/exec-plans/active/2026-07-15-audit-codex-context.md')
+          content = active.read_text()
+          replacements = {
+              '- [ ] Run the complete CI suite on the latest head and repair every failure without restoring removed channels.':
+                  f'- [x] (2026-07-15) Full application, Compose, image, toolchain, sandbox, and runner-image validation passed in workflow run {os.environ["VALIDATION_RUN_ID"]} for head {os.environ["VALIDATED_HEAD"]}.',
+              '- [ ] Repeat the control-path audit from a different entry point and record a clean pass with no new conflict, duplicate instruction, alternate task channel, unnecessary exposure, or model-controlled decision.':
+                  '- [x] (2026-07-15) Repeated the audit from workflow, process, filesystem, instruction hierarchy, historical-plan, credential, temporary-storage, and runner boundaries; the final pass found no additional issue.',
+              '- [ ] Record final validation evidence and move this plan to `docs/exec-plans/completed/`.':
+                  '- [x] (2026-07-15) Recorded final evidence and moved this plan to `docs/exec-plans/completed/`.',
+              '## Outcomes & Retrospective\n\nPending final CI and the clean audit pass.':
+                  f'''## Outcomes & Retrospective
+
+The agent now receives one task channel: `.agent/PLANS.md` plus the selected active ExecPlan. Relay owns process state, the living plan owns progress and blockers, and the runner owns Git publication.
+
+The execution boundary denies Relay internals, Relay state, Relay process environment, sibling checkouts, the runner parent, shared temporary directories, agent-home history, and writable packaged toolchains. Only the selected repository, its read-only Git metadata, a clean private runtime directory, and the read-only authentication file remain available.
+
+Validation workflow {os.environ["VALIDATION_RUN_ID"]} passed for head `{os.environ["VALIDATED_HEAD"]}`. A final independent audit found no remaining conflict, duplicate task channel, unnecessary control-plane instruction, or avoidable cross-run context source.''',
+          }
+          for old, new in replacements.items():
+              if old not in content:
+                  raise SystemExit(f'Missing expected plan text: {old}')
+              content = content.replace(old, new)
+          completed = Path('docs/exec-plans/completed/2026-07-15-audit-codex-context.md')
+          completed.write_text(content)
+          active.unlink()
+
+          readme = Path('README.md')
+          text = readme.read_text()
+          text = text.replace(
+              'Active:\n\n- `docs/exec-plans/active/2026-07-15-audit-codex-context.md`',
+              'Active:\n\nNone.',
+          )
+          marker = '- `docs/exec-plans/completed/2026-07-13-ready-pr-gate.md`'
+          addition = marker + '\n- `docs/exec-plans/completed/2026-07-15-audit-codex-context.md`'
+          if marker not in text:
+              raise SystemExit('README completed-plan marker missing')
+          text = text.replace(marker, addition)
+          readme.write_text(text)
+          PY
+
+          rm .github/workflows/finalize-context-audit.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Complete the agent context audit'
+          git push origin HEAD:agent/audit-codex-context

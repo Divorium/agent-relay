@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { RelayError } from "../contracts/errors.js";
 import type { CreateJobRequest, JobRecord } from "../contracts/job.js";
-import { resolveWorkspace } from "../security/workspace.js";
+import { assertActivePlanFile, resolveWorkspace } from "../security/workspace.js";
 import { JobStore } from "../persistence/job-store.js";
 import { CodexExecutor } from "../execution/codex-executor.js";
 
@@ -41,6 +41,7 @@ export class JobService {
     this.acceptingJob = true;
     try {
       const workspace = await resolveWorkspace(this.workspaceRoot, request.workspace);
+      await assertActivePlanFile(workspace, request.planPath);
       const id = randomUUID();
       const now = new Date().toISOString();
       const job: JobRecord = {

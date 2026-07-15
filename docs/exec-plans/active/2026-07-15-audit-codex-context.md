@@ -19,12 +19,13 @@ The task process receives one task definition: the selected active ExecPlan inte
 - [x] Replaced key implementation-text assertions with Dockerfile instruction parsing, explicit `COPY` source checks, compensation tests, and no-change behavior tests.
 - [x] Made job creation compensate the request index and saved job before accepting another request.
 - [x] Treat a completed Relay process with a clean worktree as an explicit no-change failure rather than a successful implementation run.
+- [x] Added behavioral tests for restart recovery, compare-delete request-index compensation, and active-lock release after executor failure.
 - [x] Recorded merge order for overlapping PR #3: merge PR #9 first, then rebase PR #3 onto the resulting `main` and rerun its streaming and failure-path tests.
-- [x] Full mandatory CI passed on the actual self-hosted runner in workflow run `29413966223` for head `31f5b5ff3f4fc44f8796a551b77752cb9324a97b`.
+- [ ] Run the full mandatory CI suite for the latest head containing the additional lifecycle tests.
 - [ ] [blocked] Execute `bash scripts/host-validation.sh` after the packaging changes.
   - Cause: the only GitHub runner is containerized and intentionally has no Docker daemon, Docker socket, or host execution route.
   - Impact: automated CI proves repository behavior and packaging contracts but does not prove that the final images build and run.
-  - Evidence: the earlier successful Docker jobs ran on GitHub-hosted Ubuntu; the current self-hosted run completed the full daemon-independent suite.
+  - Evidence: the earlier successful Docker jobs ran on GitHub-hosted Ubuntu; the current self-hosted suite is daemon-independent.
   - Unblock condition: run the retained script directly on the Docker host and record its output.
 - [ ] Complete a final review after the Docker-host evidence and move this plan back to `completed/`.
 
@@ -43,7 +44,7 @@ The task process receives one task definition: the selected active ExecPlan inte
   Rationale: environment capabilities are properties of the launcher, not reusable model instructions.
 - Decision: real Docker validation remains an operator-executed repository script until an actual automated Docker-capable execution path exists.
   Rationale: a dead workflow is worse than an explicit manual gate.
-- Decision: mandatory CI tests application behavior, contracts, scripts, workflow safety, packaging structure, compensation, and no-change handling without Docker.
+- Decision: mandatory CI tests application behavior, contracts, scripts, workflow safety, packaging structure, compensation, recovery, and no-change handling without Docker.
   Rationale: lack of a Docker daemon does not justify deleting adjacent coverage.
 - Decision: PR #9 precedes PR #3.
   Rationale: PR #3 depends on overlapping lifecycle and runner files and must validate its streaming changes against the final context contract.
@@ -55,7 +56,7 @@ Mandatory PR validation on `[self-hosted, agent-relay]`:
     npm ci
     npm run check
 
-Result: workflow run `29413966223` passed on head `31f5b5ff3f4fc44f8796a551b77752cb9324a97b`.
+The previous passing self-hosted evidence predates the latest lifecycle tests. Record the new workflow run here after it completes.
 
 Manual Docker-host validation retained in the repository:
 
@@ -65,4 +66,4 @@ Acceptance requires the recorded Docker-host result in addition to the green man
 
 ## Outcomes & Retrospective
 
-The repository now uses the real single-runner topology, rejects false successful no-op runs, compensates incomplete job persistence, and keeps Docker integration as an explicit manual gate rather than a fictitious workflow. Final completion remains blocked only on executing that gate.
+The repository uses the real single-runner topology, rejects false successful no-op runs, compensates incomplete job persistence, and keeps Docker integration as an explicit manual gate rather than a fictitious workflow. Final completion remains blocked on the latest CI evidence and executing the Docker-host gate.

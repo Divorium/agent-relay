@@ -21,4 +21,4 @@ jobs:
       - run: npm ci
       - run: npm run check
       - name: Validate Compose and images on the Docker host
-        run: ./scripts/host-validation.sh
+        run: bash scripts/host-validation.sh

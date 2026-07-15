@@ -14,8 +14,11 @@ fi
 
 : "${COMMIT_MESSAGE:?COMMIT_MESSAGE is required when the worktree changed}"
 : "${GITHUB_PUSH_TOKEN:?GITHUB_PUSH_TOKEN is required when the worktree changed}"
-if (( ${#COMMIT_MESSAGE} > 120 )) || printf '%s' "$COMMIT_MESSAGE" | LC_ALL=C grep -q '[[:cntrl:]]'; then
-  echo "COMMIT_MESSAGE must be one line without control characters and at most 120 characters" >&2
+if ! COMMIT_MESSAGE="$COMMIT_MESSAGE" node -e '
+const message = process.env.COMMIT_MESSAGE ?? "";
+if (Array.from(message).length > 120 || /[\u0000-\u001f\u007f]/u.test(message)) process.exit(1);
+'; then
+  echo "COMMIT_MESSAGE must be one line without control characters and at most 120 Unicode characters" >&2
   exit 1
 fi
 

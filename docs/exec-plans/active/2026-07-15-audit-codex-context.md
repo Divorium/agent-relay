@@ -1,10 +1,10 @@
 # Audit and minimize agent control context
 
-This ExecPlan follows `.agent/PLANS.md` and remains active until the review action items and manual Docker integration gate are complete.
+This ExecPlan follows `.agent/PLANS.md` and remains active until the repository-only review findings are fixed and the final review is complete.
 
 ## Purpose / Big Picture
 
-The task process receives one task definition: the selected active ExecPlan interpreted through `.agent/PLANS.md`. Workflow, credentials, process status, Git publication, and environment capabilities remain deterministic system concerns. Validation reflects the infrastructure that actually exists: one containerized self-hosted runner labeled `agent-relay` and one Agent Relay container.
+The task process receives one task definition: the selected active ExecPlan interpreted through `.agent/PLANS.md`. Workflow credentials, technical process status, Git publication, and environment capabilities remain deterministic system concerns. The implementation must stay within the existing Agent Relay topology and must not add product functionality or infrastructure. Automated tests validate repository code only; they do not validate Docker, GitHub, or another external platform.
 
 ## Progress
 
@@ -15,71 +15,68 @@ The task process receives one task definition: the selected active ExecPlan inte
 - [x] Scoped credentials to their consuming workflow steps and separated Relay and task-process filesystem access.
 - [x] Removed the invented native-host runner workflow and every claim that workflow routing can reach a host process.
 - [x] Run mandatory CI only on the existing `[self-hosted, agent-relay]` runner and reject fork-origin pull requests before executing repository code.
-- [x] Preserved the former Compose, image, toolchain, excluded-tool, and runner-image checks in `scripts/host-validation.sh` without claiming they run inside the containerized runner.
-- [x] Replaced key implementation-text assertions with Dockerfile instruction parsing, explicit `COPY` source checks, compensation tests, and no-change behavior tests.
 - [x] Made job creation compensate the request index and saved job before accepting another request.
-- [x] Treat a completed Relay process with a clean worktree as an explicit no-change failure rather than a successful implementation run.
 - [x] Added behavioral tests for restart recovery, compare-delete request-index compensation, and active-lock release after executor failure.
 - [x] Recorded merge order for overlapping PR #3: merge PR #9 first, then rebase PR #3 onto the resulting `main` and rerun its streaming and failure-path tests.
-- [x] Full mandatory CI passed on the actual self-hosted runner in workflow run `29415211394` for head `c1526474fc7957253ecca8be7c13aa9996d07270`.
-- [ ] Review and explicitly approve or reject the policy that a terminal Relay run with a clean worktree is an error; align runner behavior, tests, and documentation with the decision.
-- [ ] Decide whether restart-recovery, request-index compare-delete, and active-lock recovery tests belong in PR #9 or should move to a separate Relay reliability PR.
-- [ ] Add strict runner HTTP contract tests for create-job and poll responses, including unexpected success statuses, missing identifiers, unknown statuses, invalid or empty JSON, incorrect content type, and bounded error bodies.
-- [ ] Add runner polling tests for `accepted -> running -> completed`, an immediately terminal create response, polling timeout, and an HTTP failure during polling.
-- [ ] Add commit-message derivation tests for length limits, control characters, CR/LF injection, Unicode, multiple headings, empty headings, and fallback behavior.
-- [ ] Expand runner-side workspace and plan validation tests for symlinks, directories, nested paths under `active`, traversal, backslashes, missing `.md`, and a workspace symlink escaping the configured root.
-- [ ] Expand Relay request validation tests for unknown fields, empty or overlong `requestId`, invalid workspace and plan paths, and reuse of one request ID with a different body.
-- [ ] Add persistence-failure tests for job save, request-index save, and rollback failure combinations without introducing new lifecycle states.
-- [ ] Add API error-redaction tests proving that responses do not expose bearer tokens, process environment, the host authentication path, stack traces, or unredacted process output.
-- [ ] Add a full integration test covering runner client -> real Relay HTTP API -> fake executor -> `runner/finalize.sh` -> local bare Git remote, including verification of the committed and pushed branch contents.
-- [ ] Add an integration test where execution moves the selected plan from `active/` to `completed/` while the runner still completes finalization using preflighted metadata.
-- [ ] Add an integration test proving that an invalid or symlinked plan is rejected before the executor is called.
-- [ ] Add an integration test proving request idempotency across a Relay restart with the same persisted state directory and no second executor invocation.
-- [ ] Add finalizer failure-path tests for `git diff --check`, invalid target branches, rejected pushes, local commits left after a failed push, and retry behavior after partial finalization.
-- [ ] Review the final PR history and decide whether to squash or reorganize it into a small set of reviewable logical commits before merge.
-- [ ] Rerun the complete self-hosted CI suite after implementing the approved action items and record the final head and workflow run.
-- [ ] [blocked] Execute `bash scripts/host-validation.sh` after the packaging changes.
-  - Cause: the only GitHub runner is containerized and intentionally has no Docker daemon, Docker socket, or host execution route.
-  - Impact: automated CI proves repository behavior and packaging contracts but does not prove that the final images build and run.
-  - Evidence: the earlier successful Docker jobs ran on GitHub-hosted Ubuntu; the current self-hosted suite is daemon-independent.
-  - Unblock condition: run the retained script directly on the Docker host and record its output.
-- [ ] Complete a final review after all approved action items and Docker-host evidence, then move this plan back to `completed/`.
+- [x] Rejected the manual Docker-host validation gate and removed it from acceptance. Docker and Compose are external dependencies and are not test targets for this task.
+- [x] Rejected adding a new Docker-capable workflow, host runner, Docker socket, GitHub integration test, or any other infrastructure.
+- [x] Rejected a full runner-to-GitHub publication integration test and PR-history reorganization. Existing components may be tested locally, but GitHub behavior and commit-history policy are outside this repair.
+- [x] Retained restart recovery, request-index compare-delete, and active-lock recovery coverage because PR #9 changes those existing code paths.
+- [ ] Restore a completed Relay run with a clean worktree to a successful no-op. Treating it as an error is an unapproved behavior expansion and conflicts with review-only or already-satisfied plans.
+- [ ] Harden the runner HTTP client: require the expected success status and JSON content type, bound response bodies, validate job identifiers and statuses, reject malformed success bodies, and keep polling timeout deterministic.
+- [ ] Add runner polling coverage for `accepted -> running -> completed`, an immediately terminal create response, timeout, and an HTTP failure while polling.
+- [ ] Make commit-message derivation deterministic for length limits, control characters, CR/LF, Unicode, multiple headings, empty headings, and fallback behavior.
+- [ ] Expand runner-side workspace and plan validation coverage for symlinks, directories, nested active paths, traversal, backslashes, missing `.md`, and a workspace symlink escaping the configured root.
+- [ ] Strengthen Relay request validation for unknown fields, empty or overlong request IDs, unsafe workspace paths, invalid plan paths, and reuse of one request ID with a different body.
+- [ ] Add persistence-failure coverage for job save, request-index save, and rollback-failure combinations without adding lifecycle states.
+- [ ] Remove internal filesystem paths from public job responses and redact any stored error text before it is returned by the API.
+- [ ] Make process-output redaction safe when UTF-8 sequences or secrets are split across stdout/stderr chunks.
+- [ ] Add repository-only API tests proving responses do not expose bearer tokens, process environment, authentication-file paths, stack traces, internal output paths, or raw process output.
+- [ ] Add repository-only coverage for moving the selected plan from `active/` to `completed/` while finalization still uses preflighted metadata.
+- [ ] Add repository-only coverage proving invalid or symlinked plans are rejected before the executor is called.
+- [ ] Add repository-only coverage proving request idempotency survives Relay restart with the same persisted state and does not invoke the executor twice.
+- [ ] Make a rejected push restore the pre-commit working-tree changes, and cover it with a local bare Git remote. Do not test GitHub.
+- [ ] Add finalizer failure-path coverage for `git diff --check`, invalid target branches, rejected pushes, and retry after a failed publication attempt.
+- [ ] Remove `scripts/host-validation.sh` and every documentation, package-script, and acceptance reference that presents Docker or GitHub as an automated or manual test target for this task.
+- [ ] Run `npm run check` and record repository-only validation evidence.
+- [ ] Perform a second full review, add every new finding to this plan, repair the accepted findings, and rerun `npm run check`.
+- [ ] Complete the final review and move this plan to `completed/` only when every accepted repository-code item is complete.
 
 ## Surprises & Discoveries
 
-- The previously cited successful run executed on GitHub-hosted Ubuntu. It proved that the original Docker checks were useful and valid in an environment with Docker, but it did not prove they can run inside the current containerized self-hosted runner.
-- A manual host script preserves the real Docker validation procedure, but a workflow targeting an unprovisioned runner is a dead test path and must not be represented as CI coverage.
-- Green packaging-contract tests do not prove that a Dockerfile builds, a Compose file is accepted by Compose, or the installed Codex sandbox enforces the configured permissions.
-- PR #3 and PR #9 overlap in prompt, runner, lifecycle, logging, and plan files. PR #3 must be rebased and retested after PR #9 lands.
+- The active plan had become a backlog of speculative integration and infrastructure work rather than a bounded repair plan.
+- A clean worktree can be a valid result for review-only work or a plan already satisfied by the repository; forcing it to fail adds behavior that the user did not request.
+- The runner currently parses any successful JSON body as a job. Missing identifiers, unknown statuses, wrong content types, and unexpectedly large bodies can therefore escape the HTTP boundary.
+- Public job responses currently expose the internal `outputPath` and may return stored executor error text without response-time redaction.
+- Chunk-local redaction can leak a secret split across process-output chunks even when the complete value matches a configured secret pattern.
+- A failed push occurs after creating a local commit, so the next attempt may not see the original working-tree changes unless finalization rolls the commit back.
 
 ## Decision Log
 
-- Decision: every repository workflow uses the existing self-hosted `agent-relay` runner.
-  Rationale: no GitHub-hosted or additional native runner is part of this deployment.
-- Decision: `.agent/PLANS.md` remains environment-neutral.
-  Rationale: environment capabilities are properties of the launcher, not reusable model instructions.
-- Decision: real Docker validation remains an operator-executed repository script until an actual automated Docker-capable execution path exists.
-  Rationale: a dead workflow is worse than an explicit manual gate.
-- Decision: mandatory CI tests application behavior, contracts, scripts, workflow safety, packaging structure, compensation, recovery, and no-change handling without Docker.
-  Rationale: lack of a Docker daemon does not justify deleting adjacent coverage.
+- Decision: do not add functionality or infrastructure while repairing PR #9.
+  Rationale: the user explicitly prohibited both.
+- Decision: tests exercise repository code and local fixtures only.
+  Rationale: Docker, GitHub, hosted runners, and remote platform behavior are external dependencies, not test subjects for this task.
+- Decision: a completed Relay job with no repository changes is successful.
+  Rationale: technical completion and worktree mutation are different facts; the runner must not invent a failure outcome.
+- Decision: existing persistence and recovery behavior stays in PR #9 and receives focused coverage.
+  Rationale: PR #9 already changes those paths, so validating them is repair work rather than scope expansion.
+- Decision: finalizer publication tests may use a local bare Git repository.
+  Rationale: this exercises the repository script deterministically without testing GitHub or adding infrastructure.
 - Decision: PR #9 precedes PR #3.
-  Rationale: PR #3 depends on overlapping lifecycle and runner files and must validate its streaming changes against the final context contract.
+  Rationale: PR #3 overlaps lifecycle, prompt, runner, logging, and plan files and must be rebased after this context contract stabilizes.
 
 ## Validation and Acceptance
 
-Mandatory PR validation on `[self-hosted, agent-relay]`:
+Repository-only validation:
 
     npm ci
     npm run check
 
-Result: workflow run `29415211394` passed on head `c1526474fc7957253ecca8be7c13aa9996d07270`.
+Tests may start local HTTP servers, temporary processes, temporary workspaces, and local bare Git repositories to exercise code owned by this repository. They must not require or validate Docker, Compose, GitHub APIs, hosted runners, network services, or credentials.
 
-Manual Docker-host validation retained in the repository:
-
-    bash scripts/host-validation.sh
-
-Acceptance requires completion of the approved action items, a final green self-hosted CI run, and recorded Docker-host validation.
+Acceptance requires all accepted findings to be implemented, repository-only validation to pass, and a second review to find no unresolved correctness or security defect within the PR scope.
 
 ## Outcomes & Retrospective
 
-The repository uses the real single-runner topology, rejects false successful no-op runs, compensates incomplete job persistence, verifies restart and lock recovery, and keeps Docker integration as an explicit manual gate rather than a fictitious workflow. Final completion remains pending on the review action items and Docker-host gate.
+PR #9 has a bounded repair plan again. The first review identified contract-validation, path-validation, redaction, API-exposure, no-op semantics, persistence, and failed-publication recovery work. Completion remains pending on implementation, repository-only validation, and the required second review.

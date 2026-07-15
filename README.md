@@ -10,18 +10,18 @@ Each deployment contains:
 
 - `runner`: resolves the pull request and owns checkout, commit, push, and GitHub credentials;
 - `agent-relay`: authenticates requests, launches Codex, enforces execution limits, persists redacted process output, and owns technical job state;
-- `Codex`: implements the active ExecPlan, updates its living state, and runs its validation.
+- `Codex`: follows `.agent/PLANS.md`, implements the selected active ExecPlan, updates its living state, and runs its validation.
 
-The runner and Relay share one workspace volume. Relay runs as the `relay` user. Codex runs as the separate `agent` user. Relay state is mode `0700`. Only the host Codex `auth.json` file is mounted into the agent home, read-only.
+The runner and Relay share one workspace volume. Relay runs as the `relay` user. Codex runs as the separate `agent` user. Relay state is mode `0700`. Only the host Codex `auth.json` file is mounted into the agent home, read-only. Generated agent-home state is removed before every execution.
 
 ## Workflow inputs
 
 The production workflow is `.github/workflows/agent-relay.yml`. Manual dispatch accepts only:
 
 - `pr_number`: the open pull request to update;
-- `plan_path`: the active ExecPlan in that pull request.
+- `plan_path`: a regular, non-symlink Markdown file directly under `docs/exec-plans/active/`.
 
-The workflow does not accept an arbitrary branch, a secondary execution mode, a result schema, or commit intent. The active ExecPlan is the sole task authority.
+The workflow does not accept an arbitrary branch, a secondary execution mode, a result schema, or commit intent. `.agent/PLANS.md` defines reusable plan semantics and the selected active ExecPlan is the sole task authority.
 
 Before checkout, `/runner/resolve-pr.mjs` verifies that the pull request exists, is open, is not a draft, belongs to the configured target repository, and has valid head ref and SHA values. Checkout uses the API-derived head SHA. Finalization pushes to the API-derived head ref.
 
@@ -50,16 +50,17 @@ The runner independently uses `git status --porcelain` to determine whether work
 ## Security boundary
 
 - Checkout uses `persist-credentials: false` and verifies that no credential helper, authorization header, or credential-bearing remote remains before Codex starts.
+- The Relay bearer token is supplied only to the workflow client step; it is not part of the runner service environment.
 - The push token exists only in the finalization step and is consumed through a temporary askpass helper.
-- Agent Relay uses a separate bearer token for runner-to-relay requests.
 - Codex receives no GitHub token, runner registration token, Relay token, Docker socket, or Relay state.
 - Codex receives a minimal allowlisted environment rather than the Relay process environment.
-- The host Codex `auth.json` file is mounted read-only; host configuration, history, sessions, logs, and rules are not mounted.
-- Codex shell commands run under a restricted permissions profile that denies access to the Codex home directory.
+- The packaged service always launches the root-owned wrapper as the fixed `agent` user; command and user overrides are not configuration inputs.
+- The host Codex `auth.json` file is mounted read-only. Other generated agent-home content is removed before each run.
+- Codex shell commands run under a restricted permissions profile that denies access to the agent home and makes repository Git metadata read-only.
 
 ## Configuration
 
-Copy `.env.example` to `.env` and provide:
+Copy `.env.example` to `.env`, configure `AGENT_RELAY_TOKEN` with the same value as the repository Actions secret, and provide:
 
 ```env
 RUNNER_TOKEN=

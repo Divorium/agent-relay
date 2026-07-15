@@ -4,57 +4,34 @@ import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CodexExecutor } from "../src/execution/codex-executor.js";
-import { OutputStore } from "../src/persistence/output-store.js";
-import type { JobRecord } from "../src/contracts/job.js";
 
-const requestId = "live-log-request";
+const planPath = "docs/exec-plans/active/plan.md";
 
-test("Codex output reaches Docker stdout and the job log before process completion", async () => {
-  const root = join(tmpdir(), `agent-relay-live-log-${process.pid}-${Date.now()}`);
-  const workspace = join(root, "workspace");
-  const stateDir = join(root, "state");
-  const outputPath = join(stateDir, "job.log");
+async function fixture(name: string, executableSource: string) {
+  const root = join(tmpdir(), `agent-relay-log-${name}-${process.pid}-${Date.now()}-${Math.random()}`);
+  const workspaceRoot = join(root, "workspaces");
+  const workspace = join(workspaceRoot, "workspace");
+  const outputPath = join(root, "state", "job.log");
   const executable = join(root, "fake-codex");
-  await mkdir(workspace, { recursive: true });
-  await writeFile(join(workspace, "plan.md"), "# Plan\n");
-  await writeFile(executable, `#!/bin/sh
-set -eu
-[ "$1" = "--ask-for-approval" ]
-[ "$2" = "never" ]
-[ "$3" = "-c" ]
-[ "$4" = "features.memories=false" ]
-[ "$5" = "exec" ]
-[ "$6" = "--sandbox" ]
-[ "$7" = "danger-full-access" ]
-[ "$8" = "--cd" ]
-printf 'first live line\\n'
-sleep 1
-cat > "$9/.agent-relay/result.json" <<'JSON'
-{
-  "schemaVersion": 1,
-  "requestId": "${requestId}",
-  "status": "completed",
-  "commitMessage": "Complete live log test",
-  "summary": "Completed.",
-  "validation": [],
-  "blockers": [],
-  "limitations": []
-}
-JSON
-`, { mode: 0o700 });
+  await mkdir(join(workspace, "docs", "exec-plans", "active"), { recursive: true });
+  await mkdir(join(workspace, ".git"), { recursive: true });
+  await writeFile(join(workspace, planPath), "# Plan\n");
+  await writeFile(executable, executableSource, { mode: 0o700 });
   await chmod(executable, 0o700);
+  return { root, workspaceRoot, workspace, outputPath, executable };
+}
 
-  const job: JobRecord = {
-    id: "job-1",
-    request: { requestId, workspace: "workspace", planPath: "plan.md", mode: "implement" },
-    status: "accepted",
-    createdAt: "2026-07-14T00:00:00.000Z",
-    updatedAt: "2026-07-14T00:00:00.000Z",
-    resultPath: join(workspace, ".agent-relay", "result.json"),
-    outputPath,
-  };
-  const outputStore = new OutputStore(stateDir);
-  await outputStore.prepare(job.id, outputPath);
+function request(requestId: string) {
+  return { requestId, workspace: "workspace", planPath };
+}
+
+test("Codex output reaches Relay stdout and the job log before process completion", async () => {
+  const current = await fixture("live", `#!/bin/sh
+set -eu
+printf 'first live line\n'
+sleep 1
+printf 'changed\n' > "$PWD/changed.txt"
+`);
 
   let stdout = "";
   const originalWrite = process.stdout.write;
@@ -64,18 +41,81 @@ JSON
   }) as any;
 
   try {
-    const execution = new CodexExecutor(executable, 5_000, outputStore).run(job, workspace);
+    const execution = new CodexExecutor(current.executable, 5_000, 100_000, undefined, current.workspaceRoot).run(
+      request("live-log-request"),
+      current.workspace,
+      current.outputPath,
+    );
 
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.match(stdout, /first live line/);
-    assert.match(await readFile(outputPath, "utf8"), /first live line/);
+    assert.match(await readFile(current.outputPath, "utf8"), /first live line/);
 
     const outcome = await execution;
-    assert.equal(outcome.result.status, "completed");
-    assert.equal(outcome.result.commitMessage, "Complete live log test");
+    assert.equal(outcome.exitCode, 0);
+    assert.equal(await readFile(join(current.workspace, "changed.txt"), "utf8"), "changed\n");
   } finally {
     process.stdout.write = originalWrite;
-    await outputStore.close().catch(() => undefined);
-    await rm(root, { recursive: true, force: true });
+    await rm(current.root, { recursive: true, force: true });
+  }
+});
+
+test("Codex output redaction survives split UTF-8 and split secret chunks", async () => {
+  const current = await fixture("split-secret", `#!/bin/sh
+set -eu
+printf 'zażółć authorization: Bearer abcdefgh'
+sleep 0.1
+printf 'ijklmnopqrstuvwxyz\n'
+`);
+
+  let stdout = "";
+  const originalWrite = process.stdout.write;
+  process.stdout.write = ((chunk: unknown) => {
+    stdout += String(chunk);
+    return true;
+  }) as any;
+
+  try {
+    await new CodexExecutor(current.executable, 5_000, 100_000, undefined, current.workspaceRoot).run(
+      request("split-secret-request"),
+      current.workspace,
+      current.outputPath,
+    );
+    const log = await readFile(current.outputPath, "utf8");
+    assert.match(stdout, /zażółć authorization: Bearer \[REDACTED\]/);
+    assert.match(log, /zażółć authorization: Bearer \[REDACTED\]/);
+    assert.doesNotMatch(`${stdout}\n${log}`, /abcdefghijklmnopqrstuvwxyz/);
+  } finally {
+    process.stdout.write = originalWrite;
+    await rm(current.root, { recursive: true, force: true });
+  }
+});
+
+test("truncated output discards an incomplete sensitive line", async () => {
+  const current = await fixture("truncated-secret", `#!/bin/sh
+set -eu
+printf 'authorization: Bearer abcdefghijklmnopqrstuvwxyz'
+`);
+
+  let stdout = "";
+  const originalWrite = process.stdout.write;
+  process.stdout.write = ((chunk: unknown) => {
+    stdout += String(chunk);
+    return true;
+  }) as any;
+
+  try {
+    await new CodexExecutor(current.executable, 5_000, 24, undefined, current.workspaceRoot).run(
+      request("truncated-secret-request"),
+      current.workspace,
+      current.outputPath,
+    );
+    const log = await readFile(current.outputPath, "utf8");
+    assert.match(stdout, /OUTPUT TRUNCATED/);
+    assert.match(log, /OUTPUT TRUNCATED/);
+    assert.doesNotMatch(`${stdout}\n${log}`, /authorization|abcdefgh/);
+  } finally {
+    process.stdout.write = originalWrite;
+    await rm(current.root, { recursive: true, force: true });
   }
 });

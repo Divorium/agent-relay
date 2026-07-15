@@ -7,8 +7,8 @@ export interface AppConfig {
   relayToken: string;
   workspaceRoot: string;
   stateDir: string;
-  codexCommand: string;
   codexTimeoutMs: number;
+  maxOutputBytes: number;
 }
 
 function required(name: string, value: string | undefined): string {
@@ -29,7 +29,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     relayToken: required("AGENT_RELAY_TOKEN", env.AGENT_RELAY_TOKEN),
     workspaceRoot: resolve(required("SHARED_WORKSPACE_ROOT", env.SHARED_WORKSPACE_ROOT)),
     stateDir: resolve(env.AGENT_RELAY_STATE_DIR ?? "/var/lib/agent-relay"),
-    codexCommand: env.CODEX_COMMAND ?? "codex",
     codexTimeoutMs: positiveInteger("CODEX_TIMEOUT_MS", env.CODEX_TIMEOUT_MS, 21_600_000),
+    maxOutputBytes: positiveInteger("MAX_OUTPUT_BYTES", env.MAX_OUTPUT_BYTES, 10_000_000),
   };
 }

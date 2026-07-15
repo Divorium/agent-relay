@@ -13,7 +13,6 @@ services:
       RUNNER_NAME: ${RUNNER_NAME:-agent-relay-runner}
       RUNNER_LABELS: ${RUNNER_LABELS:-agent-relay}
       AGENT_RELAY_URL: http://agent-relay:8080
-      AGENT_RELAY_TOKEN: ${AGENT_RELAY_TOKEN}
     volumes:
       - workspace:/runner/_work
     networks:
@@ -35,10 +34,11 @@ services:
       SHARED_WORKSPACE_ROOT: /runner/_work
       AGENT_RELAY_STATE_DIR: /var/lib/agent-relay
       CODEX_TIMEOUT_MS: ${CODEX_TIMEOUT_MS:-21600000}
+      MAX_OUTPUT_BYTES: ${MAX_OUTPUT_BYTES:-10000000}
     volumes:
       - workspace:/runner/_work
       - relay-state:/var/lib/agent-relay
-      - ${HOST_CODEX_DIR}:/home/agent/.codex
+      - ${HOST_CODEX_AUTH_FILE}:/home/agent/.codex/auth.json:ro
     networks:
       - relay
     expose:

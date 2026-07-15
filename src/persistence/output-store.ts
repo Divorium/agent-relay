@@ -1,4 +1,4 @@
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import type { JobRecord, JobStatus } from "../contracts/job.js";
 import { RelayError } from "../contracts/errors.js";
 
@@ -36,7 +36,7 @@ interface OutputState {
 const READ_CHUNK_BYTES = 64 * 1024;
 
 function isTerminalStatus(status: JobStatus): boolean {
-  return status === "completed" || status === "blocked" || status === "failed" || status === "timed_out" || status === "interrupted";
+  return status === "completed" || status === "failed" || status === "timed_out" || status === "interrupted";
 }
 
 function toRelayError(error: unknown, code: "OUTPUT_PREPARATION_FAILED" | "OUTPUT_WRITE_FAILED" | "OUTPUT_READ_FAILED", message: string): RelayError {
@@ -48,9 +48,7 @@ async function writeFully(handle: FileHandle, buffer: Uint8Array, position: numb
   let written = 0;
   while (written < buffer.length) {
     const result = await handle.write(buffer, written, buffer.length - written, position + written);
-    if (result.bytesWritten <= 0) {
-      throw new Error("write returned no progress");
-    }
+    if (result.bytesWritten <= 0) throw new Error("write returned no progress");
     written += result.bytesWritten;
   }
   return written;
@@ -102,9 +100,7 @@ export class OutputStore {
   }
 
   async prepare(jobId: string, outputPath: string): Promise<void> {
-    if (this.states.has(jobId)) {
-      throw new RelayError("OUTPUT_PREPARATION_FAILED", "Output state already exists", 500);
-    }
+    if (this.states.has(jobId)) throw new RelayError("OUTPUT_PREPARATION_FAILED", "Output state already exists", 500);
     await fs.mkdir(dirname(outputPath), { recursive: true });
     try {
       const handle = await fs.open(outputPath, "wx+", 0o600);
@@ -171,9 +167,7 @@ export class OutputStore {
 
   async read(jobId: string, offset: number, maxBytes = READ_CHUNK_BYTES): Promise<Uint8Array> {
     const state = this.state(jobId);
-    if (offset > state.committedLength) {
-      throw new RelayError("OUTPUT_READ_FAILED", "Requested offset is beyond committed output", 416);
-    }
+    if (offset > state.committedLength) throw new RelayError("OUTPUT_READ_FAILED", "Requested offset is beyond committed output", 416);
     const available = Math.min(maxBytes, state.committedLength - offset);
     if (available <= 0) return Buffer.alloc(0);
     try {
@@ -188,13 +182,9 @@ export class OutputStore {
   async waitForChange(jobId: string, observedVersion: number, signal?: AbortSignal): Promise<OutputSnapshot> {
     const state = this.state(jobId);
     if (state.terminal?.kind === "error") throw state.terminal.error;
-    if (state.version !== observedVersion || state.terminal?.kind === "clean") {
-      return this.snapshot(state);
-    }
+    if (state.version !== observedVersion || state.terminal?.kind === "clean") return this.snapshot(state);
     return await new Promise<OutputSnapshot>((resolve, reject) => {
-      const cleanup = (): void => {
-        signal?.removeEventListener("abort", onAbort);
-      };
+      const cleanup = (): void => signal?.removeEventListener("abort", onAbort);
       const onAbort = (): void => {
         const index = state.waiters.findIndex((waiter) => waiter.resolve === resolve && waiter.reject === reject);
         if (index >= 0) state.waiters.splice(index, 1);
@@ -205,12 +195,7 @@ export class OutputStore {
         reject(new RelayError("OUTPUT_READ_FAILED", "Output reader was cancelled", 500));
         return;
       }
-      state.waiters.push({
-        observedVersion,
-        resolve,
-        reject,
-        cleanup,
-      });
+      state.waiters.push({ observedVersion, resolve, reject, cleanup });
       signal?.addEventListener("abort", onAbort, { once: true });
     });
   }

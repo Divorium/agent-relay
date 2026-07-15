@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { RelayError } from "../contracts/errors.js";
 import type { CreateJobRequest, JobRecord } from "../contracts/job.js";
-import { resolveWorkspace } from "../security/workspace.js";
+import { assertActivePlanFile, resolveWorkspace } from "../security/workspace.js";
 import { JobStore } from "../persistence/job-store.js";
 import { CodexExecutor } from "../execution/codex-executor.js";
-import { OutputStore } from "../persistence/output-store.js";
+import type { OutputStore } from "../persistence/output-store.js";
 
 function sameRequest(a: CreateJobRequest, b: CreateJobRequest): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -19,16 +19,13 @@ export class JobService {
     private readonly workspaceRoot: string,
     private readonly stateDir: string,
     private readonly store: JobStore,
-    private readonly outputStore: OutputStore,
     private readonly executor: CodexExecutor,
+    private readonly outputStore?: OutputStore,
   ) {}
 
   async init(): Promise<void> {
     await this.store.init();
-    const recovered = await this.store.markRunningJobsInterrupted();
-    for (const job of recovered) {
-      await this.outputStore.attach(job);
-    }
+    await this.store.markRunningJobsInterrupted();
   }
 
   async create(request: CreateJobRequest): Promise<JobRecord> {
@@ -44,34 +41,42 @@ export class JobService {
     }
 
     this.acceptingJob = true;
-    let createdJob: JobRecord | undefined;
     try {
       const workspace = await resolveWorkspace(this.workspaceRoot, request.workspace);
+      await assertActivePlanFile(workspace, request.planPath);
       const id = randomUUID();
       const now = new Date().toISOString();
-      createdJob = {
+      const job: JobRecord = {
         id,
         request,
         status: "accepted",
         createdAt: now,
         updatedAt: now,
-        resultPath: join(workspace, ".agent-relay", "result.json"),
         outputPath: join(this.stateDir, "logs", `${id}.log`),
       };
-      await this.outputStore.prepare(createdJob.id, createdJob.outputPath);
-      await this.store.save(createdJob);
-      await this.store.index(createdJob);
-      const job = createdJob;
+
+      let outputPrepared = false;
+      try {
+        if (this.outputStore) {
+          await this.outputStore.prepare(job.id, job.outputPath);
+          outputPrepared = true;
+        }
+        await this.store.save(job);
+        await this.store.index(job);
+      } catch {
+        let compensationFailed = false;
+        if (outputPrepared && this.outputStore) {
+          try { await this.outputStore.discard(job.id); } catch { compensationFailed = true; }
+        }
+        try { await this.store.removeRequestId(request.requestId, id); } catch { compensationFailed = true; }
+        try { await this.store.remove(id); } catch { compensationFailed = true; }
+        const detail = compensationFailed ? " and rollback was incomplete" : "";
+        throw new RelayError("JOB_PREPARATION_FAILED", `Could not persist the job${detail}`, 500);
+      }
+
       this.activeJobId = id;
       void this.execute(job, workspace);
       return job;
-    } catch (error) {
-      if (createdJob) {
-        await this.outputStore.discard(createdJob.id).catch(() => undefined);
-        await this.store.delete(createdJob.id).catch(() => undefined);
-        await this.store.removeRequestId(createdJob.request.requestId).catch(() => undefined);
-      }
-      throw error;
     } finally {
       this.acceptingJob = false;
     }
@@ -90,24 +95,17 @@ export class JobService {
       current = { ...job, status: "running", startedAt: started, updatedAt: started };
       await this.store.save(current);
 
-      const outcome = await this.executor.run(job, workspace);
+      const outcome = await this.executor.run(job.request, workspace, job.outputPath, job.id);
       const finished = new Date().toISOString();
       const terminal: JobRecord = {
         ...current,
-        status: outcome.result.status,
+        status: "completed",
         exitCode: outcome.exitCode,
         finishedAt: finished,
         updatedAt: finished,
       };
-      try {
-        await this.store.save(terminal);
-      } catch {
-        await this.outputStore.fail(job.id, new RelayError("OUTPUT_WRITE_FAILED", "Terminal job state could not be persisted", 500)).catch(() => undefined);
-        return;
-      }
-      await this.outputStore.complete(job.id, terminal.status).catch(async () => {
-        await this.outputStore.fail(job.id, new RelayError("OUTPUT_WRITE_FAILED", "Terminal output completion failed", 500)).catch(() => undefined);
-      });
+      await this.store.save(terminal);
+      if (this.outputStore) await this.outputStore.complete(job.id, terminal.status);
     } catch (error) {
       const relayError = error instanceof RelayError
         ? error
@@ -124,15 +122,15 @@ export class JobService {
           errorMessage: relayError.message,
         };
         await this.store.save(terminal);
-        if (relayError.code === "OUTPUT_WRITE_FAILED") {
-          await this.outputStore.fail(job.id, relayError).catch(() => undefined);
-        } else {
-          await this.outputStore.complete(job.id, terminal.status).catch(async () => {
-            await this.outputStore.fail(job.id, new RelayError("OUTPUT_WRITE_FAILED", "Terminal output completion failed", 500)).catch(() => undefined);
-          });
+        if (this.outputStore) {
+          if (relayError.code === "OUTPUT_WRITE_FAILED" || relayError.code === "OUTPUT_LIMIT_EXCEEDED") {
+            await this.outputStore.fail(job.id, relayError);
+          } else {
+            await this.outputStore.complete(job.id, terminal.status);
+          }
         }
       } catch {
-        await this.outputStore.fail(job.id, relayError).catch(() => undefined);
+        if (this.outputStore) await this.outputStore.fail(job.id, relayError).catch(() => undefined);
       }
     } finally {
       if (this.activeJobId === job.id) this.activeJobId = undefined;

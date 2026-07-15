@@ -35,7 +35,10 @@ RUN apt-get update \
   && usermod --append --groups agent relay \
   && mkdir -p /app /runner/_work /var/lib/agent-relay /home/agent/.cargo /home/agent/.rustup /home/agent/.codex \
   && chown -R relay:relay /app /var/lib/agent-relay /home/relay \
-  && chown -R agent:agent /runner /home/agent \
+  && chown -R agent:agent /home/agent \
+  && chown agent:agent /runner/_work \
+  && chown root:root /runner \
+  && chmod 0755 /runner \
   && chmod 0700 /var/lib/agent-relay /home/agent/.codex /home/relay \
   && printf '%s\n' 'relay ALL=(agent) NOPASSWD: /usr/local/bin/codex-run' > /etc/sudoers.d/agent-relay \
   && chmod 0440 /etc/sudoers.d/agent-relay

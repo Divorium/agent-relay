@@ -132,7 +132,9 @@ test("packaging exposes only current per-run context", async () => {
   assert.doesNotMatch(dockerignore, /\.agent-relay/);
 
   assert.match(ci, /docker run --rm --privileged --user root/);
-  assert.match(ci, /chmod 4755 "\$bwrap_path"/);
+  assert.doesNotMatch(ci, /chmod 4755|bwrap_path/);
+  assert.match(ci, /\/usr\/local\/bin\/codex[\s\S]*sandbox -P relay/);
+  assert.match(ci, /\/usr\/sbin\/runuser -u agent -- \/bin\/bash/);
   assert.match(ci, /test ! -w \/runner/);
   assert.match(ci, /test ! -r \/var\/lib\/agent-relay\/private/);
   assert.match(ci, /test ! -r "\/proc\/\$relay_pid\/environ"/);

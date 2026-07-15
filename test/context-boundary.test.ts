@@ -39,16 +39,8 @@ test("create-job contract has one active-plan instruction channel", () => {
   assert.throws(() => validateCreateJobRequest({ ...request, planPath: "docs/other.md" }), /docs\/exec-plans\/active/);
 });
 
-test("executor passes only locale to the root-owned launcher", () => {
-  assert.deepEqual(createCodexEnvironment({
-    PATH: "/host/bin",
-    HOME: "/home/relay",
-    LANG: "C.UTF-8",
-    LC_ALL: "C.UTF-8",
-    JAVA_HOME: "/host/java",
-    AGENT_RELAY_TOKEN: "relay-secret",
-    GITHUB_TOKEN: "github-secret",
-  }), {
+test("executor passes a fixed locale to the root-owned launcher", () => {
+  assert.deepEqual(createCodexEnvironment(), {
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
   });
@@ -112,6 +104,7 @@ test("packaging exposes only current per-run context", async () => {
   assert.match(dockerfile, /chmod -R o-rwx \/app/);
   assert.match(dockerfile, /relay ALL=\(agent\) NOPASSWD: \/usr\/local\/bin\/codex-run/);
   assert.match(launcher, /umask 0077/);
+  assert.match(launcher, /find "\$agent_home"[\s\S]*! -name \.cargo[\s\S]*! -name \.rustup[\s\S]*! -name \.codex[\s\S]*rm -rf/);
   assert.match(launcher, /find "\$codex_home"[\s\S]*! -name auth\.json[\s\S]*rm -rf/);
   assert.match(launcher, /exec \/usr\/bin\/env -i/);
   assert.doesNotMatch(launcher, /\.agent-relay|result\.json/);

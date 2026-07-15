@@ -74,7 +74,7 @@ async function resolvePlanFile(resolvedWorkspace, requestedPlanPath) {
 async function fetchJson(url, options = {}) {
   const response = await fetch(url, { ...options, signal: AbortSignal.timeout(requestTimeoutMs) });
   const text = await response.text();
-  if (!response.ok) throw new Error(`Agent Relay request failed: ${response.status} ${text}`);
+  if (!response.ok) throw new Error(`Agent Relay request failed: ${response.status} ${text.slice(0, 8192)}`);
   try {
     return JSON.parse(text);
   } catch {
@@ -122,6 +122,8 @@ if (job.status !== "completed") {
 
 const diff = spawnSync("git", ["status", "--porcelain"], { cwd: resolvedWorkspace, encoding: "utf8" });
 if (diff.status !== 0) throw new Error(diff.stderr || "git status failed");
-if (diff.stdout.trim().length === 0) process.exit(0);
+if (diff.stdout.trim().length === 0) {
+  throw new Error("Agent Relay completed without repository changes; the active ExecPlan remains unresolved");
+}
 
 await appendFile(githubOutput, `commit_message=${commitMessage}\n`, "utf8");

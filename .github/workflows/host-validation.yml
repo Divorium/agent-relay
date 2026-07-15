@@ -1,0 +1,62 @@
+name: Host validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: [self-hosted, agent-relay-host]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - name: Validate Compose and images on the Docker host
+        env:
+          RUNNER_TOKEN: placeholder
+          RUNNER_REPOSITORY_URL: https://github.com/owner/repository
+          RUNNER_NAME: agent-relay-host-validation
+          RUNNER_LABELS: agent-relay
+          AGENT_RELAY_TOKEN: placeholder-relay-token
+          HOST_UID: "1000"
+          HOST_GID: "1000"
+        run: |
+          set -euo pipefail
+          docker info >/dev/null
+          auth_file="$(mktemp)"
+          trap 'rm -f "$auth_file"' EXIT
+          export HOST_CODEX_AUTH_FILE="$auth_file"
+
+          docker compose config >/dev/null
+          docker build --tag agent-relay:host-validation .
+          docker run --rm --entrypoint /bin/bash agent-relay:host-validation /app/scripts/toolchain-smoke.sh
+          docker run --rm --entrypoint /bin/bash agent-relay:host-validation -lc '
+            set -euo pipefail
+            test "$(stat -c %a /var/lib/agent-relay)" = 700
+            test "$(stat -c %a /home/agent/.codex)" = 700
+            test ! -w /home/agent/.cargo
+            test ! -w /home/agent/.rustup
+            test ! -w /runner
+            ! command -v ssh
+            ! command -v dotnet
+          '
+
+          docker build --file Dockerfile.runner --tag agent-relay-runner:host-validation .
+          docker run --rm --entrypoint /bin/bash agent-relay-runner:host-validation -lc '
+            set -euo pipefail
+            node --version >/dev/null
+            git --version >/dev/null
+            test -x /entrypoint.sh
+            test -x /runner/client.mjs
+            test -x /runner/resolve-pr.mjs
+            test -x /runner/finalize.sh
+          '

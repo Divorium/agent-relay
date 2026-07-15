@@ -21,7 +21,7 @@ The task process receives one task definition: the selected active ExecPlan inte
 - [x] Treat a completed Relay process with a clean worktree as an explicit no-change failure rather than a successful implementation run.
 - [x] Added behavioral tests for restart recovery, compare-delete request-index compensation, and active-lock release after executor failure.
 - [x] Recorded merge order for overlapping PR #3: merge PR #9 first, then rebase PR #3 onto the resulting `main` and rerun its streaming and failure-path tests.
-- [ ] Run the full mandatory CI suite for the latest head containing the additional lifecycle tests.
+- [x] Full mandatory CI passed on the actual self-hosted runner in workflow run `29415211394` for head `c1526474fc7957253ecca8be7c13aa9996d07270`.
 - [ ] [blocked] Execute `bash scripts/host-validation.sh` after the packaging changes.
   - Cause: the only GitHub runner is containerized and intentionally has no Docker daemon, Docker socket, or host execution route.
   - Impact: automated CI proves repository behavior and packaging contracts but does not prove that the final images build and run.
@@ -56,7 +56,7 @@ Mandatory PR validation on `[self-hosted, agent-relay]`:
     npm ci
     npm run check
 
-The previous passing self-hosted evidence predates the latest lifecycle tests. Record the new workflow run here after it completes.
+Result: workflow run `29415211394` passed on head `c1526474fc7957253ecca8be7c13aa9996d07270`.
 
 Manual Docker-host validation retained in the repository:
 
@@ -66,4 +66,4 @@ Acceptance requires the recorded Docker-host result in addition to the green man
 
 ## Outcomes & Retrospective
 
-The repository uses the real single-runner topology, rejects false successful no-op runs, compensates incomplete job persistence, and keeps Docker integration as an explicit manual gate rather than a fictitious workflow. Final completion remains blocked on the latest CI evidence and executing the Docker-host gate.
+The repository uses the real single-runner topology, rejects false successful no-op runs, compensates incomplete job persistence, verifies restart and lock recovery, and keeps Docker integration as an explicit manual gate rather than a fictitious workflow. Final completion remains blocked only on executing the Docker-host gate.

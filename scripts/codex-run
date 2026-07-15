@@ -6,7 +6,10 @@ if [[ "$(id -un)" != "agent" ]]; then
   exit 1
 fi
 
-umask 0027
+umask 0077
+codex_home=/home/agent/.codex
+mkdir -p "$codex_home"
+find "$codex_home" -mindepth 1 -maxdepth 1 ! -name auth.json -exec rm -rf -- {} +
 
 exec /usr/bin/env -i \
   HOME=/home/agent \

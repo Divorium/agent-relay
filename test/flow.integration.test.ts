@@ -15,6 +15,12 @@ function runGit(cwd: string, args: string[]): void {
   assert.equal(result.status, 0, result.stderr || result.stdout);
 }
 
+function runGitOutput(cwd: string, args: string[]): string {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return result.stdout;
+}
+
 function runProcess(command: string, args: string[], options: Record<string, unknown>): Promise<{ status: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, options);
@@ -27,25 +33,31 @@ function runProcess(command: string, args: string[], options: Record<string, unk
   });
 }
 
-test("controlled full flow preserves work and an active-plan blocker without a result artifact", async () => {
+test("real Relay, runner client and finalizer complete one local repository flow", async () => {
   const root = join(tmpdir(), `agent-relay-full-flow-${process.pid}-${Date.now()}`);
   const workspaceRoot = join(root, "workspaces");
   const workspace = join(workspaceRoot, "repository", "repository");
   const stateDir = join(root, "state");
+  const remote = join(root, "remote.git");
+  const verification = join(root, "verification");
   const fakeCodex = join(root, "fake-codex");
   const githubOutput = join(root, "github-output");
+  const branch = "agent/test-flow";
   const requestId = "controlled-request-id";
   const planPath = "docs/exec-plans/active/plan.md";
 
   await mkdir(join(workspace, "docs", "exec-plans", "active"), { recursive: true });
   await writeFile(githubOutput, "");
-  await writeFile(join(workspace, planPath), "# Active plan\n\n- [ ] [blocked] External image validation — Cause: Docker unavailable. Impact: image validation deferred. Evidence: command missing. Unblock condition: run on CI.\n");
+  await writeFile(join(workspace, planPath), "# Active plan\n\n- [ ] [blocked] External deployment exercise — Cause: operator credentials are unavailable. Impact: deployment evidence is deferred. Evidence: local test fixture. Unblock condition: operator-run deployment.\n");
   await writeFile(join(workspace, "tracked.txt"), "before\n");
-  runGit(workspace, ["init"]);
+  runGit(root, ["init", "--bare", remote]);
+  runGit(workspace, ["init", "-b", branch]);
   runGit(workspace, ["config", "user.name", "Test Runner"]);
   runGit(workspace, ["config", "user.email", "runner@example.invalid"]);
   runGit(workspace, ["add", "."]);
   runGit(workspace, ["commit", "-m", "Initial state"]);
+  runGit(workspace, ["remote", "add", "origin", remote]);
+  runGit(workspace, ["push", "-u", "origin", branch]);
 
   await writeFile(fakeCodex, `#!/bin/sh
 set -eu
@@ -83,7 +95,7 @@ printf 'after\n' > "$workspace/tracked.txt"
   assert.ok(address && typeof address === "object");
 
   try {
-    const result = await runProcess(process.execPath, [join(process.cwd(), "runner", "client.mjs")], {
+    const client = await runProcess(process.execPath, [join(process.cwd(), "runner", "client.mjs")], {
       cwd: process.cwd(),
       env: {
         ...process.env,
@@ -101,12 +113,29 @@ printf 'after\n' > "$workspace/tracked.txt"
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /Agent Relay job .*: completed/);
-    assert.doesNotMatch(result.stdout, /Codex summary|Validation passed/);
+    assert.equal(client.status, 0, client.stderr);
+    assert.match(client.stdout, /Agent Relay job .*: completed/);
+    assert.doesNotMatch(client.stdout, /Codex summary|Validation passed/);
     assert.equal(await readFile(githubOutput, "utf8"), "commit_message=Active plan\n");
     assert.equal(await readFile(join(workspace, "tracked.txt"), "utf8"), "after\n");
     assert.match(await readFile(join(workspace, planPath), "utf8"), /\[blocked\]/);
+
+    const finalize = spawnSync("bash", [join(process.cwd(), "runner", "finalize.sh")], {
+      cwd: workspace,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_WORKSPACE: workspace,
+        TARGET_BRANCH: branch,
+        COMMIT_MESSAGE: "Active plan",
+        GITHUB_PUSH_TOKEN: "unused-for-local-remote",
+      },
+    });
+    assert.equal(finalize.status, 0, finalize.stderr || finalize.stdout);
+
+    runGit(root, ["clone", "--branch", branch, remote, verification]);
+    assert.equal(await readFile(join(verification, "tracked.txt"), "utf8"), "after\n");
+    assert.equal(runGitOutput(verification, ["log", "-1", "--pretty=%s"]).trim(), "Active plan");
 
     const persistedJobs = await readFile(join(stateDir, "request-index.json"), "utf8");
     const requestIndex = JSON.parse(persistedJobs) as Record<string, string>;

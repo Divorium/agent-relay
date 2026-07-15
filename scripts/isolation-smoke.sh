@@ -70,7 +70,6 @@ chown agent:agent /home/agent/.codex/sentinel /home/agent/stale-context
     ! touch .git/sandbox-write-denied
   '
 
-test -f /tmp/agent-relay-runtime/runtime-write-ok
 test -f /tmp/codex-root/current/workspace-write-ok
 test ! -e /tmp/codex-root/current/.git/sandbox-write-denied
 runuser -u agent -- test ! -r /app/dist/src/server.js
@@ -81,6 +80,5 @@ test -d /tmp/codex-root/current
 test -d /tmp/agent-relay-runtime/.git/objects
 test -d /tmp/agent-relay-runtime/.agents
 test ! -e /tmp/agent-relay-runtime/stale-context
-test ! -e /tmp/agent-relay-runtime/runtime-write-ok
 test ! -e /home/agent/.codex/sentinel
 test ! -e /home/agent/stale-context

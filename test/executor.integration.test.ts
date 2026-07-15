@@ -19,16 +19,8 @@ async function createRoot(name: string) {
   return { root, workspaceRoot, workspace, outputPath };
 }
 
-test("executor passes only locale to the launcher", () => {
-  assert.deepEqual(createCodexEnvironment({
-    PATH: "/usr/bin",
-    HOME: "/home/relay",
-    LANG: "C.UTF-8",
-    LC_ALL: "C.UTF-8",
-    JAVA_HOME: "/opt/java/openjdk",
-    AGENT_RELAY_TOKEN: "relay-secret",
-    GITHUB_TOKEN: "github-secret",
-  }), {
+test("executor passes only fixed locale to the launcher", () => {
+  assert.deepEqual(createCodexEnvironment(), {
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
   });

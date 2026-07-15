@@ -114,7 +114,7 @@ test("runner publishes a byte-identical archive only after a valid terminal outp
     }, async (baseUrl) => {
       const result = await runClient(baseUrl, current, { AGENT_RELAY_OUTPUT_ARCHIVE_PATH: archive });
       assert.equal(result.status, 0, result.stderr);
-      assert.deepEqual(await readFile(archive), bytes);
+      assert.equal(await readFile(archive, "binary"), bytes.toString("binary"));
       assert.ok((await stat(archive)).isFile());
       assert.equal(await readFile(current.githubOutput, "utf8"), "commit_message=Implement streaming output\n");
     });

@@ -10,41 +10,51 @@ const planPath = "docs/exec-plans/active/plan.md";
 
 async function createRoot(name: string) {
   const root = join(tmpdir(), `agent-relay-${name}-${process.pid}-${Date.now()}`);
-  const workspace = join(root, "workspace");
+  const workspaceRoot = join(root, "workspaces");
+  const workspace = join(workspaceRoot, "workspace");
   const outputPath = join(root, "state", "job.log");
   await mkdir(join(workspace, "docs", "exec-plans", "active"), { recursive: true });
   await mkdir(join(workspace, ".git"), { recursive: true });
   await writeFile(join(workspace, planPath), "# Plan\n");
-  return { root, workspace, outputPath };
+  return { root, workspaceRoot, workspace, outputPath };
 }
 
-test("Codex environment contains only approved tool runtime variables", () => {
+test("executor passes only locale to the launcher", () => {
   assert.deepEqual(createCodexEnvironment({
     PATH: "/usr/bin",
     HOME: "/home/relay",
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
     JAVA_HOME: "/opt/java/openjdk",
     AGENT_RELAY_TOKEN: "relay-secret",
-    APPLICATION_MODE: "test",
     GITHUB_TOKEN: "github-secret",
   }), {
-    PATH: "/usr/bin",
-    HOME: "/home/relay",
-    JAVA_HOME: "/opt/java/openjdk",
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
   });
 });
 
-test("Codex arguments select the restricted Relay permission profile", () => {
-  const args = createCodexArgs("/work/repository", "prompt");
+test("Codex arguments isolate the selected repository from its shared root", () => {
+  const args = createCodexArgs("/work/root/repository", "prompt", "/work/root");
   assert.deepEqual(args.slice(0, 2), ["--ask-for-approval", "never"]);
   assert.ok(args.includes("default_permissions=\"relay\""));
   assert.ok(args.includes("permissions.relay.extends=\":workspace\""));
-  assert.ok(args.includes("permissions.relay.filesystem={\"/home/agent/.codex\"=\"deny\",\"/work/repository/.git\"=\"read\"}"));
+  const filesystem = args.find((value) => value.startsWith("permissions.relay.filesystem="));
+  assert.ok(filesystem);
+  for (const expected of [
+    '"/home/agent/.codex"="deny"',
+    '"/app"="deny"',
+    '"/home/relay"="deny"',
+    '"/work/root"="deny"',
+    '"/work/root/repository"="write"',
+    '"/work/root/repository/.git"="read"',
+  ]) assert.match(filesystem, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.ok(args.includes("permissions.relay.network.enabled=true"));
   assert.notDeepEqual(args.slice(args.indexOf("exec") + 1, args.indexOf("exec") + 3), ["--sandbox", "danger-full-access"]);
 });
 
 test("CodexExecutor runs a real child process with filtered context and no result artifact", async () => {
-  const { root, workspace, outputPath } = await createRoot("executor");
+  const { root, workspaceRoot, workspace, outputPath } = await createRoot("executor");
   const executable = join(root, "fake-codex");
   await writeFile(executable, `#!/bin/sh
 set -eu
@@ -52,25 +62,28 @@ args="$*"
 case "$args" in *'default_permissions="relay"'*) ;; *) exit 21 ;; esac
 case "$args" in *'permissions.relay.extends=":workspace"'*) ;; *) exit 22 ;; esac
 case "$args" in *'"/home/agent/.codex"="deny"'*) ;; *) exit 23 ;; esac
-case "$args" in *'"${workspace}/.git"="read"'*) ;; *) exit 24 ;; esac
-case "$args" in *'danger-full-access'*) exit 25 ;; esac
-case "$args" in *'result.json'*) exit 26 ;; esac
-case "$args" in *'.agent/PLANS.md'*) ;; *) exit 27 ;; esac
+case "$args" in *'"/app"="deny"'*) ;; *) exit 24 ;; esac
+case "$args" in *'"/home/relay"="deny"'*) ;; *) exit 25 ;; esac
+case "$args" in *'"${workspaceRoot}"="deny"'*) ;; *) exit 26 ;; esac
+case "$args" in *'"${workspace}"="write"'*) ;; *) exit 27 ;; esac
+case "$args" in *'"${workspace}/.git"="read"'*) ;; *) exit 28 ;; esac
+case "$args" in *'danger-full-access'*) exit 29 ;; esac
+case "$args" in *'result.json'*) exit 30 ;; esac
+case "$args" in *'.agent/PLANS.md'*) ;; *) exit 31 ;; esac
 while [ "$1" != "--cd" ]; do shift; done
 workspace="$2"
 [ "$workspace" = "${workspace}" ]
 [ -z "\${AGENT_RELAY_TOKEN:-}" ]
-[ -z "\${APPLICATION_MODE:-}" ]
+[ -z "\${PATH:-}" ]
+[ "\${LANG:-}" = "C.UTF-8" ]
 printf '%s\n' 'authorization: Bearer abcdefghijklmnopqrstuvwxyz'
 printf 'changed\n' > "$workspace/changed.txt"
 `, { mode: 0o700 });
   await chmod(executable, 0o700);
 
   const previousRelayToken = process.env.AGENT_RELAY_TOKEN;
-  const previousApplicationMode = process.env.APPLICATION_MODE;
   process.env.AGENT_RELAY_TOKEN = "relay-secret";
-  process.env.APPLICATION_MODE = "test";
-  const executor = new CodexExecutor(executable, 5_000, 100_000);
+  const executor = new CodexExecutor(executable, 5_000, 100_000, undefined, workspaceRoot);
   try {
     const outcome = await executor.run({ requestId: "executor-request", workspace: "workspace", planPath }, workspace, outputPath);
     assert.equal(outcome.exitCode, 0);
@@ -81,14 +94,12 @@ printf 'changed\n' > "$workspace/changed.txt"
   } finally {
     if (previousRelayToken === undefined) delete process.env.AGENT_RELAY_TOKEN;
     else process.env.AGENT_RELAY_TOKEN = previousRelayToken;
-    if (previousApplicationMode === undefined) delete process.env.APPLICATION_MODE;
-    else process.env.APPLICATION_MODE = previousApplicationMode;
     await rm(root, { recursive: true, force: true });
   }
 });
 
 test("CodexExecutor reports timeout only after the child process closes", async () => {
-  const { root, workspace, outputPath } = await createRoot("timeout");
+  const { root, workspaceRoot, workspace, outputPath } = await createRoot("timeout");
   const executable = join(root, "slow-codex");
   const marker = join(root, "terminated");
   await writeFile(executable, `#!/bin/sh
@@ -98,7 +109,7 @@ while true; do sleep 1; done
 `, { mode: 0o700 });
   await chmod(executable, 0o700);
 
-  const executor = new CodexExecutor(executable, 50, 100_000);
+  const executor = new CodexExecutor(executable, 50, 100_000, undefined, workspaceRoot);
   try {
     await assert.rejects(
       () => executor.run({ requestId: "timeout-request", workspace: "workspace", planPath }, workspace, outputPath),

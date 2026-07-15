@@ -5,13 +5,16 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CodexExecutor } from "../src/execution/codex-executor.js";
 
+const planPath = "docs/exec-plans/active/plan.md";
+
 test("Codex output reaches Docker stdout and the job log before process completion", async () => {
   const root = join(tmpdir(), `agent-relay-live-log-${process.pid}-${Date.now()}`);
   const workspace = join(root, "workspace");
   const outputPath = join(root, "state", "job.log");
   const executable = join(root, "fake-codex");
+  await mkdir(join(workspace, "docs", "exec-plans", "active"), { recursive: true });
   await mkdir(join(workspace, ".git"), { recursive: true });
-  await writeFile(join(workspace, "plan.md"), "# Plan\n");
+  await writeFile(join(workspace, planPath), "# Plan\n");
   await writeFile(executable, `#!/bin/sh
 set -eu
 args="$*"
@@ -20,6 +23,7 @@ case "$args" in *'"/home/agent/.codex"="deny"'*) ;; *) exit 42 ;; esac
 case "$args" in *'"${workspace}/.git"="read"'*) ;; *) exit 43 ;; esac
 case "$args" in *'danger-full-access'*) exit 44 ;; esac
 case "$args" in *'result.json'*) exit 45 ;; esac
+case "$args" in *'.agent/PLANS.md'*) ;; *) exit 46 ;; esac
 while [ "$1" != "--cd" ]; do shift; done
 workspace="$2"
 printf 'first live line\n'
@@ -39,7 +43,7 @@ printf 'changed\n' > "$workspace/changed.txt"
     const execution = new CodexExecutor(executable, 5_000, 100_000).run({
       requestId: "live-log-request",
       workspace: "workspace",
-      planPath: "plan.md",
+      planPath,
     }, workspace, outputPath);
 
     await new Promise((resolve) => setTimeout(resolve, 200));

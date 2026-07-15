@@ -67,7 +67,7 @@ Run the manual `Host validation` workflow on a native runner labeled `agent-rela
 ```bash
 npm ci
 npm run check
-./scripts/host-validation.sh
+bash scripts/host-validation.sh
 ```
 
 The host validation script performs:

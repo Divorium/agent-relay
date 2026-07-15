@@ -108,6 +108,8 @@ test("packaging exposes only current per-run context", async () => {
   assert.match(launcher, /umask 0077/);
   assert.match(launcher, /find "\$agent_home"[\s\S]*! -name \.cargo[\s\S]*! -name \.rustup[\s\S]*! -name \.codex[\s\S]*rm -rf/);
   assert.match(launcher, /find "\$codex_home"[\s\S]*! -name auth\.json[\s\S]*rm -rf/);
+  assert.match(launcher, /clean_owned_temp_root \/tmp/);
+  assert.match(launcher, /clean_owned_temp_root \/var\/tmp/);
   assert.match(launcher, /exec \/usr\/bin\/env -i/);
   assert.doesNotMatch(launcher, /\.agent-relay|result\.json/);
 
@@ -122,4 +124,6 @@ test("packaging exposes only current per-run context", async () => {
   assert.match(ci, /test ! -r \/app\/dist\/src\/server\.js/);
   assert.match(ci, /touch \.git\/sandbox-write-denied/);
   assert.match(ci, /test ! -e \/home\/agent\/stale-context/);
+  assert.match(ci, /test ! -e \/tmp\/stale-agent-context/);
+  assert.match(ci, /test ! -e \/var\/tmp\/stale-agent-context/);
 });

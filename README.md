@@ -2,15 +2,15 @@
 
 Agent Relay is a self-hosted bridge between a repository-scoped GitHub Actions runner and Codex CLI.
 
-A GitHub Actions workflow resolves an open, ready pull request, checks out its exact head revision without persisting credentials, and asks Agent Relay to execute Codex in the shared workspace. Codex edits the repository, validates the work with commands available directly in its container, and keeps the active ExecPlan current. Relay derives the technical job outcome from the child process. The runner decides from Git whether changes exist, derives a commit message from the active plan, and pushes through a finalization-only credential.
+A GitHub Actions workflow resolves an open, ready pull request, checks out its exact head revision without persisting credentials, and asks Agent Relay to execute Codex in the shared workspace. Codex edits the repository, runs the validation defined by the selected ExecPlan for its execution environment, and keeps the plan current. Relay derives the technical job outcome from the child process. The runner decides from Git whether changes exist, derives a commit message from the active plan, and pushes through a finalization-only credential.
 
 ## Components
 
-Each deployment contains:
+Each container deployment contains:
 
 - `runner`: resolves the pull request and owns checkout, commit, push, and GitHub credentials;
 - `agent-relay`: authenticates requests, launches Codex, enforces execution limits, persists redacted process output, and owns technical job state;
-- `Codex`: follows `.agent/PLANS.md`, implements the selected active ExecPlan, updates its living state, and runs repository-local validation.
+- `Codex`: follows `.agent/PLANS.md`, implements the selected active ExecPlan, updates its living state, and runs validation available in the selected execution environment.
 
 The runner and Relay share one workspace volume. Relay runs as the `relay` user. Codex runs as the separate `agent` user. Relay state is mode `0700`. Only the host Codex `auth.json` file is mounted into the agent home, read-only. Generated agent-home state is removed before every execution.
 
@@ -36,7 +36,18 @@ An incomplete item remains unchecked. A real blocker is marked `[blocked]` in `P
 
 Codex continues all unaffected work. A blocker is plan documentation only; it is not a Codex result or Relay job status. A plan with any unchecked or `[blocked]` item remains active.
 
-Active ExecPlans may require only commands available directly in the task container. They must not require Docker, Docker Compose, image builds, nested containers, or a Docker socket. Those checks belong to the host operator.
+Each ExecPlan defines validation appropriate to the environment selected to execute that plan. Environment capabilities are determined by workflow routing and runner deployment, not by global instructions in `.agent/PLANS.md`.
+
+## Execution profiles
+
+Two execution profiles solve the Docker capability split without exposing the host Docker daemon to the containerized agent:
+
+- **container profile**: `.github/workflows/agent-relay.yml` routes work to the containerized runner and Relay deployment. The agent receives no Docker socket and runs repository checks available inside that container;
+- **host profile**: a separately installed native runner and agent process use the label `agent-relay-host`. This trusted profile may execute host-level Docker and Compose validation when the selected plan requires it.
+
+Do not mount `/var/run/docker.sock` into the container profile. Docker socket access is effectively host-level control and belongs only to the explicitly trusted host profile.
+
+The manual `.github/workflows/host-validation.yml` workflow runs real Compose, image-build, image-smoke, and runner-image tests on a native runner labeled `agent-relay-host`.
 
 ## Execution outcome
 
@@ -54,7 +65,7 @@ The runner independently uses `git status --porcelain` to determine whether work
 - Checkout uses `persist-credentials: false` and verifies that no credential helper, authorization header, or credential-bearing remote remains before Codex starts.
 - The Relay bearer token is supplied only to the workflow client step; it is not part of the runner service environment.
 - The push token exists only in the finalization step and is consumed through a temporary askpass helper.
-- Codex receives no GitHub token, runner registration token, Relay token, Docker socket, or Relay state.
+- The container-profile agent receives no GitHub token, runner registration token, Relay token, Docker socket, or Relay state.
 - The packaged service always launches the root-owned wrapper as the fixed `agent` user; command and user overrides are not configuration inputs.
 - The wrapper exclusively defines the final tool environment and clears generated agent-home state before each run while preserving the read-only `auth.json` mount.
 - The permissions profile denies the shared workspace root, Relay application directory, Relay home, and agent home; it re-allows writes only in the selected repository and reads only from that repository's Git metadata.
@@ -79,18 +90,16 @@ MAX_OUTPUT_BYTES=10000000
 
 `HOST_UID` and `HOST_GID` must match the owner of the authentication file and the runner workspace.
 
-## Task-agent validation
+## Validation
 
-These commands run directly in the task container and are the complete repository CI contract:
+Mandatory pull-request CI is daemon-independent and runs the complete TypeScript, unit, integration, shell-syntax, workflow-contract, packaging-contract, and security-boundary suite:
 
 ```bash
 npm ci
 npm run check
 ```
 
-## Operator build and deployment
-
-The following commands must run on the Docker host. They are not executed by Codex or by the containerized GitHub runner:
+Real Docker validation remains available and is not replaced by static tests. Run the manual `Host validation` workflow on a native runner labeled `agent-relay-host`, or execute the equivalent operator commands on the Docker host:
 
 ```bash
 cp .env.example .env

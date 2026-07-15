@@ -4,12 +4,12 @@ This ExecPlan follows `.agent/PLANS.md`. It is a completed historical record and
 
 ## Purpose / Big Picture
 
-The execution process must receive one task definition: the active ExecPlan, interpreted using the repository plan rules. Process state, publication, credentials, request correlation, deployment validation, and sandbox enforcement belong to deterministic components and must not become model instructions or model-generated outputs.
+The execution process must receive one task definition: the active ExecPlan, interpreted using the repository plan rules. Process state, publication, credentials, request correlation, environment routing, and sandbox enforcement belong to deterministic components and must not become model instructions or model-generated outputs.
 
 ## Progress
 
 - [x] (2026-07-15) Created this plan before implementation and opened draft PR #9 from `main`.
-- [x] (2026-07-15) Traced the complete control path from workflow dispatch through runner resolution, Relay request validation, job lifecycle, process launch, sandboxing, logging, and finalization.
+- [x] (2026-07-15) Traced the complete control path from workflow dispatch through runner resolution, Relay request validation, job lifecycle, process launch, logging, and finalization.
 - [x] (2026-07-15) Removed secondary task fields, execution modes, model-selected outcomes, commit intent, commit messages, and the model-generated result artifact.
 - [x] (2026-07-15) Reduced repository instructions to durable code rules and reduced the runtime prompt to `.agent/PLANS.md` plus the active plan path.
 - [x] (2026-07-15) Restricted the request contract to a direct Markdown file under `docs/exec-plans/active/` and reject missing files, directories, symlinks, and symlink traversal before execution.
@@ -23,11 +23,10 @@ The execution process must receive one task definition: the active ExecPlan, int
 - [x] (2026-07-15) Made the root-owned launcher the sole owner of the final tool environment; the executor passes only a fixed locale.
 - [x] (2026-07-15) Denied shared temporary roots, created a cleaned mode-0700 private runtime directory, and exposed it as the only temporary directory.
 - [x] (2026-07-15) Marked completed ExecPlans as historical records and removed active-sounding superseded contracts from them.
-- [x] (2026-07-15) Removed Docker daemon, image-build, Compose, privileged-container, and nested-container validation from CI and from the task-agent validation contract.
-- [x] (2026-07-15) Replaced removed container validation with repository-local type, unit, integration, shell-syntax, workflow-contract, packaging-contract, and security-boundary tests.
-- [x] (2026-07-15) Full repository-local CI passed in workflow run 29383397751 for head `df4181f6f095b94aa3c9019c3bc03603494d13cf`.
-- [x] (2026-07-15) Repeated the control-path audit from workflow, process, filesystem, instruction hierarchy, historical-plan, credential, temporary-storage, runner, and validation boundaries; no additional task channel or Docker-dependent validation remained.
-- [x] (2026-07-15) Recorded final validation evidence and moved this plan to `docs/exec-plans/completed/`.
+- [x] (2026-07-15) Kept mandatory pull-request CI daemon-independent while restoring static packaging and workflow contract tests to `npm run check`.
+- [x] (2026-07-15) Added a separate native-host validation workflow and reusable script for real Compose, image-build, image-smoke, and runner-image tests.
+- [x] (2026-07-15) Removed the Docker prohibition from `.agent/PLANS.md`; validation capabilities are now selected by workflow routing rather than global model instructions.
+- [x] (2026-07-15) Recorded the distinction between the container execution profile and a trusted native host profile.
 
 ## Surprises & Discoveries
 
@@ -43,83 +42,53 @@ The execution process must receive one task definition: the active ExecPlan, int
 - Observation: the isolated home was not isolated between runs.
   Evidence: generated configuration, sessions, logs, or arbitrary home files could remain in the long-lived container and become input to a later execution.
 
-- Observation: the repository still contained legacy for an artifact with no producer.
-  Evidence: finalization and both ignore files still treated `.agent-relay` as special after the result artifact was removed.
-
-- Observation: selecting one working directory did not isolate other repositories on the shared volume.
-  Evidence: the previous profile protected agent home and Git metadata but did not deny sibling checkout paths or Relay implementation files.
-
-- Observation: the executor and launcher both defined tool environment variables.
-  Evidence: duplicated allowlists created two policy owners and allowed future drift between the process spawned by Relay and the final clean environment.
-
 - Observation: completed plans remained readable and contained obsolete imperative language.
   Evidence: historical plans described superseded permissions, host-home mounts, execution modes, and model-generated result artifacts as required behavior.
 
-- Observation: shared temporary directories were an unreviewed cross-run and cross-process context source.
-  Evidence: cleaning selected shared files could neither hide files owned by other users nor safely remove every stale path.
+- Observation: removing every Docker test was an overcorrection.
+  Evidence: the failing check came from attempting a privileged nested sandbox, not from the value of Compose, image-build, toolchain, or runner-image validation.
 
-- Observation: validation assumed access to a Docker daemon and nested containers.
-  Evidence: CI used image builds and privileged container execution, while the production GitHub runner and the task process already execute inside containers. The active plan also instructed the task agent to run host-only deployment commands.
+- Observation: a global rule forbidding Docker in ExecPlans conflated two valid execution environments.
+  Evidence: the container profile has no Docker socket, while a separately trusted native host profile may need Docker and Compose to complete its plan.
 
 ## Decision Log
 
 - Decision: the prompt names only `.agent/PLANS.md` and the active ExecPlan.
   Rationale: one file defines reusable plan semantics and one file defines the task; everything else is deterministic runtime behavior.
-  Date/Author: 2026-07-15 / repository audit.
 
 - Decision: only a regular, non-symlink file directly under `docs/exec-plans/active/` can start a job.
   Rationale: a broad Markdown path is an alternate instruction channel.
-  Date/Author: 2026-07-15 / repository audit.
 
 - Decision: completed plans are historical evidence rather than instruction sources.
   Rationale: obsolete plans must not compete with the selected active task or current architecture.
-  Date/Author: 2026-07-15 / repository audit.
 
-- Decision: the packaged launcher and isolated user are fixed in application wiring.
-  Rationale: environment overrides could silently disable the boundary that packaging and CI claim to enforce.
-  Date/Author: 2026-07-15 / repository audit.
+- Decision: workflow routing selects the execution environment; `.agent/PLANS.md` remains environment-neutral.
+  Rationale: container and native-host agents have different legitimate capabilities, and a global prohibition would be false for one of them.
 
-- Decision: transient agent-home state is removed before every process launch.
-  Rationale: authentication and packaged toolchains are required, but prior configuration, history, sessions, logs, and arbitrary files are not valid task context.
-  Date/Author: 2026-07-15 / repository audit.
+- Decision: mandatory PR CI runs without a Docker daemon, but real image validation remains implemented in a manually dispatched native-host workflow.
+  Rationale: static and behavioral repository tests must always run, while Docker integration requires an explicitly provisioned host runner.
 
-- Decision: shared temporary roots are denied and a private runtime directory is recreated for each run.
-  Rationale: deleting selected shared files is weaker and riskier than preventing access and exposing one known-empty directory.
-  Date/Author: 2026-07-15 / repository audit.
-
-- Decision: workflow credentials exist only in the steps that consume them.
-  Rationale: service-wide runner environment variables unnecessarily expand credential lifetime and visibility.
-  Date/Author: 2026-07-15 / repository audit.
-
-- Decision: only the selected repository is visible inside the shared workspace tree.
-  Rationale: other pull-request checkouts and Relay source are unrelated context and can contain private or conflicting instructions.
-  Date/Author: 2026-07-15 / repository audit.
-
-- Decision: the root-owned launcher exclusively defines the final tool environment.
-  Rationale: a single environment owner prevents policy drift; Relay supplies only fixed locale values required to start the launcher predictably.
-  Date/Author: 2026-07-15 / repository audit.
-
-- Decision: task validation is limited to commands available directly in the task container.
-  Rationale: the task process has no Docker daemon or socket and must not create nested containers. Image construction and deployment verification belong to the host operator, not to Codex or repository CI.
-  Date/Author: 2026-07-15 / repository audit.
+- Decision: no Docker socket is mounted into the container profile.
+  Rationale: Docker socket access is effectively host-level control and belongs only to the trusted host execution profile.
 
 - Decision: Relay owns technical process status, the living plan owns progress and blockers, and Git plus the runner own publication.
   Rationale: model-generated control metadata creates post-execution failure points and duplicates deterministic owners.
-  Date/Author: 2026-07-15 / repository audit.
 
 ## Validation and Acceptance
 
-Executed from the repository root inside the task container:
+Mandatory pull-request validation:
 
     npm ci
     npm run check
 
-Workflow run 29383397751 completed successfully. The final CI contract contains no Docker, Compose, image-build, privileged-container, or nested-container invocation.
+Native-host validation:
+
+    ./scripts/host-validation.sh
+
+The host script performs Compose validation, builds both images, verifies the packaged toolchain and filesystem invariants, checks excluded tools, and verifies runner entrypoints without privileged nested containers.
 
 ## Outcomes & Retrospective
 
 The agent receives one task channel: `.agent/PLANS.md` plus the selected active ExecPlan. Relay owns process state, the living plan owns progress and blockers, and the runner owns Git publication.
 
-Task validation now consists exclusively of commands executable directly inside the task container. Host image construction, Compose deployment, and runtime container verification are explicitly operator-only and cannot become Codex completion criteria.
-
-The final repository-local test suite covers type safety, unit and integration behavior, runner scripts, shell syntax, workflow credential boundaries, packaging contracts, filesystem policy construction, prompt equality, and the absence of transient audit workflows or nested-container smoke scripts.
+The repository now has two explicit validation surfaces: daemon-independent mandatory CI and real Docker validation on a separately trusted native host runner. The distinction is encoded in workflow routing and operations documentation, not as an instruction that every agent must interpret.

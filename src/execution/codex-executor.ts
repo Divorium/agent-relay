@@ -22,13 +22,6 @@ const CODEX_ENVIRONMENT_VARIABLES = [
 ] as const;
 
 const ISOLATED_CODEX_HOME = join("/home", "agent", ".codex");
-const CODEX_CONFIG_OVERRIDES = [
-  "features.memories=false",
-  "default_permissions=\"relay\"",
-  "permissions.relay.extends=\":workspace\"",
-  `permissions.relay.filesystem={\"${ISOLATED_CODEX_HOME}\"=\"deny\"}`,
-  "permissions.relay.network.enabled=true",
-] as const;
 
 export function createCodexEnvironment(source: Record<string, string | undefined> = process.env): Record<string, string> {
   const environment: Record<string, string> = {};
@@ -40,10 +33,20 @@ export function createCodexEnvironment(source: Record<string, string | undefined
 }
 
 export function createCodexArgs(workspace: string, prompt: string): string[] {
+  const filesystemPermissions = `permissions.relay.filesystem={"${ISOLATED_CODEX_HOME}"="deny","${join(workspace, ".git")}"="read"}`;
   return [
     "--ask-for-approval",
     "never",
-    ...CODEX_CONFIG_OVERRIDES.flatMap((value) => ["-c", value]),
+    "-c",
+    "features.memories=false",
+    "-c",
+    "default_permissions=\"relay\"",
+    "-c",
+    "permissions.relay.extends=\":workspace\"",
+    "-c",
+    filesystemPermissions,
+    "-c",
+    "permissions.relay.network.enabled=true",
     "exec",
     "--cd",
     workspace,

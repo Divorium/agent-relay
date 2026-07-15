@@ -52,8 +52,18 @@ export class JobService {
         updatedAt: now,
         outputPath: join(this.stateDir, "logs", `${id}.log`),
       };
-      await this.store.save(job);
-      await this.store.index(job);
+
+      try {
+        await this.store.save(job);
+        await this.store.index(job);
+      } catch {
+        let compensationFailed = false;
+        try { await this.store.removeRequestId(request.requestId, id); } catch { compensationFailed = true; }
+        try { await this.store.remove(id); } catch { compensationFailed = true; }
+        const detail = compensationFailed ? " and rollback was incomplete" : "";
+        throw new RelayError("JOB_PREPARATION_FAILED", `Could not persist the job${detail}`, 500);
+      }
+
       this.activeJobId = id;
       void this.execute(job, workspace);
       return job;

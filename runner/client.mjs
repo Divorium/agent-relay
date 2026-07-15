@@ -9,8 +9,11 @@ if (!token) throw new Error("AGENT_RELAY_TOKEN is required");
 const workspace = process.env.GITHUB_WORKSPACE;
 const workspaceRoot = process.env.AGENT_RELAY_WORKSPACE_ROOT ?? "/runner/_work";
 const planPath = process.env.AGENT_RELAY_PLAN_PATH;
+const githubOutput = process.env.GITHUB_OUTPUT;
 const requestId = process.env.AGENT_RELAY_REQUEST_ID ?? randomUUID();
-if (!workspace || !planPath) throw new Error("GITHUB_WORKSPACE and AGENT_RELAY_PLAN_PATH are required");
+if (!workspace || !planPath || !githubOutput) {
+  throw new Error("GITHUB_WORKSPACE, AGENT_RELAY_PLAN_PATH and GITHUB_OUTPUT are required");
+}
 
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 
@@ -60,6 +63,7 @@ if (!workspace.startsWith(workspacePrefix)) throw new Error(`GITHUB_WORKSPACE mu
 const relativeWorkspace = workspace.slice(workspacePrefix.length);
 if (!relativeWorkspace) throw new Error("GITHUB_WORKSPACE does not identify a repository workspace");
 
+const commitMessage = deriveCommitMessage(await readFile(`${workspace}/${planPath}`, "utf8"));
 const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
 let job = await fetchJson(`${baseUrl}/v1/jobs`, {
   method: "POST",
@@ -88,7 +92,4 @@ const diff = spawnSync("git", ["status", "--porcelain"], { cwd: workspace, encod
 if (diff.status !== 0) throw new Error(diff.stderr || "git status failed");
 if (diff.stdout.trim().length === 0) process.exit(0);
 
-const commitMessage = deriveCommitMessage(await readFile(`${workspace}/${planPath}`, "utf8"));
-const githubOutput = process.env.GITHUB_OUTPUT;
-if (!githubOutput) throw new Error("GITHUB_OUTPUT is required when the worktree changed");
 await appendFile(githubOutput, `commit_message=${commitMessage}\n`, "utf8");

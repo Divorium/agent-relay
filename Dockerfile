@@ -36,7 +36,7 @@ RUN apt-get update \
   && mkdir -p /app /runner/_work /var/lib/agent-relay /home/agent/.cargo /home/agent/.rustup /home/agent/.codex \
   && chown -R relay:relay /app /var/lib/agent-relay /home/relay \
   && chown -R agent:agent /runner /home/agent \
-  && chmod 0700 /var/lib/agent-relay /home/agent/.codex \
+  && chmod 0700 /var/lib/agent-relay /home/agent/.codex /home/relay \
   && printf '%s\n' 'relay ALL=(agent) NOPASSWD: /usr/local/bin/codex-run' > /etc/sudoers.d/agent-relay \
   && chmod 0440 /etc/sudoers.d/agent-relay
 
@@ -59,7 +59,10 @@ COPY --chown=relay:relay types ./types
 COPY --chown=relay:relay src ./src
 COPY --chown=relay:relay scripts ./scripts
 
-RUN chmod +x scripts/toolchain-smoke.sh && npm ci && npm run build
+RUN chmod +x scripts/toolchain-smoke.sh \
+  && npm ci \
+  && npm run build \
+  && chmod -R o-rwx /app
 
 EXPOSE 8080
 CMD ["node", "dist/src/server.js"]

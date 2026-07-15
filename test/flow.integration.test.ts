@@ -35,15 +35,16 @@ test("controlled full flow preserves work and an active-plan blocker without a r
   const fakeCodex = join(root, "fake-codex");
   const githubOutput = join(root, "github-output");
   const requestId = "controlled-request-id";
+  const planPath = "docs/exec-plans/active/plan.md";
 
-  await mkdir(workspace, { recursive: true });
+  await mkdir(join(workspace, "docs", "exec-plans", "active"), { recursive: true });
   await writeFile(githubOutput, "");
-  await writeFile(join(workspace, "plan.md"), "# Active plan\n\n- [ ] [blocked] External image validation — Cause: Docker unavailable. Impact: image validation deferred. Evidence: command missing. Unblock condition: run on CI.\n");
+  await writeFile(join(workspace, planPath), "# Active plan\n\n- [ ] [blocked] External image validation — Cause: Docker unavailable. Impact: image validation deferred. Evidence: command missing. Unblock condition: run on CI.\n");
   await writeFile(join(workspace, "tracked.txt"), "before\n");
   runGit(workspace, ["init"]);
   runGit(workspace, ["config", "user.name", "Test Runner"]);
   runGit(workspace, ["config", "user.email", "runner@example.invalid"]);
-  runGit(workspace, ["add", "plan.md", "tracked.txt"]);
+  runGit(workspace, ["add", "."]);
   runGit(workspace, ["commit", "-m", "Initial state"]);
 
   await writeFile(fakeCodex, `#!/bin/sh
@@ -54,6 +55,7 @@ case "$args" in *'"/home/agent/.codex"="deny"'*) ;; *) exit 32 ;; esac
 case "$args" in *'"${workspace}/.git"="read"'*) ;; *) exit 33 ;; esac
 case "$args" in *'danger-full-access'*) exit 34 ;; esac
 case "$args" in *'result.json'*) exit 35 ;; esac
+case "$args" in *'.agent/PLANS.md'*) ;; *) exit 36 ;; esac
 while [ "$1" != "--cd" ]; do shift; done
 workspace="$2"
 printf 'after\n' > "$workspace/tracked.txt"
@@ -66,7 +68,6 @@ printf 'after\n' > "$workspace/tracked.txt"
     relayToken: "relay-token",
     workspaceRoot,
     stateDir,
-    codexCommand: fakeCodex,
     codexTimeoutMs: 5_000,
     maxOutputBytes: 100_000,
   };
@@ -86,7 +87,7 @@ printf 'after\n' > "$workspace/tracked.txt"
         ...process.env,
         AGENT_RELAY_URL: `http://127.0.0.1:${address.port}`,
         AGENT_RELAY_TOKEN: "relay-token",
-        AGENT_RELAY_PLAN_PATH: "plan.md",
+        AGENT_RELAY_PLAN_PATH: planPath,
         AGENT_RELAY_REQUEST_ID: requestId,
         AGENT_RELAY_WORKSPACE_ROOT: workspaceRoot,
         GITHUB_WORKSPACE: workspace,
@@ -103,7 +104,7 @@ printf 'after\n' > "$workspace/tracked.txt"
     assert.doesNotMatch(result.stdout, /Codex summary|Validation passed/);
     assert.equal(await readFile(githubOutput, "utf8"), "commit_message=Active plan\n");
     assert.equal(await readFile(join(workspace, "tracked.txt"), "utf8"), "after\n");
-    assert.match(await readFile(join(workspace, "plan.md"), "utf8"), /\[blocked\]/);
+    assert.match(await readFile(join(workspace, planPath), "utf8"), /\[blocked\]/);
 
     const persistedJobs = await readFile(join(stateDir, "request-index.json"), "utf8");
     const requestIndex = JSON.parse(persistedJobs) as Record<string, string>;

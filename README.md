@@ -87,7 +87,7 @@ npm ci
 npm run check
 ```
 
-The suite validates repository-owned TypeScript, shell scripts, runner behavior, HTTP contracts, failure paths, workflow text contracts, packaging definitions, persistence, path boundaries, and redaction. Tests use local fixtures only and do not invoke or validate Docker, Compose, GitHub APIs, hosted runners, network services, or credentials.
+The suite validates repository-owned TypeScript, HTTP contracts, failure paths, workflow and packaging definitions, persistence, path boundaries, redaction, and every executable repository script. It launches the actual runner client, pull-request resolver, finalizer, runner entrypoint, Codex wrapper, and toolchain smoke script against local HTTP, process, filesystem, command, and Git fixtures. Tests do not invoke or validate Docker, Compose, GitHub APIs, hosted runners, external network services, or credentials. Node's built-in coverage report is printed in the check log and published in the GitHub Actions job summary.
 
 Operational setup, dispatch, recovery, logs, and credential rotation are documented in `docs/operations/README.md`.
 
@@ -95,7 +95,7 @@ Operational setup, dispatch, recovery, logs, and credential rotation are documen
 
 Active:
 
-- None.
+- `docs/exec-plans/active/2026-07-15-review-9-script-integration.md`
 
 Completed:
 

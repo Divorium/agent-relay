@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { createRelayServer } from "../src/api/server.js";
 import { JobService } from "../src/application/job-service.js";
 import { JobStore } from "../src/persistence/job-store.js";
+import { RelayError } from "../src/contracts/errors.js";
 import type { CodexExecutor, ExecutionOutcome } from "../src/execution/codex-executor.js";
 import type { CreateJobRequest } from "../src/contracts/job.js";
 import type { AppConfig } from "../src/config/config.js";
@@ -98,10 +99,14 @@ test("HTTP create and poll derives completed state and preserves idempotency", a
     const body = request("integration-request-1");
     const first = await postJob(fixture.baseUrl, body);
     assert.equal(first.status, 202);
-    const accepted = await first.json() as { id: string };
-    const terminal = await waitForTerminal(fixture.baseUrl, accepted.id) as { status: string; exitCode?: number };
+    const accepted = await first.json() as { id: string; outputPath?: string; errorMessage?: string };
+    assert.equal(accepted.outputPath, undefined);
+    assert.equal(accepted.errorMessage, undefined);
+    const terminal = await waitForTerminal(fixture.baseUrl, accepted.id) as { status: string; exitCode?: number; outputPath?: string; errorMessage?: string };
     assert.equal(terminal.status, "completed");
     assert.equal(terminal.exitCode, 0);
+    assert.equal(terminal.outputPath, undefined);
+    assert.equal(terminal.errorMessage, undefined);
 
     const repeated = await postJob(fixture.baseUrl, body);
     assert.equal(repeated.status, 202);
@@ -154,6 +159,28 @@ test("executor failure releases the active-job lock for the next request", async
     const secondJob = await second.json() as { id: string };
     assert.equal((await waitForTerminal(fixture.baseUrl, secondJob.id) as { status: string }).status, "completed");
     assert.equal(executions, 2);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("public job responses expose neither internal paths nor stored executor details", async () => {
+  const secret = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+  const fixture = await createFixture(async () => {
+    throw new RelayError(
+      "CODEX_FAILED",
+      `authorization: Bearer ${secret} AGENT_RELAY_TOKEN=${secret} /home/agent/.codex/auth.json\n    at internal (/app/src/server.ts:1:1)`,
+      502,
+    );
+  });
+  try {
+    const created = await postJob(fixture.baseUrl, request("redaction-request"));
+    assert.equal(created.status, 202);
+    const accepted = await created.json() as { id: string };
+    const response = await waitForTerminal(fixture.baseUrl, accepted.id);
+    const serialized = JSON.stringify(response);
+    assert.match(serialized, /CODEX_FAILED/);
+    assert.doesNotMatch(serialized, /outputPath|errorMessage|ghp_|AGENT_RELAY_TOKEN|auth\.json|\/app\/src|internal \(/);
   } finally {
     await fixture.close();
   }

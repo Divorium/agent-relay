@@ -1,6 +1,6 @@
 # Audit and minimize agent control context
 
-This ExecPlan follows `.agent/PLANS.md` and remains active until the manual Docker integration gate is executed after packaging changes.
+This ExecPlan follows `.agent/PLANS.md` and remains active until the review action items and manual Docker integration gate are complete.
 
 ## Purpose / Big Picture
 
@@ -22,12 +22,28 @@ The task process receives one task definition: the selected active ExecPlan inte
 - [x] Added behavioral tests for restart recovery, compare-delete request-index compensation, and active-lock release after executor failure.
 - [x] Recorded merge order for overlapping PR #3: merge PR #9 first, then rebase PR #3 onto the resulting `main` and rerun its streaming and failure-path tests.
 - [x] Full mandatory CI passed on the actual self-hosted runner in workflow run `29415211394` for head `c1526474fc7957253ecca8be7c13aa9996d07270`.
+- [ ] Review and explicitly approve or reject the policy that a terminal Relay run with a clean worktree is an error; align runner behavior, tests, and documentation with the decision.
+- [ ] Decide whether restart-recovery, request-index compare-delete, and active-lock recovery tests belong in PR #9 or should move to a separate Relay reliability PR.
+- [ ] Add strict runner HTTP contract tests for create-job and poll responses, including unexpected success statuses, missing identifiers, unknown statuses, invalid or empty JSON, incorrect content type, and bounded error bodies.
+- [ ] Add runner polling tests for `accepted -> running -> completed`, an immediately terminal create response, polling timeout, and an HTTP failure during polling.
+- [ ] Add commit-message derivation tests for length limits, control characters, CR/LF injection, Unicode, multiple headings, empty headings, and fallback behavior.
+- [ ] Expand runner-side workspace and plan validation tests for symlinks, directories, nested paths under `active`, traversal, backslashes, missing `.md`, and a workspace symlink escaping the configured root.
+- [ ] Expand Relay request validation tests for unknown fields, empty or overlong `requestId`, invalid workspace and plan paths, and reuse of one request ID with a different body.
+- [ ] Add persistence-failure tests for job save, request-index save, and rollback failure combinations without introducing new lifecycle states.
+- [ ] Add API error-redaction tests proving that responses do not expose bearer tokens, process environment, the host authentication path, stack traces, or unredacted process output.
+- [ ] Add a full integration test covering runner client -> real Relay HTTP API -> fake executor -> `runner/finalize.sh` -> local bare Git remote, including verification of the committed and pushed branch contents.
+- [ ] Add an integration test where execution moves the selected plan from `active/` to `completed/` while the runner still completes finalization using preflighted metadata.
+- [ ] Add an integration test proving that an invalid or symlinked plan is rejected before the executor is called.
+- [ ] Add an integration test proving request idempotency across a Relay restart with the same persisted state directory and no second executor invocation.
+- [ ] Add finalizer failure-path tests for `git diff --check`, invalid target branches, rejected pushes, local commits left after a failed push, and retry behavior after partial finalization.
+- [ ] Review the final PR history and decide whether to squash or reorganize it into a small set of reviewable logical commits before merge.
+- [ ] Rerun the complete self-hosted CI suite after implementing the approved action items and record the final head and workflow run.
 - [ ] [blocked] Execute `bash scripts/host-validation.sh` after the packaging changes.
   - Cause: the only GitHub runner is containerized and intentionally has no Docker daemon, Docker socket, or host execution route.
   - Impact: automated CI proves repository behavior and packaging contracts but does not prove that the final images build and run.
   - Evidence: the earlier successful Docker jobs ran on GitHub-hosted Ubuntu; the current self-hosted suite is daemon-independent.
   - Unblock condition: run the retained script directly on the Docker host and record its output.
-- [ ] Complete a final review after the Docker-host evidence and move this plan back to `completed/`.
+- [ ] Complete a final review after all approved action items and Docker-host evidence, then move this plan back to `completed/`.
 
 ## Surprises & Discoveries
 
@@ -62,8 +78,8 @@ Manual Docker-host validation retained in the repository:
 
     bash scripts/host-validation.sh
 
-Acceptance requires the recorded Docker-host result in addition to the green mandatory CI run.
+Acceptance requires completion of the approved action items, a final green self-hosted CI run, and recorded Docker-host validation.
 
 ## Outcomes & Retrospective
 
-The repository uses the real single-runner topology, rejects false successful no-op runs, compensates incomplete job persistence, verifies restart and lock recovery, and keeps Docker integration as an explicit manual gate rather than a fictitious workflow. Final completion remains blocked only on executing the Docker-host gate.
+The repository uses the real single-runner topology, rejects false successful no-op runs, compensates incomplete job persistence, verifies restart and lock recovery, and keeps Docker integration as an explicit manual gate rather than a fictitious workflow. Final completion remains pending on the review action items and Docker-host gate.

@@ -37,6 +37,7 @@ test("Codex arguments isolate the selected repository from its shared root", () 
     '"/home/agent/.codex"="deny"',
     '"/app"="deny"',
     '"/home/relay"="deny"',
+    '"/runner"="deny"',
     '"/tmp"="deny"',
     '"/var/tmp"="deny"',
     '"/tmp/agent-relay-runtime"="write"',
@@ -59,15 +60,16 @@ case "$args" in *'permissions.relay.extends=":workspace"'*) ;; *) exit 22 ;; esa
 case "$args" in *'"/home/agent/.codex"="deny"'*) ;; *) exit 23 ;; esac
 case "$args" in *'"/app"="deny"'*) ;; *) exit 24 ;; esac
 case "$args" in *'"/home/relay"="deny"'*) ;; *) exit 25 ;; esac
-case "$args" in *'"/tmp"="deny"'*) ;; *) exit 26 ;; esac
-case "$args" in *'"/var/tmp"="deny"'*) ;; *) exit 27 ;; esac
-case "$args" in *'"/tmp/agent-relay-runtime"="write"'*) ;; *) exit 28 ;; esac
-case "$args" in *'"${workspaceRoot}"="deny"'*) ;; *) exit 29 ;; esac
-case "$args" in *'"${workspace}"="write"'*) ;; *) exit 30 ;; esac
-case "$args" in *'"${workspace}/.git"="read"'*) ;; *) exit 31 ;; esac
-case "$args" in *'danger-full-access'*) exit 32 ;; esac
-case "$args" in *'result.json'*) exit 33 ;; esac
-case "$args" in *'.agent/PLANS.md'*) ;; *) exit 34 ;; esac
+case "$args" in *'"/runner"="deny"'*) ;; *) exit 26 ;; esac
+case "$args" in *'"/tmp"="deny"'*) ;; *) exit 27 ;; esac
+case "$args" in *'"/var/tmp"="deny"'*) ;; *) exit 28 ;; esac
+case "$args" in *'"/tmp/agent-relay-runtime"="write"'*) ;; *) exit 29 ;; esac
+case "$args" in *'"${workspaceRoot}"="deny"'*) ;; *) exit 30 ;; esac
+case "$args" in *'"${workspace}"="write"'*) ;; *) exit 31 ;; esac
+case "$args" in *'"${workspace}/.git"="read"'*) ;; *) exit 32 ;; esac
+case "$args" in *'danger-full-access'*) exit 33 ;; esac
+case "$args" in *'result.json'*) exit 34 ;; esac
+case "$args" in *'.agent/PLANS.md'*) ;; *) exit 35 ;; esac
 while [ "$1" != "--cd" ]; do shift; done
 workspace="$2"
 [ "$workspace" = "${workspace}" ]

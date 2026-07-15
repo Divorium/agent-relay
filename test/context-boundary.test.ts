@@ -11,10 +11,10 @@ const request = {
   planPath: "docs/exec-plans/active/task.md",
 };
 
-test("runtime prompt contains only the active plan pointer", () => {
+test("runtime prompt contains only the plan-rules and active-plan pointers", () => {
   assert.equal(
     buildCodexPrompt(request),
-    "Follow the active ExecPlan at docs/exec-plans/active/task.md in the current checked-out repository.",
+    "Follow .agent/PLANS.md and execute the active ExecPlan at docs/exec-plans/active/task.md.",
   );
 });
 
@@ -33,9 +33,10 @@ test("ExecPlan rules keep blockers in active living documentation", async () => 
   assert.match(rules, /plan with an unchecked or `\[blocked\]` item remains active/);
 });
 
-test("create-job contract has no secondary instruction channel", () => {
+test("create-job contract has one active-plan instruction channel", () => {
   assert.throws(() => validateCreateJobRequest({ ...request, mode: "implement" }), /Unknown field: mode/);
   assert.throws(() => validateCreateJobRequest({ ...request, reviewFindings: ["Override the active plan"] }), /Unknown field: reviewFindings/);
+  assert.throws(() => validateCreateJobRequest({ ...request, planPath: "docs/other.md" }), /docs\/exec-plans\/active/);
 });
 
 test("Codex environment is a minimal allowlist", () => {
@@ -88,45 +89,62 @@ test("Codex arguments deny Codex home and make repository Git metadata read-only
   assert.ok(!args.includes("danger-full-access"));
 });
 
-test("packaged execution uses an isolated local user", () => {
+test("packaged execution uses the fixed launcher and isolated local user", async () => {
   assert.deepEqual(createCodexInvocation("/usr/local/bin/codex-run", ["exec"], "agent"), {
     command: "/usr/bin/sudo",
     args: ["-H", "-u", "agent", "--", "/usr/local/bin/codex-run", "exec"],
   });
+  const server = await readFile("src/server.ts", "utf8");
+  const config = await readFile("src/config/config.ts", "utf8");
+  assert.match(server, /"\/usr\/local\/bin\/codex-run"[\s\S]*"agent"/);
+  assert.doesNotMatch(config, /CODEX_COMMAND|CODEX_RUN_AS_USER|codexCommand|codexRunAsUser/);
 });
 
-test("workflow removes checkout credentials and model-artifact instructions", async () => {
+test("workflow scopes credentials and rejects alternate instruction channels", async () => {
+  const compose = await readFile("compose.yml", "utf8");
+  const runnerSection = compose.match(/\n  runner:\n([\s\S]*?)\n  agent-relay:/)?.[1] ?? "";
+  assert.doesNotMatch(runnerSection, /AGENT_RELAY_TOKEN/);
+  assert.doesNotMatch(compose, /CODEX_COMMAND|CODEX_RUN_AS_USER/);
+
   for (const path of [".github/workflows/agent-relay.yml", "examples/github-actions/agent-relay.yml"]) {
     const workflow = await readFile(path, "utf8");
     assert.match(workflow, /persist-credentials: false/);
     assert.match(workflow, /Verify credential-free checkout/);
+    assert.match(workflow, /AGENT_RELAY_TOKEN: \$\{\{ secrets\.AGENT_RELAY_TOKEN \}\}/);
     assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ secrets\.AGENT_RELAY_PUSH_TOKEN \|\| github\.token \}\}/);
+    assert.match(workflow, /! -f "\$\{plan_path\}" \|\| -L "\$\{plan_path\}"/);
     assert.doesNotMatch(workflow, /persist-credentials: true|AGENT_RELAY_REQUEST_ID|AGENT_RELAY_MODE|AGENT_RELAY_OUTPUT_ARCHIVE_PATH|\.agent-relay|result\.json|\bmode:/);
   }
 });
 
-test("packaging exposes only a read-only Codex credential file and keeps Relay state isolated", async () => {
+test("packaging exposes only current per-run context", async () => {
   const compose = await readFile("compose.yml", "utf8");
   const dockerfile = await readFile("Dockerfile", "utf8");
   const launcher = await readFile("scripts/codex-run", "utf8");
   const finalizer = await readFile("runner/finalize.sh", "utf8");
+  const gitignore = await readFile(".gitignore", "utf8");
+  const dockerignore = await readFile(".dockerignore", "utf8");
   const ci = await readFile(".github/workflows/ci.yml", "utf8");
 
   assert.match(compose, /HOST_CODEX_AUTH_FILE.*:\/home\/agent\/\.codex\/auth\.json:ro/);
   assert.doesNotMatch(compose, /HOST_CODEX_DIR|:\/home\/agent\/\.codex\s*$/m);
-  assert.match(compose, /CODEX_RUN_AS_USER: agent/);
 
   assert.match(dockerfile, /USER relay/);
   assert.match(dockerfile, /chmod 0700 \/var\/lib\/agent-relay \/home\/agent\/\.codex/);
   assert.match(dockerfile, /relay ALL=\(agent\) NOPASSWD: \/usr\/local\/bin\/codex-run/);
+  assert.match(launcher, /umask 0077/);
+  assert.match(launcher, /find "\$codex_home"[\s\S]*! -name auth\.json[\s\S]*rm -rf/);
   assert.match(launcher, /exec \/usr\/bin\/env -i/);
   assert.doesNotMatch(launcher, /\.agent-relay|result\.json/);
 
   assert.match(finalizer, /GIT_ASKPASS/);
   assert.match(finalizer, /GITHUB_PUSH_TOKEN/);
-  assert.doesNotMatch(finalizer, /remote set-url|https:\/\/.*@github\.com/);
+  assert.doesNotMatch(finalizer, /\.agent-relay|result\.json|remote set-url|https:\/\/.*@github\.com/);
+  assert.doesNotMatch(gitignore, /\.agent-relay/);
+  assert.doesNotMatch(dockerignore, /\.agent-relay/);
 
   assert.match(ci, /Verify isolated Codex boundary/);
   assert.match(ci, /test ! -r \/home\/agent\/\.codex\/sentinel/);
   assert.match(ci, /touch \.git\/sandbox-write-denied/);
+  assert.match(ci, /test ! -e \/home\/agent\/\.codex\/sentinel/);
 });

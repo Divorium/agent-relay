@@ -21,6 +21,7 @@ find "$codex_home" -mindepth 1 -maxdepth 1 ! -name auth.json -exec rm -rf -- {} 
 rm -rf -- "$runtime_tmp"
 mkdir -m 0700 "$runtime_tmp"
 mkdir -m 0700 "$runtime_tmp/.git"
+mkdir -m 0700 "$runtime_tmp/.agents"
 
 exec /usr/bin/env -i \
   HOME=/home/agent \

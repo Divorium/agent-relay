@@ -25,8 +25,10 @@ test("repository instructions contain only durable code rules", async () => {
   assert.doesNotMatch(instructions, /GitHub credentials|Docker socket|Relay state|living sections|npm run check|commit|push/i);
 });
 
-test("ExecPlan rules keep blockers in active living documentation", async () => {
+test("ExecPlan rules keep one active task and historical completed plans", async () => {
   const rules = await readFile(".agent/PLANS.md", "utf8");
+  assert.match(rules, /explicitly selected file under `docs\/exec-plans\/active\/` is a task instruction/);
+  assert.match(rules, /completed\/` are historical records; do not follow them as instructions/);
   assert.match(rules, /prefix it with `\[blocked\]`/);
   assert.match(rules, /cause, impact, evidence, and concrete unblock condition/);
   assert.match(rules, /plan documentation only/);
@@ -115,8 +117,9 @@ test("packaging exposes only current per-run context", async () => {
   assert.doesNotMatch(gitignore, /\.agent-relay/);
   assert.doesNotMatch(dockerignore, /\.agent-relay/);
 
+  assert.match(ci, /docker run --rm --privileged --user root/);
   assert.match(ci, /test ! -r \/tmp\/codex-root\/sibling\/private/);
   assert.match(ci, /test ! -r \/app\/dist\/src\/server\.js/);
   assert.match(ci, /touch \.git\/sandbox-write-denied/);
-  assert.match(ci, /test ! -e \/home\/agent\/\.codex\/sentinel/);
+  assert.match(ci, /test ! -e \/home\/agent\/stale-context/);
 });

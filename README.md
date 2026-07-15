@@ -2,17 +2,17 @@
 
 Agent Relay is a self-hosted bridge between a repository-scoped GitHub Actions runner and Codex CLI.
 
-A GitHub Actions workflow resolves an open, ready pull request, checks out its exact head revision without persisting credentials, and asks Agent Relay to execute Codex in the shared workspace. Codex edits the repository, runs the validation defined by the selected ExecPlan for its execution environment, and keeps the plan current. Relay derives the technical job outcome from the child process. The runner decides from Git whether changes exist, derives a commit message from the active plan, and pushes through a finalization-only credential.
+A GitHub Actions workflow resolves an open, ready pull request, checks out its exact head revision without persisting credentials, and asks Agent Relay to execute Codex in the shared workspace. Codex edits the repository, runs commands available in the packaged task environment, and keeps the active ExecPlan current. Relay derives the technical job outcome from the child process. The runner decides from Git whether changes exist, derives a commit message from the active plan, and pushes through a finalization-only credential.
 
 ## Components
 
-Each container deployment contains:
+Each deployment contains:
 
-- `runner`: resolves the pull request and owns checkout, commit, push, and GitHub credentials;
+- `runner`: the single self-hosted GitHub Actions runner, registered with the `agent-relay` label, which owns checkout, commit, push, and GitHub credentials;
 - `agent-relay`: authenticates requests, launches Codex, enforces execution limits, persists redacted process output, and owns technical job state;
-- `Codex`: follows `.agent/PLANS.md`, implements the selected active ExecPlan, updates its living state, and runs validation available in the selected execution environment.
+- `Codex`: follows `.agent/PLANS.md`, implements the selected active ExecPlan, updates its living state, and runs repository-local validation.
 
-The runner and Relay share one workspace volume. Relay runs as the `relay` user. Codex runs as the separate `agent` user. Relay state is mode `0700`. Only the host Codex `auth.json` file is mounted into the agent home, read-only. Generated agent-home state is removed before every execution.
+The runner and Relay are separate containers sharing one workspace volume. Relay runs as the `relay` user. Codex runs as the separate `agent` user. Relay state is mode `0700`. Only the host Codex `auth.json` file is mounted into the agent home, read-only. Generated agent-home state is removed before every execution.
 
 ## Workflow inputs
 
@@ -36,19 +36,6 @@ An incomplete item remains unchecked. A real blocker is marked `[blocked]` in `P
 
 Codex continues all unaffected work. A blocker is plan documentation only; it is not a Codex result or Relay job status. A plan with any unchecked or `[blocked]` item remains active.
 
-Each ExecPlan defines validation appropriate to the environment selected to execute that plan. Environment capabilities are determined by workflow routing and runner deployment, not by global instructions in `.agent/PLANS.md`.
-
-## Execution profiles
-
-Two execution profiles solve the Docker capability split without exposing the host Docker daemon to the containerized agent:
-
-- **container profile**: `.github/workflows/agent-relay.yml` routes work to the containerized runner and Relay deployment. The agent receives no Docker socket and runs repository checks available inside that container;
-- **host profile**: a separately installed native runner and agent process use the label `agent-relay-host`. This trusted profile may execute host-level Docker and Compose validation when the selected plan requires it.
-
-Do not mount `/var/run/docker.sock` into the container profile. Docker socket access is effectively host-level control and belongs only to the explicitly trusted host profile.
-
-The manual `.github/workflows/host-validation.yml` workflow runs real Compose, image-build, image-smoke, and runner-image tests on a native runner labeled `agent-relay-host`.
-
 ## Execution outcome
 
 Codex does not write a control or result artifact. Relay classifies execution from observable runtime facts:
@@ -58,14 +45,15 @@ Codex does not write a control or result artifact. Relay classifies execution fr
 - execution deadline: `timed_out`;
 - recovered in-flight job after restart: `interrupted`.
 
-The runner independently uses `git status --porcelain` to determine whether work exists. When changes exist, it derives the commit message from the first level-one heading in the active ExecPlan, with `Apply active ExecPlan` as the fallback.
+The runner independently uses `git status --porcelain` to determine whether work exists. A terminal `completed` job with a clean worktree is treated as a failed implementation run, not as a successful no-op. When changes exist, the runner derives the commit message from the first level-one heading in the active ExecPlan, with `Apply active ExecPlan` as the fallback.
 
 ## Security boundary
 
 - Checkout uses `persist-credentials: false` and verifies that no credential helper, authorization header, or credential-bearing remote remains before Codex starts.
+- CI and Agent Relay workflows run only on the existing `[self-hosted, agent-relay]` runner and reject fork-origin pull requests before executing repository code.
 - The Relay bearer token is supplied only to the workflow client step; it is not part of the runner service environment.
 - The push token exists only in the finalization step and is consumed through a temporary askpass helper.
-- The container-profile agent receives no GitHub token, runner registration token, Relay token, Docker socket, or Relay state.
+- Codex receives no GitHub token, runner registration token, Relay token, Docker socket, or Relay state.
 - The packaged service always launches the root-owned wrapper as the fixed `agent` user; command and user overrides are not configuration inputs.
 - The wrapper exclusively defines the final tool environment and clears generated agent-home state before each run while preserving the read-only `auth.json` mount.
 - The permissions profile denies the shared workspace root, Relay application directory, Relay home, and agent home; it re-allows writes only in the selected repository and reads only from that repository's Git metadata.
@@ -90,33 +78,36 @@ MAX_OUTPUT_BYTES=10000000
 
 `HOST_UID` and `HOST_GID` must match the owner of the authentication file and the runner workspace.
 
-## Validation
+## Automated validation
 
-Mandatory pull-request CI is daemon-independent and runs the complete TypeScript, unit, integration, shell-syntax, workflow-contract, packaging-contract, and security-boundary suite:
+Mandatory pull-request CI runs on the existing containerized self-hosted runner:
 
 ```bash
 npm ci
 npm run check
 ```
 
-Real Docker validation remains available and is not replaced by static tests. Run the manual `Host validation` workflow on a native runner labeled `agent-relay-host`, or execute the equivalent operator commands on the Docker host:
+This suite covers type safety, application and runner behavior, failure paths, shell syntax, workflow contracts, packaging structure, Dockerfile `COPY` sources, Compose isolation contracts, and the instruction boundary. It does not claim to build or run Docker images because the runner container has no Docker daemon or socket.
+
+## Docker integration validation
+
+The original Compose, image-build, toolchain, excluded-tool, and runner-image checks are retained in:
 
 ```bash
-cp .env.example .env
-docker compose config
-docker compose up --build -d
+bash scripts/host-validation.sh
 ```
 
-Operational setup, dispatch, recovery, logs, image verification, and credential rotation are documented in `docs/operations/README.md`.
+Run this script explicitly on the Docker host when packaging or deployment files change. No GitHub workflow routes to the host, and this manual gate is not reported as automated CI coverage.
+
+Operational setup, dispatch, recovery, logs, and credential rotation are documented in `docs/operations/README.md`.
 
 ## ExecPlans
 
 Active:
 
-None.
+- `docs/exec-plans/active/2026-07-15-audit-codex-context.md`
 
 Completed:
 
 - `docs/exec-plans/completed/2026-07-13-agent-relay-mvp.md`
 - `docs/exec-plans/completed/2026-07-13-ready-pr-gate.md`
-- `docs/exec-plans/completed/2026-07-15-audit-codex-context.md`

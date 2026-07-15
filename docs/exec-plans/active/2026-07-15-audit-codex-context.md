@@ -19,6 +19,8 @@ The execution process must receive one task definition: the active ExecPlan, int
 - [x] (2026-07-15) Made the launcher clear generated agent-home state before every run while preserving only the mounted authentication file.
 - [x] (2026-07-15) Removed the remaining `.agent-relay` finalizer, ignore-file, launcher, workflow, and test legacy.
 - [x] (2026-07-15) Moved commit-message derivation and output-file preflight before agent execution and derived stable request correlation from workflow-run metadata when available.
+- [x] (2026-07-15) Denied sibling checkout trees, Relay application files, and the Relay home while allowing writes only in the selected repository and reads only from its Git metadata.
+- [x] (2026-07-15) Made the launcher the sole owner of the final tool environment; the executor now passes only locale values.
 - [ ] Run the complete CI suite on the latest head and repair every failure without restoring removed channels.
 - [ ] Repeat the control-path audit from a different entry point and record a clean pass with no new conflict, duplicate instruction, alternate task channel, unnecessary exposure, or model-controlled decision.
 - [ ] Record final validation evidence and move this plan to `docs/exec-plans/completed/`.
@@ -43,6 +45,12 @@ The execution process must receive one task definition: the active ExecPlan, int
 - Observation: the active plan described a prompt contract that no longer existed.
   Evidence: the plan required four prompt instructions while the implementation had already reduced the prompt to one pointer.
 
+- Observation: selecting one working directory did not isolate other repositories on the shared volume.
+  Evidence: the previous profile protected agent home and `.git` but did not deny sibling checkout paths or Relay implementation files.
+
+- Observation: the executor and launcher both defined tool environment variables.
+  Evidence: duplicated allowlists created two policy owners and allowed future drift between the process spawned by Relay and the final `env -i` process.
+
 ## Decision Log
 
 - Decision: the prompt names only `.agent/PLANS.md` and the active ExecPlan.
@@ -63,6 +71,14 @@ The execution process must receive one task definition: the active ExecPlan, int
 
 - Decision: workflow credentials exist only in the steps that consume them.
   Rationale: service-wide runner environment variables unnecessarily expand credential lifetime and visibility.
+  Date/Author: 2026-07-15 / repository audit.
+
+- Decision: only the selected repository is visible inside the shared workspace tree.
+  Rationale: other pull-request checkouts and Relay source are unrelated context and can contain private or conflicting instructions.
+  Date/Author: 2026-07-15 / repository audit.
+
+- Decision: the root-owned launcher exclusively defines the final tool environment.
+  Rationale: a single environment owner prevents policy drift; Relay passes only locale values required to start the launcher predictably.
   Date/Author: 2026-07-15 / repository audit.
 
 - Decision: Relay owns technical process status, the living plan owns progress and blockers, and Git plus the runner own publication.
@@ -96,7 +112,8 @@ Acceptance requires:
 - the runtime prompt references only the repository plan rules and selected active plan;
 - the request, runner, and filesystem checks reject every other task path before process start;
 - no model-generated status, result, blocker list, commit intent, or publication instruction exists;
-- the packaged process always uses the fixed launcher, isolated account, minimal environment, read-only repository metadata, and clean per-run home;
+- the packaged process always uses the fixed launcher, isolated account, launcher-owned environment, read-only repository metadata, and clean per-run home;
+- sibling workspaces, Relay source, Relay home, Relay state, and agent home are not readable from the task process;
 - the Relay credential is absent from the runner service environment and present only in the client step;
 - no `.agent-relay` or result-artifact legacy remains;
 - unit, integration, workflow, Compose, image, sandbox, toolchain, and runner-image checks pass;

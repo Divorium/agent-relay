@@ -4,9 +4,9 @@
 
 Copy `.env.example` to `.env` and provide:
 
-- a current repository-scoped `RUNNER_TOKEN` when registering a new runner;
+- a current repository-scoped `RUNNER_TOKEN` when registering the containerized self-hosted runner;
 - the target repository URL;
-- a unique runner name and labels;
+- a unique runner name and the `agent-relay` label;
 - a strong Relay bearer token;
 - the absolute host path to Codex `auth.json`;
 - the host UID and GID that own the authentication file and runner workspace.
@@ -15,26 +15,7 @@ Configure the same Relay bearer token as the repository Actions secret `AGENT_RE
 
 Only `auth.json` is mounted into the Codex home directory, read-only. Do not mount the complete host `~/.codex` directory. The launcher removes all generated agent-home content except `auth.json` before every execution.
 
-## Execution profiles
-
-The container profile is the default Agent Relay deployment:
-
-- the GitHub runner and Relay run in separate containers;
-- Codex runs as the isolated `agent` user inside the Relay container;
-- no Docker socket is mounted;
-- validation is limited to tools installed in that container.
-
-The host profile is a separate trusted deployment for plans that require host-level Docker or Compose access:
-
-- install a GitHub Actions runner directly on the Docker host;
-- label it `agent-relay-host`;
-- run the agent process directly on that host under a dedicated account;
-- grant Docker access only to that trusted account;
-- do not reuse the container-profile Relay service as a Docker socket proxy.
-
-The active ExecPlan is written for the workflow that selects it. `.agent/PLANS.md` intentionally contains no global Docker policy.
-
-## Start and verify the container profile
+## Start and verify
 
 ```bash
 docker compose build
@@ -58,19 +39,22 @@ sudo -H -u agent -- test ! -w /home/agent/.codex/auth.json
 '
 ```
 
-## Validate images on a native Docker host
+## Validation
 
-Mandatory pull-request CI runs `npm run check` without requiring a Docker daemon. Real packaging validation is retained separately.
-
-Run the manual `Host validation` workflow on a native runner labeled `agent-relay-host`, or execute:
+Mandatory pull-request CI runs on the existing containerized runner labeled `agent-relay`:
 
 ```bash
 npm ci
 npm run check
+```
+
+The runner container has no Docker daemon or socket. Real packaging validation therefore remains an explicit Docker-host operation:
+
+```bash
 bash scripts/host-validation.sh
 ```
 
-The host validation script performs:
+The script preserves the checks that previously ran successfully on GitHub-hosted Ubuntu:
 
 - `docker compose config`;
 - Agent Relay image build;
@@ -78,7 +62,7 @@ The host validation script performs:
 - image ownership and excluded-tool checks;
 - runner image build and entrypoint verification.
 
-It does not use `--privileged`, nested containers, or a mounted Docker socket inside the container profile.
+There is no workflow route from the containerized runner to the host. Running the script is a manual gate when Dockerfile, Compose, packaging, or deployment files change.
 
 ## Install and dispatch the workflow
 
@@ -89,7 +73,7 @@ Manual dispatch requires:
 - `pr_number`: the selected pull request number;
 - `plan_path`: a regular, non-symlink Markdown file directly under `docs/exec-plans/active/`.
 
-There is no branch input, execution-mode input, or model result contract. `.agent/PLANS.md` defines reusable plan behavior and the selected active plan is the sole task instruction.
+There is no branch input, execution-mode input, environment-routing input, or model result contract. `.agent/PLANS.md` defines reusable plan behavior and the selected active plan is the sole task instruction.
 
 Before checkout, `/runner/resolve-pr.mjs` rejects the pull request unless it exists, is open, is not a draft, belongs to the target repository, and has valid head ref and SHA values. Checkout uses the API-derived head SHA. Commit and push target the API-derived head ref.
 
@@ -124,7 +108,7 @@ Codex does not write a result file. Relay sets the technical outcome from the pr
 - deadline exceeded → `timed_out`;
 - in-flight job recovered after restart → `interrupted`.
 
-A task-level blocker is recorded only in the active ExecPlan. The item remains unchecked and includes cause, impact, evidence, and unblock condition. Codex continues unaffected work. The plan remains active until every item is completed.
+A completed process with a clean worktree is rejected by the runner client. A task-level blocker is recorded only in the active ExecPlan. The item remains unchecked and includes cause, impact, evidence, and unblock condition. Codex continues unaffected work. The plan remains active until every item is completed.
 
 ## Recovery
 

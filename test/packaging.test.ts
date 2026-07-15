@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 
 async function text(path: string): Promise<string> {
   return readFile(path, "utf8");
@@ -36,7 +36,7 @@ async function assertCopySourcesExist(path: string): Promise<void> {
     for (const source of positional.slice(0, -1)) {
       const normalized = source.replace(/^"|"$/g, "").replace(/\/$/, "");
       assert.ok(normalized && !/[?*\[]/.test(normalized), `${path} COPY source must be explicit: ${source}`);
-      await access(normalized);
+      await stat(normalized);
     }
   }
 }

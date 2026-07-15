@@ -78,7 +78,7 @@ jobs:
         id: isolation
         continue-on-error: true
         run: |
-          docker run --rm --user root --entrypoint /bin/bash agent-relay:ci -lc '
+          docker run --rm --privileged --user root --entrypoint /bin/bash agent-relay:ci -lc '
             set -euxo pipefail
             mkdir -p /tmp/codex-root/current /tmp/codex-root/sibling
             chown -R agent:agent /tmp/codex-root

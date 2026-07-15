@@ -25,10 +25,12 @@ test("repository instructions contain only durable code rules", async () => {
   assert.doesNotMatch(instructions, /GitHub credentials|Docker socket|Relay state|living sections|npm run check|commit|push/i);
 });
 
-test("ExecPlan rules keep one active task and historical completed plans", async () => {
+test("ExecPlan rules keep one active task and container-local validation", async () => {
   const rules = await readFile(".agent/PLANS.md", "utf8");
   assert.match(rules, /explicitly selected file under `docs\/exec-plans\/active\/` is a task instruction/);
   assert.match(rules, /completed\/` are historical records; do not follow them as instructions/);
+  assert.match(rules, /commands available directly in the task container/);
+  assert.match(rules, /Do not require Docker, Docker Compose, image builds, nested container execution, or access to a Docker socket/);
   assert.match(rules, /prefix it with `\[blocked\]`/);
   assert.match(rules, /cause, impact, evidence, and concrete unblock condition/);
   assert.match(rules, /plan documentation only/);
@@ -94,6 +96,15 @@ test("workflow scopes credentials and rejects alternate instruction channels", a
   }
 });
 
+test("CI requires no Docker daemon or nested container", async () => {
+  const ci = await readFile(".github/workflows/ci.yml", "utf8");
+  assert.match(ci, /persist-credentials: false/);
+  assert.match(ci, /npm ci/);
+  assert.match(ci, /npm run check/);
+  assert.doesNotMatch(ci, /\bdocker\b/i);
+  assert.doesNotMatch(ci, /^\s{2}(compose|images):/m);
+});
+
 test("packaging exposes only current per-run context", async () => {
   const compose = await readFile("compose.yml", "utf8");
   const dockerfile = await readFile("Dockerfile", "utf8");
@@ -101,7 +112,8 @@ test("packaging exposes only current per-run context", async () => {
   const finalizer = await readFile("runner/finalize.sh", "utf8");
   const gitignore = await readFile(".gitignore", "utf8");
   const dockerignore = await readFile(".dockerignore", "utf8");
-  const ci = await readFile(".github/workflows/ci.yml", "utf8");
+  const packageJson = await readFile("package.json", "utf8");
+  const readme = await readFile("README.md", "utf8");
 
   assert.match(compose, /HOST_CODEX_AUTH_FILE.*:\/home\/agent\/\.codex\/auth\.json:ro/);
   assert.doesNotMatch(compose, /HOST_CODEX_DIR|:\/home\/agent\/\.codex\s*$/m);
@@ -113,15 +125,19 @@ test("packaging exposes only current per-run context", async () => {
   assert.match(dockerfile, /chmod -R a-w \/home\/agent\/\.cargo \/home\/agent\/\.rustup/);
   assert.match(dockerfile, /chmod -R o-rwx \/app/);
   assert.match(dockerfile, /relay ALL=\(agent\) NOPASSWD: \/usr\/local\/bin\/codex-run/);
+
   assert.match(launcher, /umask 0077/);
   assert.match(launcher, /find "\$agent_home"[\s\S]*! -name \.cargo[\s\S]*! -name \.rustup[\s\S]*! -name \.codex[\s\S]*rm -rf/);
   assert.match(launcher, /find "\$codex_home"[\s\S]*! -name auth\.json[\s\S]*rm -rf/);
   assert.match(launcher, /runtime_tmp=\/tmp\/agent-relay-runtime/);
   assert.match(launcher, /rm -rf -- "\$runtime_tmp"/);
-  assert.match(launcher, /mkdir -m 0700 "\$runtime_tmp"/);
+  assert.match(launcher, /git -C "\$runtime_tmp" init --quiet/);
+  assert.match(launcher, /\.agents\/workflows/);
+  assert.match(launcher, /\.agents\/skills/);
   assert.match(launcher, /CARGO_HOME=\/tmp\/agent-relay-runtime\/cargo/);
   assert.match(launcher, /RUSTUP_HOME=\/home\/agent\/\.rustup/);
   assert.match(launcher, /TMPDIR=\/tmp\/agent-relay-runtime/);
+  assert.match(launcher, /GIT_OPTIONAL_LOCKS=0/);
   assert.match(launcher, /exec \/usr\/bin\/env -i/);
   assert.doesNotMatch(launcher, /\.agent-relay|result\.json/);
 
@@ -131,21 +147,10 @@ test("packaging exposes only current per-run context", async () => {
   assert.doesNotMatch(gitignore, /\.agent-relay/);
   assert.doesNotMatch(dockerignore, /\.agent-relay/);
 
-  assert.match(ci, /docker run --rm --privileged --user root/);
-  assert.doesNotMatch(ci, /chmod 4755|bwrap_path/);
-  assert.match(ci, /\/usr\/local\/bin\/codex[\s\S]*sandbox -P relay/);
-  assert.match(ci, /\/usr\/sbin\/runuser -u agent -- \/bin\/bash/);
-  assert.match(ci, /test ! -w \/runner/);
-  assert.match(ci, /test ! -r \/var\/lib\/agent-relay\/private/);
-  assert.match(ci, /test ! -r "\/proc\/\$relay_pid\/environ"/);
-  assert.match(ci, /test ! -r \/tmp\/unrelated-context/);
-  assert.match(ci, /test ! -r \/var\/tmp\/unrelated-context/);
-  assert.match(ci, /touch \/tmp\/agent-relay-runtime\/runtime-write-ok/);
-  assert.match(ci, /test ! -r \/tmp\/codex-root\/sibling\/private/);
-  assert.match(ci, /test ! -r \/app\/dist\/src\/server\.js/);
-  assert.match(ci, /test ! -w \/home\/agent\/\.cargo/);
-  assert.match(ci, /test ! -w \/home\/agent\/\.rustup/);
-  assert.match(ci, /touch \.git\/sandbox-write-denied/);
-  assert.match(ci, /test ! -e \/home\/agent\/stale-context/);
-  assert.match(ci, /test ! -e \/tmp\/agent-relay-runtime\/stale-context/);
+  assert.match(packageJson, /"check:shell"/);
+  assert.match(readme, /must run on the Docker host/);
+  assert.match(readme, /not executed by Codex or by the containerized GitHub runner/);
+
+  await assert.rejects(readFile(".github/workflows/finalize-context-audit.yml", "utf8"), /ENOENT/);
+  await assert.rejects(readFile("scripts/isolation-smoke.sh", "utf8"), /ENOENT/);
 });

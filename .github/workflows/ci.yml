@@ -84,7 +84,9 @@ jobs:
             chown -R agent:agent /tmp/codex-root
             runuser -u agent -- git -C /tmp/codex-root/current init
             printf sibling-private > /tmp/codex-root/sibling/private
-            chown agent:agent /tmp/codex-root/sibling/private
+            printf stale-temp-state > /tmp/stale-agent-context
+            printf stale-var-temp-state > /var/tmp/stale-agent-context
+            chown agent:agent /tmp/codex-root/sibling/private /tmp/stale-agent-context /var/tmp/stale-agent-context
             printf stale-codex-state > /home/agent/.codex/sentinel
             printf stale-tool-state > /home/agent/stale-context
             chown agent:agent /home/agent/.codex/sentinel /home/agent/stale-context
@@ -100,8 +102,11 @@ jobs:
             test ! -e /tmp/codex-root/current/.git/sandbox-write-denied
             runuser -u agent -- test ! -r /app/dist/src/server.js
             su -s /bin/bash relay -c "cd /tmp/codex-root/current && sudo -H -u agent -- /usr/local/bin/codex-run --version"
+            test -d /tmp/codex-root/current
             test ! -e /home/agent/.codex/sentinel
             test ! -e /home/agent/stale-context
+            test ! -e /tmp/stale-agent-context
+            test ! -e /var/tmp/stale-agent-context
           ' > isolation.log 2>&1
       - name: Upload isolation log
         if: always()

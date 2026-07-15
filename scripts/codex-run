@@ -7,8 +7,6 @@ if [[ "$(id -un)" != "agent" ]]; then
 fi
 
 umask 0027
-mkdir -p .agent-relay
-rm -f .agent-relay/result.json
 
 exec /usr/bin/env -i \
   HOME=/home/agent \

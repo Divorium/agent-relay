@@ -29,7 +29,7 @@ exec /usr/bin/env -i \
   LANG=C.UTF-8 \
   LC_ALL=C.UTF-8 \
   JAVA_HOME=/opt/java/openjdk \
-  CARGO_HOME=/home/agent/.cargo \
+  CARGO_HOME=/tmp/agent-relay-runtime/cargo \
   RUSTUP_HOME=/home/agent/.rustup \
   TMPDIR=/tmp/agent-relay-runtime \
   TMP=/tmp/agent-relay-runtime \

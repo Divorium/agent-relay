@@ -21,6 +21,10 @@ function runProcess(
   });
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 async function createFakeCommands(directory: string, names: string[]): Promise<void> {
   await mkdir(directory, { recursive: true });
   for (const name of names) {
@@ -139,7 +143,7 @@ test("toolchain smoke script validates its command contract without invoking hos
       const result = await runSmoke();
       assert.equal(result.status, 0, result.stderr);
       const invocations = await readFile(log, "utf8");
-      for (const command of commands) assert.match(invocations, new RegExp(`^${command} `, "m"));
+      for (const command of commands) assert.match(invocations, new RegExp(`^${escapeRegExp(command)} `, "m"));
       assert.match(invocations, /^codex --version$/m);
       assert.match(invocations, /^codex --ask-for-approval never exec --help$/m);
     });

@@ -118,6 +118,7 @@ test("runner client derives a stable request ID from the workflow run", async ()
   await mkdir(root, { recursive: true });
   await writeFile(githubOutput, "");
   await initializeRepository(workspace);
+  await writeFile(join(workspace, "tracked.txt"), "after\n");
 
   try {
     await withCompletedServer(async (baseUrl, submitted) => {
@@ -155,7 +156,7 @@ test("runner client uses a fixed commit-message fallback when the plan has no ti
   }
 });
 
-test("runner client leaves GITHUB_OUTPUT empty when Git reports a clean worktree", async () => {
+test("runner client fails when Relay completes without repository changes", async () => {
   const root = join(tmpdir(), `agent-relay-runner-client-clean-${process.pid}-${Date.now()}`);
   const workspaceRoot = join(root, "workspaces");
   const workspace = join(workspaceRoot, "repository", "repository");
@@ -167,7 +168,8 @@ test("runner client leaves GITHUB_OUTPUT empty when Git reports a clean worktree
   try {
     await withCompletedServer(async (baseUrl) => {
       const result = await runClient(workspaceRoot, workspace, githubOutput, baseUrl, { AGENT_RELAY_REQUEST_ID: "request-3" });
-      assert.equal(result.status, 0, result.stderr);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /completed without repository changes/);
       assert.equal(await readFile(githubOutput, "utf8"), "");
       assert.equal(spawnSync("git", ["status", "--porcelain"], { cwd: workspace, encoding: "utf8" }).stdout.trim(), "");
     });

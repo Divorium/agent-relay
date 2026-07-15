@@ -18,3 +18,29 @@ export function redactSensitiveText(value: string): string {
   }
   return redacted;
 }
+
+export class StreamingRedactor {
+  private readonly decoder = new TextDecoder("utf-8");
+  private pending = "";
+
+  write(chunk: Buffer): string {
+    this.pending += this.decoder.decode(chunk, { stream: true });
+    const lineBreak = Math.max(this.pending.lastIndexOf("\n"), this.pending.lastIndexOf("\r"));
+    if (lineBreak < 0) return "";
+    const complete = this.pending.slice(0, lineBreak + 1);
+    this.pending = this.pending.slice(lineBreak + 1);
+    return redactSensitiveText(complete);
+  }
+
+  end(): string {
+    this.pending += this.decoder.decode();
+    const complete = redactSensitiveText(this.pending);
+    this.pending = "";
+    return complete;
+  }
+
+  discard(): void {
+    this.pending = "";
+    this.decoder.decode();
+  }
+}

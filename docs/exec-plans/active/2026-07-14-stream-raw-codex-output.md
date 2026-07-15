@@ -28,9 +28,9 @@ Keep this section append-only for completed historical entries. Split partially 
 - [x] (2026-07-15, plan revision `973ee1ff56f3d45be9526325d9b8056e2cc62b8c`) Restored historical entries and separated completed review work from incomplete implementation work, but used checklists outside `Progress` and therefore did not conform to the repository ExecPlan template.
 - [x] (2026-07-15, plan revision `21587cf36f2c82c678e9e1d7c2a41f418e74367b`) Rewrote the plan into the article skeleton, but incorrectly described the article-provided `.agent/PLANS.md` as legacy and left the implementation checklist incomplete.
 - [x] (2026-07-15 21:06Z) Re-reviewed PR #3 against current `main`, the OpenAI ExecPlan article, and the restored prototype. Corrected task ownership, removed post-commit gates from Codex scope, selected process-restart durability semantics, and expanded the missing runtime, persistence, endpoint, runner, finalizer, and test work below.
+- [x] (2026-07-15 21:06Z) Completed the human-maintained instruction setup in commit `c76cbcc4fb353d8a9b737bbfb5006a77e51d35ac`: preserved `.agent/PLANS.md` at blob `15d9583b1df0663488d55e4fdfea1c6154ba85d1` and updated `AGENTS.md` to the exact article `# ExecPlans` section plus the minimal current-main engineering rules.
+- [x] (2026-07-15 21:06Z) Completed the human-maintained workflow setup in commits `b967b14f4753f5a3b82d529ed72c254e0aec9675` and `4a058cf06cbadcd81cf9e4c42ad4d7cedd1b00cc`: both workflow files now use current-main credential and active-plan boundaries plus the required terminal archive environment and upload paths.
 
-- [ ] Human-maintained instruction setup: preserve `.agent/PLANS.md` byte-for-byte with blob `15d9583b1df0663488d55e4fdfea1c6154ba85d1`, and update `AGENTS.md` to contain the exact `# ExecPlans` section from the OpenAI article plus the minimal current-main engineering rules. Codex must not edit either file.
-- [ ] Human-maintained workflow setup: update `.github/workflows/agent-relay.yml` and `examples/github-actions/agent-relay.yml` from current `main`, add only the terminal archive environment and upload behavior required by this feature, and preserve credential-free checkout, step-scoped Relay credentials, finalizer-scoped publication credentials, active-plan validation, and runner-owned commit and push. Codex must not edit either workflow file.
 - [ ] Reconcile the complete branch snapshot with then-current `main`, not only files listed as changed by PR #3. Preserve every current-main file and contract changed by PR #9, including files changed only on `main`, then reapply only the streaming-specific additions described here. Treat `.agent/PLANS.md`, `AGENTS.md`, and the two human-maintained workflow files as explicit exceptions already owned outside the Codex pass.
 - [ ] Restore the current-main result-free request and status contracts in `src/contracts/job.ts`, `src/contracts/validators.ts`, `src/execution/prompt.ts`, `src/application/job-service.ts`, and `runner/client.mjs`. Remove execution modes, review findings, `blocked`, `resultPath`, `.agent-relay/result.json`, `src/contracts/result.ts`, model validation, model summaries, model blockers, model commit messages, and client-side Git status decisions.
 - [ ] Restore active-plan and workspace boundary validation from current `main` in `src/security/workspace.ts`, `src/contracts/validators.ts`, and `src/application/job-service.ts`: the plan must be a regular, non-symlink file directly under `docs/exec-plans/active/`, the workspace must resolve below the shared root, and validation must occur before persistence or executor invocation.
@@ -80,14 +80,14 @@ Keep this section append-only for completed historical entries. Split partially 
 - Observation: `.agent/PLANS.md` in PR #3 is the intended article document, not legacy content.
   Evidence: its blob `15d9583b1df0663488d55e4fdfea1c6154ba85d1` is byte-for-byte identical to the `PLANS.md` body published in the OpenAI article. It must remain unchanged.
 
-- Observation: `AGENTS.md` currently mixes the correct article `# ExecPlans` block with obsolete result-artifact and Docker instructions.
-  Evidence: the article provides only the `# ExecPlans` section, while current `main` provides the minimal repository engineering rules. The human-maintained correction must combine those without restoring obsolete runtime contracts.
+- Observation: `AGENTS.md` previously mixed the correct article `# ExecPlans` block with obsolete result-artifact and Docker instructions.
+  Evidence: commit `c76cbcc4fb353d8a9b737bbfb5006a77e51d35ac` retained the exact article section and replaced the obsolete rules with the minimal current-main engineering rules.
 
 - Observation: the branch is not merely a 23-file streaming diff; it is also missing the architecture introduced by PR #9.
-  Evidence: comparing the branch and current `main` in both directions shows files changed only on `main`, including the workflow, finalizer, launcher, prompt, workspace validation, contracts, packaging, and their tests. Reconciliation must cover the whole branch snapshot.
+  Evidence: comparing the branch and current `main` in both directions shows files changed only on `main`, including the finalizer, launcher, prompt, workspace validation, contracts, packaging, and their tests. Reconciliation must cover the whole branch snapshot.
 
 - Observation: workflow files cannot be delegated to Codex in this task.
-  Evidence: the human reviewer owns credential and publication workflow changes. Codex is explicitly prohibited from editing the real or example workflow files.
+  Evidence: the human reviewer owns credential and publication workflow changes. Commits `b967b14f4753f5a3b82d529ed72c254e0aec9675` and `4a058cf06cbadcd81cf9e4c42ad4d7cedd1b00cc` applied them before Codex implementation.
 
 - Observation: the first prototype opens the configured final archive path directly.
   Evidence: timeout, cancellation, disconnect, or crash can leave a partial file at the path uploaded under `if: always()`.
@@ -178,11 +178,11 @@ Keep this section append-only for completed historical entries. Split partially 
 
 ## Outcomes & Retrospective
 
-This plan remains active and the implementation is not complete.
+This plan remains active and the Codex implementation is not complete.
 
-The prototype history, original and additional findings, review-thread migration, branch-restoration correction, and plan-format corrections remain preserved. The task list now distinguishes human-owned instruction and workflow work from Codex-owned implementation work, covers the complete current-main reconciliation rather than only the visible PR diff, and removes impossible post-commit gates from Codex scope.
+The prototype history, original and additional findings, review-thread migration, branch-restoration correction, and plan-format corrections remain preserved. Human-owned instruction and workflow corrections are now complete. The remaining checklist covers the complete current-main reconciliation rather than only the visible PR diff and excludes impossible post-commit gates from Codex scope.
 
-The current branch still contains an unaccepted prototype built partly against obsolete runtime contracts. Human-maintained instruction and workflow corrections, current-main reconciliation, runtime isolation, durable process-restart persistence, bounded resources, endpoint correctness, runner retry and archive behavior, finalizer preservation, deterministic tests, and final working-tree validation remain incomplete.
+The current branch still contains an unaccepted prototype built partly against obsolete runtime contracts. Current-main reconciliation, runtime isolation, durable process-restart persistence, bounded resources, endpoint correctness, runner retry and archive behavior, finalizer preservation, deterministic tests, and final working-tree validation remain incomplete.
 
 ## Context and Orientation
 
@@ -198,13 +198,13 @@ Agent Relay runs a Codex child process for a selected repository workspace. `src
 
 `runner/finalize.sh` remains independent from streaming. It decides whether the worktree has changes, validates and creates the commit, injects publication credentials only for push, and restores the uncommitted worktree if push fails.
 
-`AGENTS.md`, `.agent/PLANS.md`, `.github/workflows/agent-relay.yml`, and `examples/github-actions/agent-relay.yml` are human-maintained in this correction. Codex may read them but must not edit them.
+`AGENTS.md`, `.agent/PLANS.md`, `.github/workflows/agent-relay.yml`, and `examples/github-actions/agent-relay.yml` are human-maintained and complete for this correction. Codex may read them but must not edit them.
 
 ## Plan of Work
 
-The human reviewer first corrects `AGENTS.md` using the exact article `# ExecPlans` section and the current-main engineering rules, preserves `.agent/PLANS.md` unchanged, and updates both workflow files from current `main` with only the required archive environment and upload additions. These changes are recorded in `Progress` before Codex implementation starts.
+The human reviewer has corrected `AGENTS.md` using the exact article `# ExecPlans` section and the current-main engineering rules, preserved `.agent/PLANS.md` unchanged, and updated both workflow files from current `main` with only the required archive environment and upload additions.
 
-Codex then reconciles the complete branch snapshot with then-current `main`. It must consider files changed only on `main`, not only the visible PR diff. The current-main result-free contract, workspace and active-plan validation, fixed launcher, process users, minimal environment, credential boundaries, finalizer, packaging, documentation, and tests are authoritative. Only raw-output persistence, streaming endpoint, runner consumption, archive production, configuration, documentation, and tests are additive.
+Codex now reconciles the complete branch snapshot with then-current `main`. It must consider files changed only on `main`, not only the visible PR diff. The current-main result-free contract, workspace and active-plan validation, fixed launcher, process users, minimal environment, credential boundaries, finalizer, packaging, documentation, and tests are authoritative. Only raw-output persistence, streaming endpoint, runner consumption, archive production, configuration, documentation, and tests are additive.
 
 Persistence is rebuilt around a versioned checkpoint authoritative for committed length and terminal output facts. Appends are serialized; process-restart recovery exposes only the checkpoint prefix; file-size suffixes are never inferred as committed; replay uses short-lived readers; terminal and attachment state is bounded; output-limit exhaustion kills the child and publishes an explicit error; and job creation compensation remains exhaustive and ownership-safe.
 
@@ -321,7 +321,7 @@ Runner tests demonstrate current-main preflight and JSON controls, fatal redirec
 
 Current-main contract tests and static packaging assertions demonstrate the approved request, status, prompt, credential, filesystem, launcher, public DTO, workflow, and finalizer boundaries. No image build, container run, Compose execution, live mount inspection, or container health check is an acceptance requirement.
 
-The Codex implementation is complete when every Codex-owned unchecked `Progress` item is checked with working-tree evidence and both `npm run check` and `git diff --check` pass. Human-maintained instruction and workflow items must already be checked before Codex begins. No post-commit or GitHub-state gate belongs to this plan.
+The Codex implementation is complete when every Codex-owned unchecked `Progress` item is checked with working-tree evidence and both `npm run check` and `git diff --check` pass. Human-maintained instruction and workflow items are already complete. No post-commit or GitHub-state gate belongs to this plan.
 
 ## Idempotence and Recovery
 
@@ -345,7 +345,9 @@ Keep the validation evidence below append-only:
 - 2026-07-15 - Plan-only revisions - no code tests run because only the active plan changed.
 - 2026-07-15 - Revision `973ee1ff56f3d45be9526325d9b8056e2cc62b8c` - history and status were improved, but formal comparison later found checklists outside `Progress`, bureaucratic milestones, and no final revision note.
 - 2026-07-15 - Revision `21587cf36f2c82c678e9e1d7c2a41f418e74367b` - structure was corrected, but `.agent/PLANS.md` was wrongly classified as legacy, current-main reconciliation was under-specified, and post-commit GitHub gates were incorrectly assigned to Codex.
-- 2026-07-15 21:06Z - This revision - compared PR #3 with current `main` and the OpenAI article, preserved `.agent/PLANS.md`, separated human-owned instruction and workflow changes, expanded Codex implementation tasks, selected process-restart durability without per-append `fsync`, and removed post-commit gates. No implementation test was claimed.
+- 2026-07-15 21:06Z - Plan revision `77e341ec237d13b6ee38efd5af5f73b88c07dc65` - compared PR #3 with current `main` and the OpenAI article, preserved `.agent/PLANS.md`, separated human-owned instruction and workflow changes, expanded Codex implementation tasks, selected process-restart durability without per-append `fsync`, and removed post-commit gates. No implementation test was claimed.
+- 2026-07-15 21:06Z - Instruction correction `c76cbcc4fb353d8a9b737bbfb5006a77e51d35ac` - verified `.agent/PLANS.md` still has blob `15d9583b1df0663488d55e4fdfea1c6154ba85d1`; `AGENTS.md` now contains the exact article block and minimal current-main engineering rules.
+- 2026-07-15 21:06Z - Workflow corrections `b967b14f4753f5a3b82d529ed72c254e0aec9675` and `4a058cf06cbadcd81cf9e4c42ad4d7cedd1b00cc` - real and example workflows now preserve current-main credential, active-plan, and finalizer boundaries and add only the terminal archive environment and upload paths.
 
 Append future evidence in this form:
 
@@ -422,4 +424,4 @@ The runner may receive:
 
 The final path means an atomically published complete terminal stream, never a live partial file.
 
-Revision note (2026-07-15 21:06Z): Re-reviewed the active plan against PR #3, current `main`, and the OpenAI ExecPlan article. Corrected the false requirement to replace `.agent/PLANS.md`, assigned `AGENTS.md` and workflow changes to the human reviewer, expanded full-branch reconciliation and all missing runtime, persistence, endpoint, runner, finalizer, and current-main test requirements, removed unnecessary persistent generation and per-append sync requirements, chose short-lived replay handles, and removed post-commit SHA, GitHub checks, mergeability, and remote review from Codex scope.
+Revision note (2026-07-15 21:06Z): Re-reviewed the active plan against PR #3, current `main`, and the OpenAI ExecPlan article. Corrected the false requirement to replace `.agent/PLANS.md`, assigned `AGENTS.md` and workflow changes to the human reviewer, expanded full-branch reconciliation and all missing runtime, persistence, endpoint, runner, finalizer, and current-main test requirements, removed unnecessary persistent generation and per-append sync requirements, chose short-lived replay handles, removed post-commit SHA, GitHub checks, mergeability, and remote review from Codex scope, and recorded the completed human-owned instruction and workflow corrections.

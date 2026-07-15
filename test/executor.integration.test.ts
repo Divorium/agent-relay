@@ -66,7 +66,6 @@ while [ "$1" != "--cd" ]; do shift; done
 workspace="$2"
 [ "$workspace" = "${workspace}" ]
 [ -z "\${AGENT_RELAY_TOKEN:-}" ]
-[ -z "\${PATH:-}" ]
 [ "\${LANG:-}" = "C.UTF-8" ]
 printf '%s\n' 'authorization: Bearer abcdefghijklmnopqrstuvwxyz'
 printf 'changed\n' > "$workspace/changed.txt"

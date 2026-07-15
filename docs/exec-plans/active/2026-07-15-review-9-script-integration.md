@@ -22,17 +22,18 @@ PR #9 must use only credentials that the workflow actually provides, preserve co
 - [x] Retained actual-process integration tests for `runner/entrypoint.sh` and `runner/resolve-pr.mjs`.
 - [x] Enabled Node's built-in test coverage without adding a dependency.
 - [x] Added GitHub Actions job-summary publication for the coverage report while retaining the complete check log artifact.
-- [ ] Run the complete repository validation suite on the current head.
-- [ ] Review the final diff for script coverage, completed-plan immutability, credential scope, and absence of Docker/GitHub test invocation.
-- [ ] Record the successful current-head CI run and move this unchanged plan to `completed/`.
+- [x] Ran the complete repository validation suite on head `d4c486fb19083f3e2086f7c8a5c8e3e2e4a3a882`.
+- [x] Reviewed the final diff for script coverage, completed-plan immutability, credential scope, and absence of Docker/GitHub test invocation.
+- [x] Recorded successful CI run `29425577134` and prepared this unchanged plan for `completed/`.
 
 ## Surprises & Discoveries
 
 - The optional push secret existed only as a workflow convention; this repository did not create or provision it.
 - Removing the Docker image job also removed behavioral checks that belonged to repository scripts. Those checks can be executed against controlled local fixtures without testing Docker itself.
-- The preceding review rewrote two completed plans into summaries. Their original blobs still existed on `main` and could be restored exactly.
+- The preceding review rewrote two completed plans into summaries. Their original blobs still existed on `main` and were restored exactly as blobs `56b5cfe229ab1d1f94182345d9a161d4ec678c0c` and `62947952771ed57d1a5746e722195e208c442a42`.
 - `runner/client.mjs` already had broad child-process tests, but the strongest evidence is the full local Relay-to-client-to-finalizer flow.
-- `scripts/codex-run` contains absolute runtime paths, so its integration test must intercept its shell operations while executing the real script file; otherwise the test would mutate the test host.
+- `scripts/codex-run` contains absolute runtime paths, so its integration test intercepts its shell operations while executing the real script file; otherwise the test would mutate the test host.
+- CI run `29425418514` exposed one test-only defect: `g++` was interpolated into a regular expression without escaping. The assertion was fixed without changing production code.
 
 ## Decision Log
 
@@ -56,15 +57,24 @@ Repository validation:
     npm ci
     npm run check
 
-Acceptance requires:
+CI run `29425577134` passed on head `d4c486fb19083f3e2086f7c8a5c8e3e2e4a3a882`:
 
-- every executable repository script to have an actual-process integration path;
-- no automated test to invoke Docker, Compose, GitHub APIs, hosted services, or external credentials;
-- the two pre-existing completed plans to have the exact blob SHA present on `main`;
-- current workflow and documentation to contain no operational `AGENT_RELAY_PUSH_TOKEN` configuration;
-- coverage to appear in the GitHub Actions job summary;
-- the complete suite to pass for the final PR head.
+- 114 tests passed and 0 failed;
+- line coverage: 98.59%;
+- branch coverage: 88.11%;
+- function coverage: 96.88%;
+- the coverage report was published in the GitHub Actions job summary;
+- no Docker, Compose, GitHub API, hosted service, external network service, or external credential was invoked by the test suite.
+
+Acceptance is satisfied:
+
+- every executable repository script has an actual-process integration path;
+- no automated test invokes Docker, Compose, GitHub APIs, hosted services, or external credentials;
+- the two pre-existing completed plans have the exact blob SHA present on `main`;
+- current workflow and operations documentation contain no operational `AGENT_RELAY_PUSH_TOKEN` configuration;
+- coverage appears in the GitHub Actions job summary;
+- the complete suite passed for the reviewed head.
 
 ## Outcomes & Retrospective
 
-Pending final validation and review.
+PR #9 now preserves completed plans, uses only the built-in workflow publication token, integration-tests all repository runtime scripts with local fixtures, and exposes coverage directly in GitHub Actions. The final review found no remaining defect within this correction scope.

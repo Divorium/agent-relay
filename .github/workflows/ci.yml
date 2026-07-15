@@ -80,10 +80,6 @@ jobs:
         run: |
           docker run --rm --privileged --user root --entrypoint /bin/bash agent-relay:ci -lc '
             set -euxo pipefail
-            bwrap_path="$(find /usr/local/lib/node_modules/@openai/codex -type f -name bwrap -print -quit)"
-            test -n "$bwrap_path"
-            chown root:root "$bwrap_path"
-            chmod 4755 "$bwrap_path"
             runuser -u agent -- test ! -w /home/agent/.cargo
             runuser -u agent -- test ! -w /home/agent/.rustup
             runuser -u agent -- test ! -w /runner
@@ -113,14 +109,14 @@ jobs:
             printf stale-codex-state > /home/agent/.codex/sentinel
             printf stale-tool-state > /home/agent/stale-context
             chown agent:agent /home/agent/.codex/sentinel /home/agent/stale-context
-            runuser -u agent -- /usr/local/bin/codex \
+            /usr/local/bin/codex \
               -c features.memories=false \
               -c "default_permissions=\"relay\"" \
               -c "permissions.relay.extends=\":workspace\"" \
               -c "permissions.relay.filesystem={\"/home/agent/.codex\"=\"deny\",\"/app\"=\"deny\",\"/home/relay\"=\"deny\",\"/runner\"=\"deny\",\"/tmp\"=\"deny\",\"/var/tmp\"=\"deny\",\"/tmp/agent-relay-runtime\"=\"write\",\"/tmp/codex-root\"=\"deny\",\"/tmp/codex-root/current\"=\"write\",\"/tmp/codex-root/current/.git\"=\"read\"}" \
               -c permissions.relay.network.enabled=true \
               sandbox -P relay -C /tmp/codex-root/current \
-              /bin/bash -lc "git status --short >/dev/null && test ! -r /home/agent/.codex/sentinel && test ! -w /runner && test ! -r /tmp/codex-root/sibling/private && test ! -r /tmp/unrelated-context && test ! -r /var/tmp/unrelated-context && test ! -r /app/dist/src/server.js && touch /tmp/agent-relay-runtime/runtime-write-ok && touch workspace-write-ok && ! touch .git/sandbox-write-denied"
+              /usr/sbin/runuser -u agent -- /bin/bash -lc "git status --short >/dev/null && test ! -r /home/agent/.codex/sentinel && test ! -w /runner && test ! -r /tmp/codex-root/sibling/private && test ! -r /tmp/unrelated-context && test ! -r /var/tmp/unrelated-context && test ! -r /app/dist/src/server.js && touch /tmp/agent-relay-runtime/runtime-write-ok && touch workspace-write-ok && ! touch .git/sandbox-write-denied"
             test -f /tmp/agent-relay-runtime/runtime-write-ok
             test -f /tmp/codex-root/current/workspace-write-ok
             test ! -e /tmp/codex-root/current/.git/sandbox-write-denied

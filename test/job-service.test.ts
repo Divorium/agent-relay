@@ -1,12 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { JobService } from "../src/application/job-service.js";
 import { JobStore } from "../src/persistence/job-store.js";
 import type { CreateJobRequest, JobRecord } from "../src/contracts/job.js";
 import type { CodexExecutor } from "../src/execution/codex-executor.js";
+
+function createSymlink(target: string, path: string): void {
+  const result = spawnSync("ln", ["-s", target, path], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+}
 
 const planPath = "docs/exec-plans/active/plan.md";
 
@@ -158,7 +164,7 @@ test("invalid and symlinked plans are rejected before executor invocation", asyn
         await rm(join(fixture.workspace, planPath));
         if (kind === "symlink") {
           await writeFile(join(fixture.workspace, "real-plan.md"), "# Plan\n");
-          await symlink(join(fixture.workspace, "real-plan.md"), join(fixture.workspace, planPath));
+          createSymlink(join(fixture.workspace, "real-plan.md"), join(fixture.workspace, planPath));
         }
         await assert.rejects(service.create(request(`invalid-${kind}`)), /does not exist|symbolic links/);
         assert.equal(executions, 0);

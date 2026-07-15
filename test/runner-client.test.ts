@@ -367,7 +367,8 @@ test("workflow template contains no model result-artifact contract", async () =>
   assert.doesNotMatch(workflow, /inputs\.branch|\bmode:|AGENT_RELAY_REQUEST_ID|AGENT_RELAY_MODE|AGENT_RELAY_OUTPUT_ARCHIVE_PATH|\.agent-relay|result\.json/);
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /AGENT_RELAY_TOKEN: \$\{\{ secrets\.AGENT_RELAY_TOKEN \}\}/);
-  assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ secrets\.AGENT_RELAY_PUSH_TOKEN \|\| github\.token \}\}/);
+  assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.doesNotMatch(workflow, /AGENT_RELAY_PUSH_TOKEN/);
   assert.match(workflow, /node \/runner\/client\.mjs 2>&1 \| tee/);
   assert.match(workflow, /run: \/runner\/finalize\.sh/);
 });

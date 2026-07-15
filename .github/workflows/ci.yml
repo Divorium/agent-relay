@@ -80,6 +80,9 @@ jobs:
         run: |
           docker run --rm --privileged --user root --entrypoint /bin/bash agent-relay:ci -lc '
             set -euxo pipefail
+            bwrap_path="$(command -v bwrap)"
+            chown root:root "$bwrap_path"
+            chmod 4755 "$bwrap_path"
             mkdir -p /tmp/codex-root/current /tmp/codex-root/sibling /tmp/agent-relay-runtime
             chown -R agent:agent /tmp/codex-root /tmp/agent-relay-runtime
             runuser -u agent -- git -C /tmp/codex-root/current init

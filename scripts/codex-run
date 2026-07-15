@@ -9,6 +9,24 @@ fi
 umask 0077
 agent_home=/home/agent
 codex_home="$agent_home/.codex"
+workspace="$(realpath "$PWD")"
+agent_uid="$(id -u)"
+
+clean_owned_temp_root() {
+  local root="$1"
+  local path
+  [[ -d "$root" ]] || return 0
+  for path in "$root"/* "$root"/.[!.]* "$root"/..?*; do
+    [[ -e "$path" || -L "$path" ]] || continue
+    case "$workspace/" in
+      "$path"/*) continue ;;
+    esac
+    if [[ "$(stat -c %u -- "$path")" == "$agent_uid" ]]; then
+      rm -rf -- "$path"
+    fi
+  done
+}
+
 mkdir -p "$codex_home"
 find "$agent_home" -mindepth 1 -maxdepth 1 \
   ! -name .cargo \
@@ -16,6 +34,8 @@ find "$agent_home" -mindepth 1 -maxdepth 1 \
   ! -name .codex \
   -exec rm -rf -- {} +
 find "$codex_home" -mindepth 1 -maxdepth 1 ! -name auth.json -exec rm -rf -- {} +
+clean_owned_temp_root /tmp
+clean_owned_temp_root /var/tmp
 
 exec /usr/bin/env -i \
   HOME=/home/agent \

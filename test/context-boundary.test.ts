@@ -89,7 +89,8 @@ test("workflow scopes credentials and rejects alternate instruction channels", a
     assert.match(workflow, /persist-credentials: false/);
     assert.match(workflow, /Verify credential-free checkout/);
     assert.match(workflow, /AGENT_RELAY_TOKEN: \$\{\{ secrets\.AGENT_RELAY_TOKEN \}\}/);
-    assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ secrets\.AGENT_RELAY_PUSH_TOKEN \|\| github\.token \}\}/);
+    assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ github\.token \}\}/);
+    assert.doesNotMatch(workflow, /AGENT_RELAY_PUSH_TOKEN/);
     assert.match(workflow, /! -f "\$\{plan_path\}" \|\| -L "\$\{plan_path\}"/);
     assert.doesNotMatch(workflow, /persist-credentials: true|AGENT_RELAY_REQUEST_ID|AGENT_RELAY_MODE|AGENT_RELAY_OUTPUT_ARCHIVE_PATH|\.agent-relay|result\.json|\bmode:/);
   }
@@ -118,6 +119,7 @@ test("packaging exposes only current per-run context", async () => {
   assert.doesNotMatch(gitignore, /\.agent-relay/);
   assert.doesNotMatch(dockerignore, /\.agent-relay/);
   assert.match(packageJson, /"check:shell"/);
+  assert.match(packageJson, /--experimental-test-coverage/);
 
   await assert.rejects(readFile(".github/workflows/finalize-context-audit.yml", "utf8"), /ENOENT/);
   await assert.rejects(readFile("scripts/isolation-smoke.sh", "utf8"), /ENOENT/);

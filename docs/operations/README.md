@@ -1,5 +1,7 @@
 # Agent Relay Operations
 
+All commands in this document run on the Docker host. They are never task-agent validation commands and must not be executed by Codex or by the containerized GitHub runner.
+
 ## Configure
 
 Copy `.env.example` to `.env` and provide:

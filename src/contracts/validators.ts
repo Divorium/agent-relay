@@ -4,6 +4,7 @@ import type { CreateJobRequest } from "./job.js";
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const RELATIVE_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$)).+$/;
+const ACTIVE_PLAN_PATH = /^docs\/exec-plans\/active\/[A-Za-z0-9._-]+\.md$/;
 
 function asObject(value: unknown, name: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -37,8 +38,8 @@ export function validateCreateJobRequest(value: unknown): CreateJobRequest {
   if (!RELATIVE_PATH.test(workspace)) throw new RelayError("INVALID_REQUEST", "workspace must be a safe relative path", 400);
 
   const planPath = requiredString(object.planPath, "planPath", 512);
-  if (!RELATIVE_PATH.test(planPath) || !planPath.endsWith(".md")) {
-    throw new RelayError("INVALID_REQUEST", "planPath must be a safe relative Markdown path", 400);
+  if (!ACTIVE_PLAN_PATH.test(planPath)) {
+    throw new RelayError("INVALID_REQUEST", "planPath must identify a Markdown file directly under docs/exec-plans/active", 400);
   }
 
   return { requestId, workspace, planPath };

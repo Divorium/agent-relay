@@ -2,17 +2,19 @@
 
 This ExecPlan is a living document. The sections `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` must be kept current as work proceeds. Maintain this document in accordance with `.agent/PLANS.md`. Only this selected file under `docs/exec-plans/active/` is the implementation instruction for this task.
 
-The mandatory runtime baseline is `main` commit `f043af2fa9eb0420a0d64684485700f92a5dc425`. The reviewed implementation snapshot before this plan-only revision is `215c032905ad4fe962125b7fdc822ee4a4a7c56a`. If `origin/main` does not resolve to the pinned baseline when Codex starts, Codex must add a `[blocked]` Progress entry describing the new SHA and stop before editing implementation files. Codex must not silently expand the task to a newer baseline.
+The mandatory runtime baseline is `main` commit `f043af2fa9eb0420a0d64684485700f92a5dc425`. The reviewed implementation snapshot before the implementation-readiness revisions is `215c032905ad4fe962125b7fdc822ee4a4a7c56a`. Codex must verify that the pinned commit exists and is an ancestor of `HEAD`. If `refs/remotes/origin/main` exists and resolves to a different commit, Codex must add a `[blocked]` Progress entry describing the new SHA and stop before editing implementation files. Absence of the remote-tracking ref is not a blocker when the pinned commit exists in the checkout. Codex must not silently expand the task to a newer baseline.
 
-Codex may use read-only Git commands such as `status`, `diff`, `show`, `grep`, `rev-parse`, and `merge-base`. It must not run `git add`, `commit`, `merge`, `rebase`, `reset`, `restore`, `checkout`, `cherry-pick`, `push`, or another command that mutates Git history, the index, or tracked files outside the edits required by this plan. The generic `commit frequently` sentence in `.agent/PLANS.md` does not authorize Git mutations in this repository; record stopping points frequently in `Progress` instead. The GitHub runner owns commit and push.
+Codex may use read-only Git commands such as `status`, `diff`, `show`, `grep`, `rev-parse`, `show-ref`, `cat-file`, and `merge-base`. It must not run `git add`, `commit`, `merge`, `rebase`, `reset`, `restore`, `checkout`, `cherry-pick`, `push`, or another command that mutates Git history, the index, or tracked files outside the edits required by this plan. The generic `commit frequently` sentence in `.agent/PLANS.md` does not authorize Git mutations in this repository; record stopping points frequently in `Progress` instead. The GitHub runner owns commit and push.
 
 Codex must not edit `AGENTS.md`, `.agent/PLANS.md`, any file under `.github/workflows/`, or any file under `examples/github-actions/`. Those instruction and workflow files are human-maintained. Codex must preserve their contents exactly as they exist in reviewed snapshot `215c032905ad4fe962125b7fdc822ee4a4a7c56a`.
 
 ## Purpose / Big Picture
 
-After this work, an operator can watch the exact bytes emitted by Codex stdout and stderr while a job is running, reconnect from an acknowledged byte position after a transient output-transport interruption, and receive a byte-identical terminal archive only after Relay has finalized the complete output stream.
+After this work, an operator can watch every Codex stdout and stderr chunk without decoding, redaction, truncation, or mutation while a job is running, reconnect from an acknowledged byte position after a transient output-transport interruption, and receive a byte-identical terminal archive only after Relay has finalized the complete output stream.
 
-Relay stores the authoritative combined stream in the callback order in which Node delivers stdout and stderr data events. The authoritative output, output endpoint, runner archive, and runner live byte stream are intentionally raw and unredacted, including invalid UTF-8 and secret-looking byte sequences. This makes the output sensitive. Relay-side service logging is only a best-effort presentation copy and may be disabled after its sink fails; runner archive and runner stdout handling are required local sinks and their failure fails the workflow.
+Relay stores the authoritative combined stream in the callback order in which Node delivers stdout and stderr data events. The authoritative output, output endpoint, and runner archive are exactly the child bytes, including invalid UTF-8 and secret-looking sequences. Runner stdout surrounds the raw child chunks with unpredictable GitHub `stop-commands` and resume guard lines, but each child chunk inside that presentation envelope is written byte-for-byte and guard bytes never enter the archive or remote offset. This output is intentionally sensitive.
+
+Relay-side service stdout is only a best-effort presentation copy. After authoritative persistence, Relay attempts to mirror the chunk once; if stdout is unavailable, returns backpressure, emits an error, or closes, Relay permanently disables that mirror for the job without delaying, failing, or reordering authoritative output. Runner archive and guarded runner stdout are required local sinks; their failure fails the workflow.
 
 `MAX_OUTPUT_BYTES` is a hard limit over all bytes accepted from both child streams. Reaching the limit terminates the child, fails the job and output stream with `OUTPUT_LIMIT_EXCEEDED`, preserves only bytes accepted before the rejected chunk, emits no textual truncation marker, and never publishes clean EOF or a final archive.
 
@@ -39,23 +41,25 @@ Keep this section append-only for completed historical entries. Split partially 
 - [x] (2026-07-15 21:30Z) Merged pinned `main` `f043af2fa9eb0420a0d64684485700f92a5dc425` into the PR branch. The branch became zero commits behind `main`; conflicts retained the prototype for later plan-driven repair.
 - [x] (2026-07-15 22:23Z) Repaired merge-induced result-contract and test failures through commits `e83d690e03cc534a37e8f5e62069854908790f74`, `052a081787c2912c8ae5254e9ae2f6cc44e971c0`, and `215c032905ad4fe962125b7fdc822ee4a4a7c56a`. GitHub Actions run `29455214780` completed successfully with 86 tests passed, zero failed, and `npm run check` successful. This is a green baseline, not feature acceptance.
 - [x] (2026-07-16, implementation-readiness review) Re-reviewed the current branch and plan. Pinned the `main` baseline, protected all workflow files, resolved raw-output versus redaction semantics, defined terminal ordering and interrupted recovery, allowed transient output reconnect after the job becomes terminal, narrowed Codex-owned files, and replaced broad reconciliation prose with independently verifiable milestones.
+- [x] (2026-07-16, second readiness pass) Verified the revised plan against the checkout workflow and implementation contracts. Removed reliance on a mandatory `origin/main` ref, fixed queue thresholds, made prepare transactional rather than falsely cross-file atomic, specified terminal job mappings and final output confirmation, defined the workflow-command presentation envelope, tightened archive-path validation, and prohibited deletion or weakening of the 86-test baseline.
 
 - [ ] Verify the pinned baseline and protected-file hashes before editing. Record the command output in `Artifacts and Notes`. If the baseline or a protected file differs, add a `[blocked]` entry and stop.
 - [ ] Remove the executor's dual legacy output path. `CodexExecutor` must always use the prepared `OutputStore` writer for production execution; it must not create or append the output file itself, truncate output, add a marker, decode bytes, or import or call `StreamingRedactor`. Keep the standalone redaction utility and its independent unit tests unchanged, but add tests proving secret-looking and invalid UTF-8 bytes pass unchanged through executor, endpoint, and archive.
-- [ ] Implement the versioned per-job checkpoint and private file layout described in `Interfaces and Dependencies`. `prepare` must atomically establish both the empty output and initial checkpoint or remove its own partial resources. Physical file size must never become the committed boundary.
+- [ ] Implement the versioned per-job checkpoint and private file layout described in `Interfaces and Dependencies`. `prepare` must transactionally create the exclusive empty output and initial checkpoint: after success both exist; after any failure it closes and removes every resource created by that attempt. No cross-file atomicity is claimed. Physical file size must never become the committed boundary.
 - [ ] Serialize every append inside `OutputStore`, write each accepted chunk completely, atomically replace the checkpoint before exposing the new `committedLength`, enforce first-terminal-wins, and finalize the writer by sealing appends, draining pending writes, syncing, attempting close on every path, and clearing writer ownership before any terminal checkpoint is published.
-- [ ] Enforce `MAX_OUTPUT_BYTES` over total accepted bytes before accepting a child chunk. Implement a byte-bounded FIFO with explicit high and low watermarks, pause both child streams at the high watermark, resume only below the low watermark, reject the entire chunk that would exceed the hard limit, terminate the child, and keep memory overshoot bounded by already-delivered child chunks.
-- [ ] Implement restart recovery and bounded replay state. Recover accepted or running jobs from the checkpoint, truncate only an uncommitted suffix under exclusive interrupted-recovery ownership, save the job as `interrupted`, publish `OUTPUT_INTERRUPTED` rather than clean EOF, use short-lived read-only handles, make attachment single-flight, release every reader and waiter, and evict terminal state when no lease remains. Corrupt historical output must fail only that job, not service startup.
-- [ ] Implement the exact job and output terminal state machine. The executor must return process outcome only after child close, both streams end, the append queue drains, and the writer is finalized. JobService must save the terminal job record before publishing the matching terminal checkpoint. Completed, non-zero, timed-out, and spawn-failed processes may publish clean output if output finalization succeeded; interrupted, output-limit, write, integrity, and terminal-state failures must publish an output error and never clean EOF.
+- [ ] Enforce `MAX_OUTPUT_BYTES` over total accepted bytes before accepting a child chunk. Use `highWatermark = min(MAX_OUTPUT_BYTES, 1048576)` and `lowWatermark = floor(highWatermark / 2)`. The pending count includes the chunk currently writing and all queued chunks. Pause both child streams when pending bytes are at least the high watermark, resume only when pending bytes are at most the low watermark, reject the entire chunk that would exceed the hard limit, terminate the child, and discard queued chunks after the first persistence or limit failure. Memory above the high watermark is bounded by child chunks already delivered before both streams were paused.
+- [ ] Implement restart recovery and bounded replay state. Recover accepted or running jobs from the checkpoint, truncate only an uncommitted suffix under exclusive interrupted-recovery ownership, save the job as `interrupted` with `errorCode: OUTPUT_INTERRUPTED`, then publish `OUTPUT_INTERRUPTED` rather than clean EOF. If an active job's output is corrupt, save it as interrupted with `OUTPUT_INTEGRITY_FAILED`, do not modify historical bytes, and continue service startup. Use short-lived read-only handles, make attachment single-flight, release every reader and waiter, and evict terminal state when no lease remains.
+- [ ] Implement the exact job and output terminal state machine. The executor must return process outcome only after child close, both streams end, the append queue drains, and the writer is finalized. JobService must save the terminal job record before publishing the matching terminal checkpoint. Map zero exit to `completed`; non-zero exit to `failed` with `CODEX_FAILED` and the actual exit code; timeout to `timed_out` with `CODEX_TIMEOUT` and any available exit code; spawn failure to `failed` with `CODEX_FAILED`; and output infrastructure failure to `failed` with the output error code. Zero, non-zero, timeout, and spawn failure may publish clean output when writer finalization succeeded. Interrupted, output-limit, write, integrity, and terminal-state failures publish an output error and never clean EOF. If terminal job persistence fails, publish `OUTPUT_TERMINAL_STATE_FAILED`; if clean checkpoint publication fails after the job record is terminal, attempt `OUTPUT_TERMINAL_STATE_FAILED` and never expose clean EOF.
 - [ ] Complete the internal output error taxonomy and public filtering. Add exact codes for offset range, integrity, interruption, and terminal-state persistence or disagreement. Keep private paths, checkpoint data, and raw internal messages out of create and poll DTOs and bounded pre-header JSON errors.
-- [ ] Implement the authenticated output endpoint state machine. Validate authentication, job ID, canonical offset, checkpoint, lease, and the first required read or terminal snapshot before raw headers. Implement exact offset acknowledgement, `416` committed-length acknowledgement, raw identity transfer, active following, strict short-read detection, backpressure, pre-header JSON errors, post-header destruction for every error, and unconditional lease and waiter release.
-- [ ] Make `AGENT_RELAY_OUTPUT_ARCHIVE_PATH` mandatory for `runner/client.mjs`, require an absolute path outside `GITHUB_WORKSPACE`, and complete all preflight before POST: bounded settings, active-plan validation, plan-derived subject, redirect policy, signal handlers, stale final removal, exclusive same-directory `0600` temporary archive, and workflow-command guard state.
-- [ ] Implement the runner's output/status state machine. Persist each complete chunk to the temporary archive, then perform required guarded stdout presentation, then advance the confirmed offset. Retry only transient output acquisition, idle, body, or premature-EOF failures from the confirmed offset until clean terminal output is established or the global deadline expires, including after the job status is terminal. Explicit HTTP or protocol responses and every local sink, polling, signal, or finalization failure are fatal and never reconnect.
-- [ ] Publish a final archive only after clean terminal output, file sync, successful close, and atomic rename. Preserve the complete archive for `failed` and `timed_out` jobs when their output is clean, but still fail the workflow for the job status. Any output error or incomplete local handling removes only attempt-owned temporary state, leaves the final path absent, and leaves `$GITHUB_OUTPUT` unchanged.
-- [ ] Update `README.md`, `docs/operations/README.md`, and `docs/operations/live-codex-logs.md` to describe the final sensitive raw-output contract, offset protocol, retry behavior, archive lifecycle, failure behavior, limits, and operator handling. Do not edit workflow, packaging, launcher, finalizer, credential, prompt, or public request files unless this plan is first revised with a concrete blocker and the user resolves it.
-- [ ] Add or extend deterministic tests for checkpoint creation and replacement, partial and zero-progress writes, append ordering, watermarks, hard limit, finalization, first-terminal-wins, recovery, corruption isolation, file modes, single-flight attachment, state eviction, compensation, terminal ordering, raw bytes, endpoint protocol, runner reconnect after active and terminal status, workflow-command isolation, signals, archive finalization, and local failure without reconnect.
+- [ ] Implement the authenticated output endpoint state machine. Validate authentication, job ID, canonical offset, checkpoint, lease, and the first required read or terminal snapshot before raw headers. Implement exact offset acknowledgement, `416` committed-length acknowledgement, raw identity transfer, active following, strict short-read detection, backpressure, pre-header JSON errors, post-header destruction for every error, and unconditional lease and waiter release. For terminal output error at an offset below `committedLength`, stream the committed prefix and destroy the transport at the boundary; at the boundary return the fixed JSON error before raw headers.
+- [ ] Make `AGENT_RELAY_OUTPUT_ARCHIVE_PATH` mandatory for `runner/client.mjs`. Require an absolute path whose existing real parent directory resolves outside `GITHUB_WORKSPACE`; reject a path equal to `GITHUB_OUTPUT`. Complete all preflight before POST: bounded settings, active-plan validation, plan-derived subject, redirect policy, signal handlers, stale final removal, exclusive same-directory `0600` temporary archive, and workflow-command guard state.
+- [ ] Implement the runner's output/status state machine. Persist each complete chunk to the temporary archive, then write the unchanged chunk through guarded stdout, then advance the confirmed offset. Use `AGENT_RELAY_REQUEST_TIMEOUT_MS` for each request acquisition, reset an idle timer after every body chunk, and use `AGENT_RELAY_POLL_TIMEOUT_MS` as the global deadline. Retry only transient output acquisition, idle, body, or premature-EOF failures from the confirmed offset, sleeping the configured poll interval up to the remaining deadline. Continue retry after terminal job status until a confirmation request started while the job is known terminal returns zero bytes and clean EOF at the confirmed offset. Explicit HTTP or protocol responses and every JSON polling, local sink, signal, or finalization failure are fatal and never reconnect.
+- [ ] Guard GitHub command parsing without changing authoritative bytes. Immediately before the first raw stdout chunk, write `::stop-commands::<random-token>\n`; after clean completion or on every failure and signal path, write `\n::<random-token>::\n` when stdout remains usable. Guard lines are presentation-only and never affect archive bytes or confirmed offset. Retain no historical output in memory beyond queued chunks and bounded diagnostic bodies.
+- [ ] Publish a final archive only after terminal confirmation, file sync, successful close, and atomic rename. Preserve the complete archive for `failed` and `timed_out` jobs when their output is clean, but still fail the workflow for the job status. Any output error or incomplete local handling removes only attempt-owned temporary state, leaves the final path absent, and leaves `$GITHUB_OUTPUT` unchanged.
+- [ ] Update `README.md`, `docs/operations/README.md`, and `docs/operations/live-codex-logs.md` to describe the final sensitive raw-output contract, presentation guard envelope, offset protocol, retry and confirmation behavior, archive lifecycle, failure behavior, limits, and operator handling. Do not edit workflow, packaging, launcher, finalizer, credential, prompt, or public request files unless this plan is first revised with a concrete blocker and the user resolves it.
+- [ ] Preserve the complete 86-test baseline. Do not delete, skip, mark todo, weaken, or replace a baseline test except when an assertion directly conflicts with the intentional raw-output or mandatory-archive contract; in that case replace it with an equal or stronger test and record the replacement. Add deterministic tests for checkpoint creation and replacement, partial and zero-progress writes, append ordering, watermarks, hard limit, finalization, first-terminal-wins, recovery, corruption isolation, file modes, single-flight attachment, state eviction, compensation, terminal ordering, raw bytes, endpoint protocol, runner reconnect after active and terminal status, terminal confirmation, workflow-command isolation, signals, archive finalization, and local failure without reconnect.
 - [ ] Add local full-flow tests for successful binary live output with one transient reconnect and a byte-identical archive; Relay restart after an uncommitted physical suffix; clean diagnostic archive for a failed process; output-error final archive absence; and local sink failure after an archive side effect with no reconnect, duplicate, final archive, or `$GITHUB_OUTPUT` mutation.
-- [ ] Run all focused tests, `npm run check`, and `git diff --check` on the final working tree. Record commands, exact test counts, coverage, failures, and protected-file verification in `Artifacts and Notes`. Update `Outcomes & Retrospective` and append a final revision note before considering implementation complete.
+- [ ] Run all focused tests, `npm run check`, and `git diff --check` on the final working tree. The final test count must be at least 86 with zero skipped, todo, cancelled, or failed tests. Record commands, exact counts, coverage, failures, baseline-test replacements, and protected-file verification in `Artifacts and Notes`. Update `Outcomes & Retrospective` and append a final revision note before considering implementation complete.
 
 ## Surprises & Discoveries
 
@@ -65,6 +69,9 @@ Keep this section append-only for completed historical entries. Split partially 
 - Observation: the current branch is already merged with the pinned `main` baseline and has a green test baseline.
   Evidence: comparison with `main` reports `behind_by: 0`; CI run `29455214780` passed 86 tests on head `215c032905ad4fe962125b7fdc822ee4a4a7c56a`.
 
+- Observation: the workflow checkout has complete history but a remote-tracking `origin/main` ref is not a safe invariant.
+  Evidence: `.github/workflows/agent-relay.yml` checks out the resolved head SHA with `fetch-depth: 0`; the pinned baseline is already an ancestor of the branch and can be verified directly by commit SHA.
+
 - Observation: a green baseline does not implement the plan's durability and failure semantics.
   Evidence: `src/persistence/output-store.ts` has no checkpoint, derives committed length from file size during attach, creates a missing terminal output file, keeps one read-write handle for replay, and publishes terminal state without writer sync or close.
 
@@ -72,24 +79,30 @@ Keep this section append-only for completed historical entries. Split partially 
   Evidence: the `OutputStore` path preserves raw bytes, while the fallback path imports `StreamingRedactor`, appends its own output file, truncates, and inserts `[OUTPUT TRUNCATED]`. Production raw output must have one path.
 
 - Observation: `runner/client.mjs` currently performs only one output request.
-  Evidence: it has no confirmed-offset reconnect loop, no idle timer, no signal cleanup, and no workflow-command suppression. Its archive path is optional even though the workflow feature requires a terminal archive.
+  Evidence: it has no confirmed-offset reconnect loop, no idle timer, no signal cleanup, no terminal confirmation, and no workflow-command suppression. Its archive path is optional even though the workflow feature requires a terminal archive.
 
 - Observation: retry eligibility cannot depend only on an active job status.
-  Evidence: a transient connection can fail after the child and job become terminal but before the runner has received all committed bytes or clean EOF. The runner must continue transient output recovery after terminal status until output completion is established.
+  Evidence: a transient connection can fail after the child and job become terminal but before the runner has received all committed bytes or clean EOF. The runner must continue transient output recovery after terminal status until output completion is confirmed.
+
+- Observation: a graceful body EOF after terminal status is not sufficient by itself to prove that an earlier connection delivered every byte.
+  Evidence: the runner needs a final request from the confirmed offset while the job is already known terminal; only a zero-byte clean response establishes terminal output completion.
+
+- Observation: workflow-command safety requires a presentation envelope.
+  Evidence: child chunks remain exact inside stdout, but unpredictable stop and resume guard lines must surround them. Archive bytes and remote offsets exclude those guard lines.
 
 - Observation: output terminal state and job terminal state are related but not identical.
   Evidence: a non-zero, timed-out, or spawn-failed process can have a complete clean diagnostic stream; an interrupted or output-infrastructure failure cannot publish clean EOF even when the job record is terminal.
 
 - Observation: workflow files cannot be delegated to Codex.
-  Evidence: the user assigned workflow maintenance to the human reviewer. The protected scope therefore covers every file under `.github/workflows/` and `examples/github-actions/`, not only the two files currently changed by the PR.
+  Evidence: the user assigned workflow maintenance to the human reviewer. The protected scope covers every file under `.github/workflows/` and `examples/github-actions/`, not only the two files currently changed by the PR.
 
 - Observation: `.agent/PLANS.md` contains generic Git advice that conflicts with repository ownership.
   Evidence: this active plan explicitly overrides `commit frequently` for this task; stopping points are recorded in `Progress`, while the runner remains the sole Git mutation owner.
 
 ## Decision Log
 
-- Decision: pin the runtime baseline to `f043af2fa9eb0420a0d64684485700f92a5dc425`.
-  Rationale: silently following a newer `origin/main` could change scope after review and could require human-owned workflow changes.
+- Decision: pin the runtime baseline to `f043af2fa9eb0420a0d64684485700f92a5dc425` and verify it directly by commit identity and ancestry.
+  Rationale: silently following a newer `origin/main` could change scope after review, while requiring a remote-tracking ref could block a valid detached checkout.
   Date/Author: 2026-07-16 / implementation-readiness review.
 
 - Decision: preserve `.agent/PLANS.md`, `AGENTS.md`, all GitHub workflow files, and all example workflow files exactly as reviewed.
@@ -100,17 +113,25 @@ Keep this section append-only for completed historical entries. Split partially 
   Rationale: the runner owns commit and push, and the specific repository rule overrides the generic article sentence.
   Date/Author: 2026-07-16 / implementation-readiness review.
 
-- Decision: authoritative output, endpoint output, runner archive, and runner live bytes are raw and unredacted.
-  Rationale: byte identity and invalid-UTF-8 support are core feature requirements. `StreamingRedactor` remains an unrelated utility but is not part of any raw-output path.
+- Decision: authoritative output, endpoint output, and runner archive are raw and unredacted; runner stdout contains unchanged raw chunks inside a command-suppression envelope.
+  Rationale: byte identity and invalid-UTF-8 support are core requirements, while GitHub command parsing must remain inert. `StreamingRedactor` remains an unrelated utility and is not part of any raw-output path.
   Date/Author: 2026-07-16 / implementation-readiness review.
 
 - Decision: restart safety covers Relay process termination and restart, not host power loss.
   Rationale: complete writes plus same-directory atomic checkpoint replacement are sufficient without per-append `fsync`; clean terminal publication still requires final writer sync and close.
   Date/Author: 2026-07-15 / scope decision.
 
+- Decision: `prepare` is transactional through exclusive creation and compensation, not atomically committed across two files.
+  Rationale: a filesystem rename cannot atomically create both output and checkpoint, but the method can guarantee that successful return means both exist and failure removes attempt-owned partial resources.
+  Date/Author: 2026-07-16 / second readiness pass.
+
 - Decision: the checkpoint is authoritative for committed length and terminal output facts; physical file size is never authoritative.
   Rationale: a process may terminate after extending the file but before advancing the checkpoint.
   Date/Author: 2026-07-15 / persistence review.
+
+- Decision: use a 1 MiB high watermark capped by `MAX_OUTPUT_BYTES` and a low watermark equal to half the high watermark.
+  Rationale: this provides a fixed memory bound without introducing another environment setting.
+  Date/Author: 2026-07-16 / second readiness pass.
 
 - Decision: the executor finalizes the writer, JobService saves the terminal job record, and only then may JobService publish the matching clean or error terminal checkpoint.
   Rationale: clean EOF must never become visible while the durable job record is still active or contradictory.
@@ -120,15 +141,15 @@ Keep this section append-only for completed historical entries. Split partially 
   Rationale: failed and timed-out processes can produce complete diagnostics; an interrupted process cannot prove complete output and must terminate with `OUTPUT_INTERRUPTED`.
   Date/Author: 2026-07-16 / implementation-readiness review.
 
-- Decision: Relay-side process stdout is best-effort, while runner archive and guarded runner stdout are required local sinks.
-  Rationale: Relay logging failure must not invalidate authoritative bytes, but runner local failure makes offset acknowledgement unsafe and must prevent reconnect.
-  Date/Author: 2026-07-16 / implementation-readiness review.
+- Decision: Relay-side process stdout is attempted once after persistence and permanently disabled for that job on backpressure, error, close, or unavailable state; runner archive and guarded runner stdout are required local sinks.
+  Rationale: Relay logging slowness must not stall or invalidate authoritative output, while runner local failure makes offset acknowledgement unsafe and must prevent reconnect.
+  Date/Author: 2026-07-16 / second readiness pass.
 
-- Decision: transient output transport recovery remains allowed after the job status becomes terminal until the runner establishes clean output EOF or receives an output terminal error.
-  Rationale: job status does not prove that the runner received all authoritative bytes.
-  Date/Author: 2026-07-16 / implementation-readiness review.
+- Decision: transient output transport recovery remains allowed after the job status becomes terminal until a terminal confirmation request returns zero bytes and clean EOF at the confirmed offset.
+  Rationale: job status does not prove that the runner received all authoritative bytes, and an earlier graceful EOF is not a sufficient final confirmation.
+  Date/Author: 2026-07-16 / second readiness pass.
 
-- Decision: redirects, explicit HTTP errors, protocol mismatches, polling failures, signals, and local sink or finalization failures are fatal and non-retryable.
+- Decision: redirects, explicit HTTP errors, protocol mismatches, JSON polling failures, signals, and local sink or finalization failures are fatal and non-retryable.
   Rationale: reconnect is safe only for remote output acquisition or body failures before local acknowledgement; local side effects may already have occurred.
   Date/Author: 2026-07-16 / implementation-readiness review.
 
@@ -150,7 +171,7 @@ This plan remains active. The branch has a green current-main baseline, but the 
 
 The instruction files, workflows, `main` merge, result-free request, active-plan validation, launcher, environment, credential boundary, finalizer, packaging, and baseline tests are already in place. Codex must preserve them rather than reimplement them.
 
-Remaining work is deliberately limited to durable output persistence, executor backpressure and terminal behavior, job/output terminal ordering and recovery, the output endpoint, the runner output state machine, documentation, and deterministic tests. Completion requires every unchecked Progress item and all working-tree validation, not merely a green pre-existing CI run.
+Remaining work is deliberately limited to durable output persistence, executor backpressure and terminal behavior, job/output terminal ordering and recovery, the output endpoint, the runner output and confirmation state machine, documentation, and deterministic tests. Completion requires every unchecked Progress item and all working-tree validation, not merely a green pre-existing CI run.
 
 ## Context and Orientation
 
@@ -162,7 +183,7 @@ Agent Relay accepts a job for one repository workspace and launches Codex throug
 
 `src/api/server.ts` exposes authenticated create, poll, and output APIs. A pre-header output failure occurs before octet-stream headers and uses the bounded JSON error envelope. A post-header output failure occurs after octet-stream headers and destroys the transport; it never changes representation to JSON.
 
-`runner/client.mjs` validates local context, derives the commit subject, submits and polls the job, consumes output from a confirmed byte offset, writes the temporary archive, produces a guarded live view, and updates `$GITHUB_OUTPUT` only after output and job success. Confirmed offset is the number of remote bytes for which every required local operation completed successfully.
+`runner/client.mjs` validates local context, derives the commit subject, submits and polls the job, consumes output from a confirmed byte offset, writes the temporary archive, produces a guarded live view, confirms terminal output with a final empty request, and updates `$GITHUB_OUTPUT` only after output and job success. Confirmed offset is the number of remote bytes for which every required local operation completed successfully.
 
 `runner/finalize.sh` remains unchanged. It decides whether the worktree has changes, validates the commit subject, creates the commit, injects publication credentials only for push, and restores the uncommitted worktree if push fails.
 
@@ -172,39 +193,39 @@ The expected Codex-owned implementation files are `src/contracts/errors.ts`, `sr
 
 ### Milestone 1: Freeze the reviewed baseline and remove the executor's competing output contract
 
-Verify the pinned `main` SHA, protected files, current public request, fixed launcher, active-plan validation, credentials, and packaging before changing runtime code. Remove only the executor's redacted/truncating fallback path and make the prepared OutputStore writer the single execution path. Preserve the standalone redaction utility, but prove it is not imported by the executor and does not touch raw bytes.
+Verify the pinned commit, optional remote-tracking ref, protected files, current public request, fixed launcher, active-plan validation, credentials, and packaging before changing runtime code. Remove only the executor's redacted/truncating fallback path and make the prepared OutputStore writer the single execution path. Preserve the standalone redaction utility, but prove it is not imported by the executor and does not touch raw bytes.
 
-The milestone is complete when the baseline assertions pass, the executor has one output path, the existing non-streaming security and contract tests still pass, and new executor tests preserve invalid UTF-8 and secret-looking bytes exactly.
+The milestone is complete when the baseline assertions pass, the executor has one output path, all unaffected baseline tests still pass, and new executor tests preserve invalid UTF-8 and secret-looking bytes exactly.
 
 ### Milestone 2: Build durable, bounded output persistence and recovery
 
-Replace in-memory file-size authority with the exact checkpoint model below. Implement atomic prepare, serialized append, complete writes, checkpoint replacement, hard limit accounting, writer finalization, first-terminal-wins, single-flight attachment, short-lived reads, leases, state eviction, interrupted recovery, and corruption isolation. Extend JobStore only as needed to enumerate and save records during restart recovery while preserving request-index idempotency and compare-delete compensation.
+Replace in-memory file-size authority with the exact checkpoint model below. Implement transactional prepare, serialized append, complete writes, checkpoint replacement, hard limit accounting, writer finalization, first-terminal-wins, single-flight attachment, short-lived reads, leases, state eviction, interrupted recovery, and corruption isolation. Extend JobStore only as needed to enumerate and save records during restart recovery while preserving request-index idempotency and compare-delete compensation.
 
 The milestone is complete when deterministic persistence and job-service tests cover every write, checkpoint, terminal, recovery, cleanup, and compensation boundary without timing-only assertions.
 
 ### Milestone 3: Integrate child execution with the job/output terminal state machine
 
-Move byte FIFO and child backpressure into the executor while keeping OutputStore append serialization authoritative. Ensure the executor waits for child close, both stream endings, queue drain, and writer finalization. Return enough process outcome for JobService to distinguish zero exit, non-zero exit, timeout, and spawn failure. JobService saves the terminal job record first, then publishes the matching output terminal checkpoint. Output-infrastructure failures terminate the child and publish an output error after the failed job record.
+Move byte FIFO and child backpressure into the executor while keeping OutputStore append serialization authoritative. Ensure the executor waits for child close, both stream endings, queue drain, and writer finalization. Return process outcome for zero exit, non-zero exit, and timeout; finalize an empty writer before reporting spawn failure. JobService saves the exact terminal job record first, then publishes the matching output terminal checkpoint. Output-infrastructure failures terminate the child, discard later queued chunks, finalize the writer, save the failed job, and publish an output error.
 
-The milestone is complete when tests demonstrate exact callback order, bounded pending bytes, child termination on limit or persistence failure, diagnostic clean output for non-zero and timed-out processes, output errors for interrupted and infrastructure failures, and no clean EOF before job persistence.
+The milestone is complete when tests demonstrate exact callback order, fixed watermarks, bounded pending bytes, child termination on limit or persistence failure, disabled Relay mirror on backpressure or failure, diagnostic clean output for non-zero, timeout, and spawn failure, output errors for interrupted and infrastructure failures, and no clean EOF before job persistence.
 
 ### Milestone 4: Implement the exact output HTTP protocol
 
-Build the endpoint around an acquired OutputStore lease. Resolve all errors that can be known before headers, perform the first required read before headers, acknowledge the requested offset exactly, stream only committed bytes, follow active output, and release every resource. Return `416` for an offset above the committed boundary. If an error occurs after raw headers, destroy the response for every error type.
+Build the endpoint around an acquired OutputStore lease. Resolve all errors that can be known before headers, perform the first required read before headers, acknowledge the requested offset exactly, stream only committed bytes, follow active output, and release every resource. Return `416` for an offset above the committed boundary. A terminal error with an unread committed prefix may stream that prefix, but reaching the boundary destroys the raw response; a new boundary request receives the fixed JSON error before headers.
 
 The milestone is complete when endpoint tests cover authentication, canonical offsets, `416`, initial reads, active following, clean empty EOF, terminal errors before and after headers, short reads, backpressure, aborts, and resource release.
 
-### Milestone 5: Implement the runner reconnect and archive state machine
+### Milestone 5: Implement the runner reconnect, confirmation, and archive state machine
 
-Make the archive path mandatory and safe before POST. Install signal and workflow-command handling before remote work. Consume raw responses from the confirmed offset, write archive then guarded stdout then advance the offset, and separate transient output transport failures from every fatal response or local failure. Continue transient recovery even after terminal job status until output completion is proven. Publish the archive atomically and only after clean EOF, then update `$GITHUB_OUTPUT` only for a completed job.
+Make the archive path mandatory and safe before POST. Install signal handling and prepare command-guard state before remote work. Consume raw responses from the confirmed offset, write archive then guarded stdout then advance the offset, and separate transient output transport failures from every fatal response or local failure. Use per-request acquisition timeout, resettable body-idle timeout, configured retry sleep, and a global deadline. Continue transient recovery after terminal job status. Establish completion only with a zero-byte clean response to a request started while the job is already known terminal. Publish the archive atomically and only after that confirmation, then update `$GITHUB_OUTPUT` only for a completed job.
 
-The milestone is complete when runner tests cover reconnect while active and terminal, exact offset progression, idle timeout, redirects, protocol failures, workflow-command-looking bytes, invalid UTF-8, stdout failure, archive failure, signals, failed-job diagnostic archives, output-error archive absence, and finalization ordering.
+The milestone is complete when runner tests cover reconnect while active and terminal, final confirmation, exact offset progression, acquisition and idle timeouts, redirects, protocol failures, command guard lines, invalid UTF-8, stdout failure, archive failure, signals, failed-job diagnostic archives, output-error archive absence, and finalization ordering.
 
 ### Milestone 6: Complete documentation and whole-tree validation
 
 Update only the three operator documents, add local full-flow tests, run focused tests and the complete repository checks, verify protected files are unchanged, and update the living sections of this plan with exact evidence. Do not move the plan to `completed`; the runner or human reviewer handles repository publication after Codex exits.
 
-The milestone is complete when all unchecked Progress items are checked with evidence, `npm run check` and `git diff --check` pass, protected files match the reviewed snapshot, `Outcomes & Retrospective` reflects the implemented result, and the final revision note records the implementation evidence.
+The milestone is complete when all unchecked Progress items are checked with evidence, the final test count is at least 86 with no skipped, todo, cancelled, or failed tests, `npm run check` and `git diff --check` pass, protected files match the reviewed snapshot, `Outcomes & Retrospective` reflects the implemented result, and the final revision note records implementation evidence.
 
 ## Concrete Steps
 
@@ -212,8 +233,11 @@ Run all commands from the repository root. Do not run container-runtime commands
 
 Verify the immutable baseline before editing:
 
-    test "$(git rev-parse origin/main)" = "f043af2fa9eb0420a0d64684485700f92a5dc425"
+    git cat-file -e f043af2fa9eb0420a0d64684485700f92a5dc425^{commit}
     git merge-base --is-ancestor f043af2fa9eb0420a0d64684485700f92a5dc425 HEAD
+    if git show-ref --verify --quiet refs/remotes/origin/main; then
+      test "$(git rev-parse refs/remotes/origin/main)" = "f043af2fa9eb0420a0d64684485700f92a5dc425"
+    fi
     git diff --exit-code 215c032905ad4fe962125b7fdc822ee4a4a7c56a -- AGENTS.md .agent/PLANS.md .github/workflows examples/github-actions
     test "$(git hash-object .agent/PLANS.md)" = "15d9583b1df0663488d55e4fdfea1c6154ba85d1"
     test "$(git hash-object AGENTS.md)" = "619e05959c3d94ecefe3b389935645faf8b0e24b"
@@ -231,17 +255,17 @@ Inspect the existing baseline and implementation before editing:
     git show f043af2fa9eb0420a0d64684485700f92a5dc425:src/persistence/job-store.ts
     git show f043af2fa9eb0420a0d64684485700f92a5dc425:src/api/server.ts
     git show f043af2fa9eb0420a0d64684485700f92a5dc425:runner/client.mjs
-    sed -n '1,280p' src/persistence/output-store.ts
-    sed -n '1,280p' src/execution/codex-executor.ts
-    sed -n '1,260p' src/application/job-service.ts
-    sed -n '1,260p' src/api/server.ts
-    sed -n '1,360p' runner/client.mjs
+    sed -n '1,320p' src/persistence/output-store.ts
+    sed -n '1,320p' src/execution/codex-executor.ts
+    sed -n '1,280p' src/application/job-service.ts
+    sed -n '1,280p' src/api/server.ts
+    sed -n '1,420p' runner/client.mjs
 
 Expected result: the baseline files show the result-free and isolation contracts; the branch files show the incomplete prototype findings documented above.
 
 Implement Milestones 1 through 5 in order. After each milestone, update `Progress`, `Surprises & Discoveries`, `Decision Log` when a decision changes, `Outcomes & Retrospective`, and `Artifacts and Notes`. Do not mark a milestone task complete because code exists; mark it only after its focused tests pass.
 
-Create deterministic focused tests with controlled fake file handles, barriers, local HTTP servers, temporary directories, and fake child processes. Do not rely on arbitrary sleeps to prove ordering or resource release. Expected new focused files are `test/output-store.test.ts`, `test/output-endpoint.integration.test.ts`, and `test/streaming-flow.integration.test.ts`; extending current-main `job-service`, `job-store`, `executor`, `runner-client`, `flow`, `context-boundary`, and packaging tests is also expected.
+Create deterministic focused tests with controlled fake file handles, barriers, local HTTP servers, temporary directories, and fake child processes. Do not rely on arbitrary sleeps to prove ordering or resource release. Expected new focused files are `test/output-store.test.ts`, `test/output-endpoint.integration.test.ts`, and `test/streaming-flow.integration.test.ts`; extending baseline `job-service`, `job-store`, `executor`, `runner-client`, `flow`, `context-boundary`, and packaging tests is also expected.
 
 After building, run at least:
 
@@ -279,21 +303,21 @@ Expected result: `npm run check` and `git diff --check` exit 0; prohibited searc
 
 Acceptance is based on observable behavior and deterministic working-tree evidence, not on code presence, resolved review comments, a future commit SHA, GitHub checks, or remote mergeability.
 
-A successful full-flow test starts Relay with temporary state, starts the runner against it, and launches a fake child. The child emits binary stdout, stderr, invalid UTF-8, secret-looking bytes, and a workflow-command-looking line in a controlled callback sequence. The runner observes guarded bytes before child exit. One output-body transport failure occurs while the job is active or after it becomes terminal. The runner reconnects from the exact confirmed offset. Relay replay and the final archive equal the original callback-order byte sequence with no gap, duplicate, decoding, redaction, or marker. The final archive path does not exist before terminal clean EOF, sync, close, and atomic rename.
+A successful full-flow test starts Relay with temporary state, starts the runner against it, and launches a fake child. The child emits binary stdout, stderr, invalid UTF-8, secret-looking bytes, and a workflow-command-looking line in a controlled callback sequence. Runner stdout contains stop and resume guard lines but preserves each child chunk unchanged inside the envelope. One output-body transport failure occurs while the job is active or after it becomes terminal. The runner reconnects from the exact confirmed offset. After the job is known terminal, a confirmation request from the final offset returns zero bytes and clean EOF. Relay replay and the final archive equal the original callback-order byte sequence with no gap, duplicate, decoding, redaction, marker, or guard byte. The final archive path does not exist before confirmation, sync, close, and atomic rename.
 
-A restart-recovery test writes a physical suffix after the last checkpoint and terminates Relay while the job is active. On restart, Relay validates the checkpoint, truncates only that uncommitted suffix under exclusive recovery ownership, saves the job as interrupted, publishes `OUTPUT_INTERRUPTED`, exposes the committed prefix diagnostically, never publishes clean EOF, and never creates missing historical data. A separate corrupt historical job returns an integrity error without preventing another job or the service from operating.
+A restart-recovery test writes a physical suffix after the last checkpoint and terminates Relay while the job is active. On restart, Relay validates the checkpoint, truncates only that uncommitted suffix under exclusive recovery ownership, saves the job as interrupted with `OUTPUT_INTERRUPTED`, publishes the matching output error, exposes the committed prefix diagnostically, never publishes clean EOF, and never creates missing historical data. A separate corrupt active or terminal job returns `OUTPUT_INTEGRITY_FAILED` without preventing another job or the service from operating.
 
-A terminal-ordering test blocks terminal job persistence after the writer is finalized. No clean EOF is visible while the job remains active. If terminal job persistence fails, output ends in `OUTPUT_TERMINAL_STATE_FAILED`. For zero exit, non-zero exit, timeout, and spawn failure with healthy output, the durable job record precedes a matching clean output terminal state. Interrupted and output-infrastructure failures never publish clean output.
+A terminal-ordering test blocks terminal job persistence after the writer is finalized. No clean EOF is visible while the job remains active. If terminal job persistence fails, output ends in `OUTPUT_TERMINAL_STATE_FAILED`. For zero exit, non-zero exit, timeout, and spawn failure with healthy output, the durable job record and exact exit or error fields precede a matching clean output terminal state. Interrupted and output-infrastructure failures never publish clean output.
 
 A local-sink failure test fails guarded runner stdout after a chunk is fully written to the temporary archive but before confirmed-offset advancement. The runner fails without reconnecting, removes the attempt-owned temporary archive, leaves the final archive absent, does not duplicate the chunk, restores workflow-command parsing when possible, and does not modify `$GITHUB_OUTPUT`.
 
-Persistence tests demonstrate atomic initial prepare, complete writes, append ordering, checkpoint replacement, hard-limit rejection of the entire overflowing chunk, byte-bounded queues, writer finalization, first-terminal-wins, process-restart recovery, missing and malformed data errors, single-flight attachment, short-lived readers, file and directory modes, waiter release, state eviction, service-start isolation, and exhaustive ownership-safe compensation.
+Persistence tests demonstrate transactional initial prepare, complete writes, append ordering, checkpoint replacement, hard-limit rejection of the entire overflowing chunk, fixed watermarks, byte-bounded queues, writer finalization, first-terminal-wins, process-restart recovery, missing and malformed data errors, single-flight attachment, short-lived readers, file and directory modes, waiter release, state eviction, service-start isolation, and exhaustive ownership-safe compensation.
 
-Endpoint tests demonstrate authentication, canonical offset validation, `416` with `X-Agent-Relay-Committed-Length`, successful `200 application/octet-stream` with exact `X-Agent-Relay-Output-Offset`, `Cache-Control: no-store, no-transform`, `X-Content-Type-Options: nosniff`, absent or identity content encoding, first-read-before-headers, active following, strict short-read detection, clean empty EOF, pre-header JSON errors, post-header transport destruction for every error, backpressure, abort handling, and lease release.
+Endpoint tests demonstrate authentication, canonical offset validation, `416` with `X-Agent-Relay-Committed-Length`, successful `200 application/octet-stream` with exact `X-Agent-Relay-Output-Offset`, `Cache-Control: no-store, no-transform`, `X-Content-Type-Options: nosniff`, absent or identity content encoding, first-read-before-headers, active following, strict short-read detection, clean empty EOF, terminal prefix followed by transport destruction, boundary JSON terminal error, backpressure, abort handling, and lease release.
 
-Runner tests demonstrate mandatory safe archive preflight, bounded JSON and 8192-byte output diagnostics, redirect rejection, exact protocol validation, acquisition and idle timeouts, transient reconnect while active and terminal, no reconnect after explicit or local failure, archive-before-stdout-before-offset ordering, exact poll interval, bounded retained presentation state, workflow-command isolation, signal cleanup, failed-job diagnostic archive preservation, output-error archive absence, and `$GITHUB_OUTPUT` mutation only after complete output and a `completed` job.
+Runner tests demonstrate mandatory safe archive preflight, bounded JSON and 8192-byte output diagnostics, redirect rejection, exact protocol validation, acquisition and resettable idle timeouts, transient reconnect while active and terminal, final terminal confirmation, no reconnect after explicit or local failure, archive-before-stdout-before-offset ordering, exact poll interval, no historical raw-output retention, workflow-command guard isolation, signal cleanup, failed-job diagnostic archive preservation, output-error archive absence, and `$GITHUB_OUTPUT` mutation only after complete output and a `completed` job.
 
-The implementation is complete when every unchecked Progress item is checked with working-tree evidence, all focused and full-flow tests pass, `npm run check` and `git diff --check` pass, protected files are unchanged, the operator documentation matches behavior, and the living sections and final revision note are current.
+The implementation is complete when every unchecked Progress item is checked with working-tree evidence, all focused and full-flow tests pass, the total test count is at least 86 with zero skipped, todo, cancelled, or failed tests, `npm run check` and `git diff --check` pass, protected files are unchanged, the operator documentation matches behavior, and the living sections and final revision note are current.
 
 ## Idempotence and Recovery
 
@@ -319,7 +343,8 @@ Keep the validation evidence below append-only:
 - 2026-07-15 21:06Z - Workflow corrections `b967b14f4753f5a3b82d529ed72c254e0aec9675` and `4a058cf06cbadcd81cf9e4c42ad4d7cedd1b00cc` - preserved credential, active-plan, and finalizer boundaries and added terminal archive and console-log paths.
 - 2026-07-15 21:30Z - Merge and reconciliation baseline - merged `main` `f043af2fa9eb0420a0d64684485700f92a5dc425`; branch comparison later reported zero commits behind.
 - 2026-07-15 22:23Z - GitHub Actions run `29455214780` on head `215c032905ad4fe962125b7fdc822ee4a4a7c56a` - `npm run check` passed; 86 tests passed, zero failed. This evidence validates the baseline only.
-- 2026-07-16 - Plan readiness review - found and corrected dynamic baseline scope, workflow ownership gaps, raw/redaction conflict, terminal ordering ambiguity, retry-after-terminal gap, optional archive behavior, stale branch description, and non-verifiable milestones. No production code changed in this review.
+- 2026-07-16 - First plan readiness revision `598d28f348d05f30eb86ad54ad9d8a09c13c6eb5` - pinned the baseline, protected workflow ownership, resolved raw/redaction and terminal-ordering gaps, narrowed files, and added observable milestones. Only the active plan changed.
+- 2026-07-16 - Second plan readiness review - corrected optional remote-ref handling, queue thresholds, transactional prepare wording, exact process mappings, terminal confirmation, guard-envelope semantics, archive path safety, and baseline-test preservation. No production code changed.
 
 Append implementation evidence in this form:
 
@@ -403,6 +428,13 @@ OutputStore must provide operations equivalent to:
 
 Names may differ, but ownership, ordering, durability, single-flight attachment, first-terminal-wins, and resource behavior may not.
 
+The executor queue uses:
+
+    highWatermark = Math.min(MAX_OUTPUT_BYTES, 1_048_576)
+    lowWatermark = Math.floor(highWatermark / 2)
+
+`pendingBytes` includes the currently writing chunk and queued chunks. `acceptedBytes` includes committed, writing, and queued bytes and never decreases. The entire chunk is rejected when `acceptedBytes + chunk.length` exceeds `MAX_OUTPUT_BYTES`.
+
 The executor process outcome is equivalent to:
 
     interface ExecutionOutcome {
@@ -426,6 +458,12 @@ The runner uses existing timeout settings and these fixed internal bounds:
     MAX_RESPONSE_BYTES = 64000
     MAX_REMOTE_ERROR_BODY_BYTES = 8192
 
-`MAX_REMOTE_ERROR_BODY_BYTES` is an internal constant, not a new environment variable. `AGENT_RELAY_OUTPUT_ARCHIVE_PATH` is required, absolute, and outside `GITHUB_WORKSPACE`. The final path means an atomically published complete terminal stream, never a live partial file.
+`MAX_REMOTE_ERROR_BODY_BYTES` is an internal constant, not a new environment variable. Each JSON or output acquisition uses `AGENT_RELAY_REQUEST_TIMEOUT_MS`. Each output-body read has an idle timer of the same duration, reset after every received chunk. `AGENT_RELAY_POLL_TIMEOUT_MS` is the total deadline after job submission. Retry sleep is `min(AGENT_RELAY_POLL_INTERVAL_MS, remainingDeadline)` with no hidden one-second cap.
 
-Revision note (2026-07-16): Re-reviewed the current PR and active plan after the `main` merge and green baseline CI. Pinned the reviewed `main` SHA and protected files; explicitly overrode generic Git mutation advice; removed stale full-branch reconciliation work; narrowed Codex-owned files; resolved raw output versus redaction; defined the checkpoint layout, output error taxonomy, process and output terminal ordering, interrupted recovery, and clean diagnostic output; corrected retry eligibility after terminal job status; made archive production mandatory and safe; distinguished Relay best-effort presentation from required runner sinks; added six observable milestones, exact validation commands, and deterministic full-flow acceptance. This revision changes only the active ExecPlan and does not claim the feature implementation complete.
+`AGENT_RELAY_OUTPUT_ARCHIVE_PATH` is required and absolute. Its parent must already exist, resolve outside `GITHUB_WORKSPACE`, and not be a symlink into the workspace. The final archive path must not equal `GITHUB_OUTPUT`. The final path means an atomically published complete terminal stream, never a live partial file.
+
+For GitHub command suppression, the runner generates an unpredictable token before output begins. Immediately before the first child chunk it writes the stop guard. It writes the resume guard after terminal completion or during cleanup when stdout remains usable. These guard bytes are never written to the archive and never included in confirmed offsets.
+
+A response body EOF establishes completion only when it comes from a confirmation request that was started while the most recently polled job status was terminal and the response delivered zero bytes. Any earlier EOF triggers an immediate job poll and another request from the confirmed offset. If that poll is active, the EOF is a retryable premature EOF; if it is terminal, the next request is the terminal confirmation request. A confirmation response that delivers bytes processes them normally and is followed by another confirmation request.
+
+Revision note (2026-07-16): Performed two plan-readiness reviews after the `main` merge and green baseline CI. Pinned the reviewed commit without depending on a remote-tracking ref; protected all instruction and workflow files; explicitly overrode generic Git mutation advice; narrowed Codex-owned files; resolved raw output versus redaction and command-suppression envelope semantics; defined transactional prepare, checkpoint layout, fixed watermarks, output error taxonomy, process and output terminal ordering, exact job mappings, interrupted and corrupt recovery, terminal-prefix endpoint behavior, retry after terminal status, final zero-byte confirmation, mandatory safe archive handling, and preservation of the complete baseline test suite. The plan now provides six observable milestones, exact commands, interfaces, and deterministic acceptance scenarios. This revision changes only the active ExecPlan and does not claim implementation complete.

@@ -7,8 +7,14 @@ if [[ "$(id -un)" != "agent" ]]; then
 fi
 
 umask 0077
-codex_home=/home/agent/.codex
+agent_home=/home/agent
+codex_home="$agent_home/.codex"
 mkdir -p "$codex_home"
+find "$agent_home" -mindepth 1 -maxdepth 1 \
+  ! -name .cargo \
+  ! -name .rustup \
+  ! -name .codex \
+  -exec rm -rf -- {} +
 find "$codex_home" -mindepth 1 -maxdepth 1 ! -name auth.json -exec rm -rf -- {} +
 
 exec /usr/bin/env -i \

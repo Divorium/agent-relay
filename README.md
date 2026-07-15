@@ -2,7 +2,7 @@
 
 Agent Relay is a self-hosted bridge between a repository-scoped GitHub Actions runner and Codex CLI.
 
-A GitHub Actions workflow resolves an open, ready pull request, checks out its exact head revision without persisting credentials, and asks Agent Relay to execute Codex in the shared workspace. Codex edits the repository, validates the work, and keeps the active ExecPlan current. Relay derives the technical job outcome from the child process. The runner decides from Git whether changes exist, derives a commit message from the active plan, and pushes through a finalization-only credential.
+A GitHub Actions workflow resolves an open, ready pull request, checks out its exact head revision without persisting credentials, and asks Agent Relay to execute Codex in the shared workspace. Codex edits the repository, validates the work with commands available directly in its container, and keeps the active ExecPlan current. Relay derives the technical job outcome from the child process. The runner decides from Git whether changes exist, derives a commit message from the active plan, and pushes through a finalization-only credential.
 
 ## Components
 
@@ -10,7 +10,7 @@ Each deployment contains:
 
 - `runner`: resolves the pull request and owns checkout, commit, push, and GitHub credentials;
 - `agent-relay`: authenticates requests, launches Codex, enforces execution limits, persists redacted process output, and owns technical job state;
-- `Codex`: follows `.agent/PLANS.md`, implements the selected active ExecPlan, updates its living state, and runs its validation.
+- `Codex`: follows `.agent/PLANS.md`, implements the selected active ExecPlan, updates its living state, and runs repository-local validation.
 
 The runner and Relay share one workspace volume. Relay runs as the `relay` user. Codex runs as the separate `agent` user. Relay state is mode `0700`. Only the host Codex `auth.json` file is mounted into the agent home, read-only. Generated agent-home state is removed before every execution.
 
@@ -35,6 +35,8 @@ An incomplete item remains unchecked. A real blocker is marked `[blocked]` in `P
 - concrete unblock condition.
 
 Codex continues all unaffected work. A blocker is plan documentation only; it is not a Codex result or Relay job status. A plan with any unchecked or `[blocked]` item remains active.
+
+Active ExecPlans may require only commands available directly in the task container. They must not require Docker, Docker Compose, image builds, nested containers, or a Docker socket. Those checks belong to the host operator.
 
 ## Execution outcome
 
@@ -77,20 +79,26 @@ MAX_OUTPUT_BYTES=10000000
 
 `HOST_UID` and `HOST_GID` must match the owner of the authentication file and the runner workspace.
 
-## Build and run
+## Task-agent validation
+
+These commands run directly in the task container and are the complete repository CI contract:
 
 ```bash
 npm ci
 npm run check
-docker compose config
-docker build -t agent-relay:local .
-docker build -f Dockerfile.runner -t agent-relay-runner:local .
-docker run --rm --entrypoint /bin/bash agent-relay:local /app/scripts/toolchain-smoke.sh
+```
+
+## Operator build and deployment
+
+The following commands must run on the Docker host. They are not executed by Codex or by the containerized GitHub runner:
+
+```bash
 cp .env.example .env
+docker compose config
 docker compose up --build -d
 ```
 
-Operational setup, dispatch, recovery, logs, and credential rotation are documented in `docs/operations/README.md`.
+Operational setup, dispatch, recovery, logs, image verification, and credential rotation are documented in `docs/operations/README.md`.
 
 ## ExecPlans
 

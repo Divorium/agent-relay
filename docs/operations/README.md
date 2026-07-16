@@ -22,22 +22,27 @@ docker compose build
 docker compose up -d
 docker compose ps
 docker compose exec agent-relay /app/scripts/toolchain-smoke.sh
-docker compose exec --user agent agent-relay /usr/local/bin/codex --version
-docker compose exec --user agent agent-relay /usr/local/bin/codex login status
+docker compose exec agent-relay /usr/local/bin/codex --version
+docker compose exec agent-relay /usr/local/bin/codex login status
 docker compose exec agent-relay curl -fsS http://localhost:8080/health
 ```
 
-Verify the user and filesystem boundary:
+Verify the runtime user and filesystem boundary:
 
 ```bash
 docker compose exec agent-relay sh -lc '
 set -eu
-test "$(id -un)" = relay
+test "$(id -un)" = agent
 test "$(stat -c %a /var/lib/agent-relay)" = 700
-sudo -H -u agent -- test -r /home/agent/.codex/auth.json
-sudo -H -u agent -- test ! -w /home/agent/.codex/auth.json
+test -r /home/agent/.codex/auth.json
+test ! -w /home/agent/.codex/auth.json
+! command -v sudo >/dev/null 2>&1
 '
 ```
+
+Agent Relay and its Codex child use the same non-root `agent` account. The GitHub Actions runner remains a separate container and continues to own checkout and publication credentials.
+
+If an existing named state volume was created by the rejected two-account image and is not writable by the configured `HOST_UID` and `HOST_GID`, either recreate the disposable state volume or correct its ownership once before starting the new image. Do not add a privileged runtime path to the service.
 
 ## Repository validation
 
@@ -85,7 +90,7 @@ The `Run Codex through Agent Relay` step pipes runner-client stdout and stderr t
 - the same output is uploaded as the `agent-relay-output` artifact;
 - `$GITHUB_OUTPUT` is reserved for the runner-derived commit message.
 
-The complete redacted Codex process log is stored under the Relay-only state volume.
+The complete redacted Codex process log is stored under the Agent Relay state volume.
 
 Codex does not write a result file. Relay sets the technical outcome from the process:
 
@@ -102,7 +107,7 @@ A Relay container restart interrupts an active Codex process. The job is not res
 
 When publication fails after a local commit, the finalizer resets that commit and restores the working-tree changes before returning failure. Correct the publication problem and retry without discarding those changes.
 
-Inspect the latest persisted Codex log as the Relay user:
+Inspect the latest persisted Codex log:
 
 ```bash
 docker compose exec agent-relay sh -lc '

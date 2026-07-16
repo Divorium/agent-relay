@@ -41,18 +41,18 @@ async function assertCopySourcesExist(path: string): Promise<void> {
   }
 }
 
-test("service image definition contains the required toolchain and isolation users", async () => {
+test("service image definition contains the required toolchain and one non-root runtime user", async () => {
   const dockerfile = await text("Dockerfile");
   const parsed = instructions(dockerfile);
 
   assert.ok(parsed.some(({ name, args }) => name === "FROM" && args === "node:22-bookworm"));
   assert.ok(parsed.some(({ name, args }) => name === "ARG" && args === "CODEX_VERSION=0.144.3"));
   assert.ok(parsed.some(({ name, args }) => name === "RUN" && args.includes("useradd") && args.includes("agent")));
-  assert.ok(parsed.some(({ name, args }) => name === "RUN" && args.includes("useradd") && args.includes("relay")));
   assert.ok(parsed.some(({ name, args }) => name === "RUN" && args.includes("apt-get purge -y openssh-client")));
-  assert.ok(parsed.some(({ name, args }) => name === "RUN" && args.includes("relay ALL=(agent) NOPASSWD: /usr/local/bin/codex-run")));
-  assert.equal(parsed.filter(({ name }) => name === "USER").at(-1)?.args, "relay");
+  assert.ok(!parsed.some(({ name, args }) => name === "RUN" && /useradd[^\n]*relay|sudo|sudoers/.test(args)));
+  assert.equal(parsed.filter(({ name }) => name === "USER").at(-1)?.args, "agent");
   assert.deepEqual(parsed.filter(({ name }) => name === "CMD").at(-1)?.args, '["node", "dist/src/server.js"]');
+  assert.ok(!dockerfile.includes("/home/relay"));
   assert.ok(!dockerfile.includes("dotnet-sdk"));
   await assertCopySourcesExist("Dockerfile");
 });

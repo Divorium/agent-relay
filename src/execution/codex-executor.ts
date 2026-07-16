@@ -10,7 +10,6 @@ export interface ExecutionOutcome { exitCode: number; }
 
 const ISOLATED_CODEX_HOME = "/home/agent/.codex";
 const RELAY_APPLICATION_ROOT = "/app";
-const RELAY_HOME = "/home/relay";
 const RUNNER_ROOT = "/runner";
 const SYSTEM_TEMP_ROOT = "/tmp";
 const SYSTEM_VAR_TEMP_ROOT = "/var/tmp";
@@ -33,7 +32,6 @@ export function createCodexArgs(workspace: string, prompt: string, workspaceRoot
   const entries = [
     permission(ISOLATED_CODEX_HOME, "deny"),
     permission(RELAY_APPLICATION_ROOT, "deny"),
-    permission(RELAY_HOME, "deny"),
     permission(RUNNER_ROOT, "deny"),
     permission(SYSTEM_TEMP_ROOT, "deny"),
     permission(SYSTEM_VAR_TEMP_ROOT, "deny"),
@@ -63,18 +61,11 @@ export function createCodexArgs(workspace: string, prompt: string, workspaceRoot
   ];
 }
 
-export function createCodexInvocation(command: string, args: string[], runAsUser?: string): { command: string; args: string[] } {
-  return runAsUser
-    ? { command: "/usr/bin/sudo", args: ["-H", "-u", runAsUser, "--", command, ...args] }
-    : { command, args };
-}
-
 export class CodexExecutor {
   constructor(
     private readonly command: string,
     private readonly timeoutMs: number,
     private readonly maxOutputBytes: number,
-    private readonly runAsUser?: string,
     private readonly workspaceRoot?: string,
   ) {}
 
@@ -83,16 +74,15 @@ export class CodexExecutor {
     await writeFile(outputPath, "", { mode: 0o600 });
 
     const prompt = buildCodexPrompt(request);
-    const invocation = createCodexInvocation(
+    const child = spawn(
       this.command,
       createCodexArgs(workspace, prompt, this.workspaceRoot ?? workspace),
-      this.runAsUser,
+      {
+        cwd: workspace,
+        env: createCodexEnvironment(),
+        stdio: ["ignore", "pipe", "pipe"],
+      },
     );
-    const child = spawn(invocation.command, invocation.args, {
-      cwd: workspace,
-      env: createCodexEnvironment(),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
 
     let outputBytes = 0;
     let outputTruncated = false;

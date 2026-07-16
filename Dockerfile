@@ -19,7 +19,7 @@ COPY --from=java /opt/java/openjdk /opt/java/openjdk
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-    ca-certificates curl wget jq git git-lfs sudo \
+    ca-certificates curl wget jq git git-lfs \
     python3 python3-pip python3-venv \
     build-essential clang cmake pkg-config \
     zip unzip xz-utils zstd rsync file findutils diffutils \
@@ -30,18 +30,11 @@ RUN apt-get update \
   && npm install --global "typescript@${TYPESCRIPT_VERSION}" "@openai/codex@${CODEX_VERSION}" \
   && groupadd --non-unique --gid "${GROUP_ID}" agent \
   && useradd --non-unique --create-home --uid "${USER_ID}" --gid "${GROUP_ID}" --shell /bin/bash agent \
-  && groupadd --system relay \
-  && useradd --system --create-home --gid relay --shell /bin/bash relay \
-  && usermod --append --groups agent relay \
   && mkdir -p /app /runner/_work /var/lib/agent-relay /home/agent/.cargo /home/agent/.rustup /home/agent/.codex \
-  && chown -R relay:relay /app /var/lib/agent-relay /home/relay \
-  && chown -R agent:agent /home/agent \
-  && chown agent:agent /runner/_work \
+  && chown -R agent:agent /app /runner/_work /var/lib/agent-relay /home/agent \
   && chown root:root /runner \
   && chmod 0755 /runner \
-  && chmod 0700 /var/lib/agent-relay /home/agent/.codex /home/relay \
-  && printf '%s\n' 'relay ALL=(agent) NOPASSWD: /usr/local/bin/codex-run' > /etc/sudoers.d/agent-relay \
-  && chmod 0440 /etc/sudoers.d/agent-relay
+  && chmod 0700 /var/lib/agent-relay /home/agent/.codex
 
 ENV HOME=/home/agent
 USER agent
@@ -56,14 +49,14 @@ RUN chown -R root:root /home/agent/.cargo /home/agent/.rustup \
   && chown root:root /usr/local/bin/codex-run \
   && chmod 0755 /usr/local/bin/codex-run
 
-ENV HOME=/home/relay
-USER relay
+ENV HOME=/home/agent
+USER agent
 WORKDIR /app
 
-COPY --chown=relay:relay package.json package-lock.json tsconfig.json ./
-COPY --chown=relay:relay types ./types
-COPY --chown=relay:relay src ./src
-COPY --chown=relay:relay scripts ./scripts
+COPY --chown=agent:agent package.json package-lock.json tsconfig.json ./
+COPY --chown=agent:agent types ./types
+COPY --chown=agent:agent src ./src
+COPY --chown=agent:agent scripts ./scripts
 
 RUN chmod +x scripts/toolchain-smoke.sh \
   && npm ci \

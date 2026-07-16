@@ -12,7 +12,7 @@ Each deployment contains:
 - `agent-relay`: authenticates requests, launches Codex, enforces execution limits, persists redacted process output, and owns technical job state;
 - `Codex`: follows `.agent/PLANS.md`, implements the selected active ExecPlan, updates its living state, and runs repository-local validation.
 
-The runner and Relay are separate containers sharing one workspace volume. Relay runs as the `relay` user. Codex runs as the separate `agent` user. Relay state is mode `0700`. Only the host Codex `auth.json` file is mounted into the agent home, read-only. Generated agent-home state is removed before every execution.
+The runner and Agent Relay are separate containers sharing one workspace volume. The Agent Relay service and its Codex child run as the same non-root `agent` account inside the service container. No runtime user switching is used. Relay state is mode `0700`. Only the host Codex `auth.json` file is mounted into the agent home, read-only. Generated agent-home state is removed before every execution.
 
 ## Workflow inputs
 
@@ -54,10 +54,9 @@ A terminal `completed` job is successful whether or not the worktree changed. Th
 - The Relay bearer token is supplied only to the workflow client step; it is not part of the runner service environment.
 - The push token exists only in the finalization step and is consumed through a temporary askpass helper.
 - Codex receives no GitHub token, runner registration token, Relay token, Docker socket, or Relay state.
-- The packaged service always launches the root-owned wrapper as the fixed `agent` user; command and user overrides are not configuration inputs.
+- The service launches the root-owned `/usr/local/bin/codex-run` wrapper directly as the fixed non-root `agent` account; command and user overrides are not configuration inputs.
 - The wrapper exclusively defines the final tool environment and clears generated agent-home state before each run while preserving the read-only `auth.json` mount.
-- The permissions profile denies the shared workspace root, Relay application directory, Relay home, and agent home; it re-allows writes only in the selected repository and reads only from that repository's Git metadata.
-- Image permissions independently prevent the `agent` user from reading `/app` and `/home/relay`.
+- The permissions profile denies the shared workspace root, Relay application directory, agent home, and system temporary roots; it re-allows writes only in the selected repository and private runtime directory and reads only from that repository's Git metadata.
 
 ## Configuration
 
@@ -103,3 +102,4 @@ Completed:
 - `docs/exec-plans/completed/2026-07-13-ready-pr-gate.md`
 - `docs/exec-plans/completed/2026-07-15-audit-codex-context.md`
 - `docs/exec-plans/completed/2026-07-15-review-9-script-integration.md`
+- `docs/exec-plans/completed/2026-07-16-remove-sudo-runtime.md`

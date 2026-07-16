@@ -86,7 +86,7 @@ printf 'after\n' > "$workspace/tracked.txt"
     maxOutputBytes: 100_000,
   };
   const store = new JobStore(stateDir);
-  const executor = new CodexExecutor(fakeCodex, config.codexTimeoutMs, config.maxOutputBytes, undefined, workspaceRoot);
+  const executor = new CodexExecutor(fakeCodex, config.codexTimeoutMs, config.maxOutputBytes, workspaceRoot);
   const jobs = new JobService(workspaceRoot, stateDir, store, executor);
   await jobs.init();
   const server = createRelayServer(config, jobs);

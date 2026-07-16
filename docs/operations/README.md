@@ -15,29 +15,19 @@ Configure the same Relay bearer token as the repository Actions secret `AGENT_RE
 
 Only `auth.json` is mounted into the Codex home directory, read-only. Do not mount the complete host `~/.codex` directory. The launcher removes all generated agent-home content except `auth.json` before every execution.
 
-## Start and verify
+## Start
 
 ```bash
 docker compose build
 docker compose up -d
 docker compose ps
 docker compose exec agent-relay /app/scripts/toolchain-smoke.sh
-docker compose exec --user agent agent-relay /usr/local/bin/codex --version
-docker compose exec --user agent agent-relay /usr/local/bin/codex login status
+docker compose exec agent-relay /usr/local/bin/codex --version
+docker compose exec agent-relay /usr/local/bin/codex login status
 docker compose exec agent-relay curl -fsS http://localhost:8080/health
 ```
 
-Verify the user and filesystem boundary:
-
-```bash
-docker compose exec agent-relay sh -lc '
-set -eu
-test "$(id -un)" = relay
-test "$(stat -c %a /var/lib/agent-relay)" = 700
-sudo -H -u agent -- test -r /home/agent/.codex/auth.json
-sudo -H -u agent -- test ! -w /home/agent/.codex/auth.json
-'
-```
+Agent Relay and its Codex child use the same non-root `agent` account. The GitHub Actions runner remains a separate container and continues to own checkout and publication credentials.
 
 ## Repository validation
 
@@ -48,7 +38,7 @@ npm ci
 npm run check
 ```
 
-The suite uses local fixtures and validates only code and definitions stored in this repository. It does not invoke or validate Docker, Compose, GitHub APIs, hosted runners, network services, or credentials. Deployment commands above are operator procedures, not automated acceptance tests.
+The suite uses local fixtures and validates only code and definitions stored in this repository. It does not invoke or validate Docker, Compose, GitHub APIs, hosted runners, network services, or credentials.
 
 ## Install and dispatch the workflow
 
@@ -85,7 +75,7 @@ The `Run Codex through Agent Relay` step pipes runner-client stdout and stderr t
 - the same output is uploaded as the `agent-relay-output` artifact;
 - `$GITHUB_OUTPUT` is reserved for the runner-derived commit message.
 
-The complete redacted Codex process log is stored under the Relay-only state volume.
+The complete redacted Codex process log is stored under the Agent Relay state volume.
 
 Codex does not write a result file. Relay sets the technical outcome from the process:
 
@@ -102,7 +92,7 @@ A Relay container restart interrupts an active Codex process. The job is not res
 
 When publication fails after a local commit, the finalizer resets that commit and restores the working-tree changes before returning failure. Correct the publication problem and retry without discarding those changes.
 
-Inspect the latest persisted Codex log as the Relay user:
+Inspect the latest persisted Codex log:
 
 ```bash
 docker compose exec agent-relay sh -lc '

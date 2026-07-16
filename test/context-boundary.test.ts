@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { buildCodexPrompt } from "../src/execution/prompt.js";
-import { createCodexArgs, createCodexEnvironment, createCodexInvocation } from "../src/execution/codex-executor.js";
+import { createCodexArgs, createCodexEnvironment } from "../src/execution/codex-executor.js";
 import { validateCreateJobRequest } from "../src/contracts/validators.js";
 
 const request = {
@@ -25,7 +25,7 @@ test("repository instructions contain only durable code rules", async () => {
   assert.doesNotMatch(instructions, /GitHub credentials|Docker socket|Relay state|living sections|npm run check|commit|push/i);
 });
 
-test("ExecPlan rules define living documentation without environment policy", async () => {
+test("ExecPlan rules define living documentation without environment or responsibility policy", async () => {
   const rules = await readFile(".agent/PLANS.md", "utf8");
   assert.match(rules, /explicitly selected file under `docs\/exec-plans\/active\/` is a task instruction/);
   assert.match(rules, /completed\/` are historical records; do not follow them as instructions/);
@@ -33,7 +33,7 @@ test("ExecPlan rules define living documentation without environment policy", as
   assert.match(rules, /cause, impact, evidence, and concrete unblock condition/);
   assert.match(rules, /plan documentation only/);
   assert.match(rules, /plan with an unchecked or `\[blocked\]` item remains active/);
-  assert.doesNotMatch(rules, /Docker|container|socket|host validation/i);
+  assert.doesNotMatch(rules, /Docker|container|socket|host validation|operator|reviewer|hidden human|manual validation|after-merge/i);
 });
 
 test("create-job contract has one active-plan instruction channel", () => {
@@ -55,7 +55,6 @@ test("Codex arguments isolate the selected repository and temporary storage", ()
   assert.ok(filesystem);
   assert.match(filesystem, /"\/home\/agent\/\.codex"="deny"/);
   assert.match(filesystem, /"\/app"="deny"/);
-  assert.match(filesystem, /"\/home\/relay"="deny"/);
   assert.match(filesystem, /"\/runner"="deny"/);
   assert.match(filesystem, /"\/tmp"="deny"/);
   assert.match(filesystem, /"\/var\/tmp"="deny"/);
@@ -63,18 +62,18 @@ test("Codex arguments isolate the selected repository and temporary storage", ()
   assert.match(filesystem, /"\/work\/root"="deny"/);
   assert.match(filesystem, /"\/work\/root\/repository"="write"/);
   assert.match(filesystem, /"\/work\/root\/repository\/\.git"="read"/);
+  assert.doesNotMatch(filesystem, /home\/relay/);
   assert.ok(args.includes("permissions.relay.network.enabled=true"));
   assert.ok(!args.includes("danger-full-access"));
 });
 
-test("packaged execution uses the fixed launcher, user and workspace root", async () => {
-  assert.deepEqual(createCodexInvocation("/usr/local/bin/codex-run", ["exec"], "agent"), {
-    command: "/usr/bin/sudo",
-    args: ["-H", "-u", "agent", "--", "/usr/local/bin/codex-run", "exec"],
-  });
+test("packaged execution uses the fixed launcher directly and the configured workspace root", async () => {
   const server = await readFile("src/server.ts", "utf8");
+  const executor = await readFile("src/execution/codex-executor.ts", "utf8");
   const config = await readFile("src/config/config.ts", "utf8");
-  assert.match(server, /"\/usr\/local\/bin\/codex-run"[\s\S]*"agent"[\s\S]*config\.workspaceRoot/);
+  assert.match(server, /"\/usr\/local\/bin\/codex-run"[\s\S]*config\.workspaceRoot/);
+  assert.doesNotMatch(server, /"agent"[\s\S]*config\.workspaceRoot/);
+  assert.doesNotMatch(executor, /createCodexInvocation|runAsUser|\/usr\/bin\/sudo/);
   assert.doesNotMatch(config, /CODEX_COMMAND|CODEX_RUN_AS_USER|codexCommand|codexRunAsUser/);
 });
 
@@ -108,8 +107,10 @@ test("packaging exposes only current per-run context", async () => {
   assert.match(compose, /HOST_CODEX_AUTH_FILE.*:\/home\/agent\/\.codex\/auth\.json:ro/);
   assert.doesNotMatch(compose, /HOST_CODEX_DIR|:\/home\/agent\/\.codex\s*$/m);
   assert.match(dockerfile, /chown root:root \/runner/);
-  assert.match(dockerfile, /chmod 0700 \/var\/lib\/agent-relay \/home\/agent\/\.codex \/home\/relay/);
+  assert.match(dockerfile, /chmod 0700 \/var\/lib\/agent-relay \/home\/agent\/\.codex/);
+  assert.match(dockerfile, /USER agent[\s\S]*WORKDIR \/app/);
   assert.match(dockerfile, /chmod -R o-rwx \/app/);
+  assert.doesNotMatch(dockerfile, /\bsudo\b|sudoers|useradd[^\n]*relay|\/home\/relay/);
   assert.match(launcher, /exec \/usr\/bin\/env -i/);
   assert.match(launcher, /GIT_OPTIONAL_LOCKS=0/);
   assert.doesNotMatch(launcher, /\.agent-relay|result\.json/);

@@ -25,7 +25,7 @@ test("repository instructions contain only durable code rules", async () => {
   assert.doesNotMatch(instructions, /GitHub credentials|Docker socket|Relay state|living sections|npm run check|commit|push/i);
 });
 
-test("ExecPlan rules define living documentation without environment policy", async () => {
+test("ExecPlan rules define living documentation without environment or responsibility policy", async () => {
   const rules = await readFile(".agent/PLANS.md", "utf8");
   assert.match(rules, /explicitly selected file under `docs\/exec-plans\/active\/` is a task instruction/);
   assert.match(rules, /completed\/` are historical records; do not follow them as instructions/);
@@ -33,7 +33,7 @@ test("ExecPlan rules define living documentation without environment policy", as
   assert.match(rules, /cause, impact, evidence, and concrete unblock condition/);
   assert.match(rules, /plan documentation only/);
   assert.match(rules, /plan with an unchecked or `\[blocked\]` item remains active/);
-  assert.doesNotMatch(rules, /Docker|container|socket|host validation/i);
+  assert.doesNotMatch(rules, /Docker|container|socket|host validation|operator|reviewer|hidden human|manual validation|after-merge/i);
 });
 
 test("create-job contract has one active-plan instruction channel", () => {

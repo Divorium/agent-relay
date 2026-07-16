@@ -60,6 +60,42 @@ printf 'changed\n' > "$PWD/changed.txt"
   }
 });
 
+test("Codex stdout and stderr remain visible and persisted when the process fails", async () => {
+  const current = await fixture("failure", `#!/bin/sh
+set -eu
+printf 'failure stdout\n'
+printf 'failure stderr\n' >&2
+exit 17
+`);
+
+  let stdout = "";
+  const originalWrite = process.stdout.write;
+  process.stdout.write = ((chunk: unknown) => {
+    stdout += String(chunk);
+    return true;
+  }) as any;
+
+  try {
+    await assert.rejects(
+      new CodexExecutor(current.executable, 5_000, 100_000, current.workspaceRoot).run(
+        request("failed-log-request"),
+        current.workspace,
+        current.outputPath,
+      ),
+      /Codex exited with code 17/,
+    );
+
+    const log = await readFile(current.outputPath, "utf8");
+    assert.match(stdout, /failure stdout/);
+    assert.match(stdout, /failure stderr/);
+    assert.match(log, /failure stdout/);
+    assert.match(log, /failure stderr/);
+  } finally {
+    process.stdout.write = originalWrite;
+    await rm(current.root, { recursive: true, force: true });
+  }
+});
+
 test("Codex output redaction survives split UTF-8 and split secret chunks", async () => {
   const current = await fixture("split-secret", `#!/bin/sh
 set -eu

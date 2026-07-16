@@ -47,7 +47,7 @@ printf '%s test-version\n' "${name}"
   }
 }
 
-test("codex-run enforces the agent user and constructs the isolated Codex invocation", async (t: any) => {
+test("codex-run enforces the agent kernel identity and constructs the isolated Codex invocation", async (t: any) => {
   const root = join(tmpdir(), `agent-relay-codex-run-${process.pid}-${Date.now()}-${Math.random()}`);
   const harness = join(root, "harness.sh");
   const log = join(root, "commands.log");
@@ -55,10 +55,16 @@ test("codex-run enforces the agent user and constructs the isolated Codex invoca
   await mkdir(root, { recursive: true });
 
   try {
-    await t.test("rejects execution as a different user", async () => {
+    await t.test("rejects execution with a different effective UID", async () => {
       const source = `#!/bin/bash
 set -euo pipefail
-id() { printf '%s\n' relay; }
+id() {
+  case "$*" in
+    "-u") printf '2000\\n' ;;
+    "-u agent") printf '1000\\n' ;;
+    *) return 1 ;;
+  esac
+}
 source "${launcher}"
 `;
       await writeFile(harness, source, { mode: 0o700 });
@@ -71,11 +77,19 @@ source "${launcher}"
       assert.match(result.stderr, /must execute as the isolated agent user/);
     });
 
-    await t.test("cleans generated state and replaces the complete process environment", async () => {
+    await t.test("accepts an alternate passwd name for the same UID and replaces the environment", async () => {
       const source = `#!/bin/bash
 set -euo pipefail
 COMMAND_LOG="${log}"
-id() { printf '%s\n' agent; }
+id() {
+  case "$*" in
+    "-u") printf '1000\\n' ;;
+    "-u agent") printf '1000\\n' ;;
+    "-un") printf 'node\\n' ;;
+    *) return 1 ;;
+  esac
+}
+[[ "$(id -un)" == "node" ]]
 mkdir() { printf 'mkdir' >> "$COMMAND_LOG"; printf ' <%s>' "$@" >> "$COMMAND_LOG"; printf '\n' >> "$COMMAND_LOG"; }
 find() { printf 'find' >> "$COMMAND_LOG"; printf ' <%s>' "$@" >> "$COMMAND_LOG"; printf '\n' >> "$COMMAND_LOG"; }
 rm() { printf 'rm' >> "$COMMAND_LOG"; printf ' <%s>' "$@" >> "$COMMAND_LOG"; printf '\n' >> "$COMMAND_LOG"; }

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { JobService } from "../src/application/job-service.js";
 import { JobStore } from "../src/persistence/job-store.js";
+import { RelayError } from "../src/contracts/errors.js";
 import type { CreateJobRequest, JobRecord } from "../src/contracts/job.js";
 import type { CodexExecutor } from "../src/execution/codex-executor.js";
 
@@ -172,6 +173,36 @@ test("invalid and symlinked plans are rejected before executor invocation", asyn
         await rm(fixture.root, { recursive: true, force: true });
       }
     });
+  }
+});
+
+test("failed execution is persisted and written to the Relay error stream", async () => {
+  const fixture = await workspaceFixture("execution-failure-log");
+  const stateDir = join(fixture.root, "state");
+  const store = new JobStore(stateDir);
+  const executor = {
+    run: async () => { throw new RelayError("CODEX_FAILED", "Codex exited with code 17", 502); },
+  } as unknown as CodexExecutor;
+  const service = new JobService(fixture.workspaceRoot, stateDir, store, executor);
+  await service.init();
+
+  let stderr = "";
+  const originalWrite = process.stderr.write;
+  process.stderr.write = ((chunk: unknown) => {
+    stderr += String(chunk);
+    return true;
+  }) as any;
+
+  try {
+    const created = await service.create(request("execution-failure-log"));
+    const terminal = await waitForTerminal(store, created.id);
+    assert.equal(terminal.status, "failed");
+    assert.equal(terminal.errorCode, "CODEX_FAILED");
+    assert.equal(terminal.errorMessage, "Codex exited with code 17");
+    assert.match(stderr, new RegExp(`Agent Relay job ${created.id} failed: CODEX_FAILED: Codex exited with code 17`));
+  } finally {
+    process.stderr.write = originalWrite;
+    await rm(fixture.root, { recursive: true, force: true });
   }
 });
 

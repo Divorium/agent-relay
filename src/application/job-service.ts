@@ -100,6 +100,7 @@ export class JobService {
         : new RelayError("INTERNAL_ERROR", "Unexpected job failure", 500);
       const finished = new Date().toISOString();
       const status = relayError.code === "CODEX_TIMEOUT" ? "timed_out" : "failed";
+      process.stderr.write(`Agent Relay job ${job.id} ${status}: ${relayError.code}: ${relayError.message}\n`);
       try {
         await this.store.save({
           ...current,

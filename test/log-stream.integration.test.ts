@@ -41,7 +41,7 @@ printf 'changed\n' > "$PWD/changed.txt"
   }) as any;
 
   try {
-    const execution = new CodexExecutor(current.executable, 5_000, 100_000, undefined, current.workspaceRoot).run(
+    const execution = new CodexExecutor(current.executable, 5_000, 100_000, current.workspaceRoot).run(
       request("live-log-request"),
       current.workspace,
       current.outputPath,
@@ -76,7 +76,7 @@ printf 'ijklmnopqrstuvwxyz\n'
   }) as any;
 
   try {
-    await new CodexExecutor(current.executable, 5_000, 100_000, undefined, current.workspaceRoot).run(
+    await new CodexExecutor(current.executable, 5_000, 100_000, current.workspaceRoot).run(
       request("split-secret-request"),
       current.workspace,
       current.outputPath,
@@ -105,7 +105,7 @@ printf 'authorization: Bearer abcdefghijklmnopqrstuvwxyz'
   }) as any;
 
   try {
-    await new CodexExecutor(current.executable, 5_000, 24, undefined, current.workspaceRoot).run(
+    await new CodexExecutor(current.executable, 5_000, 24, current.workspaceRoot).run(
       request("truncated-secret-request"),
       current.workspace,
       current.outputPath,

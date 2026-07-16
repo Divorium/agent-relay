@@ -8,8 +8,7 @@ const historicalPlansBeforeResponsibilityPolicy = new Set([
   "docs/exec-plans/completed/2026-07-13-ready-pr-gate.md",
 ]);
 
-const humanActor = /\b(?:operator|reviewer|user|human|deployment owner)\b/i;
-const obligation = /\b(?:must|should|needs? to|required to|has to|will need to|run|verify|record|configure|dispatch|rebuild|check)\b/i;
+const humanDelegation = /\b(?:operator|reviewer|human|deployment owner|the user|user|you|someone|somebody|another person)\b(?:\s+\w+){0,3}\s+\b(?:must|should|need|needs|required|has|will|run|runs|verify|verifies|record|records|configure|configures|dispatch|dispatches|rebuild|rebuilds|check|checks)\b/i;
 const rejectedContext = /\b(?:reject(?:ed)?|remove(?:d)?|forbid(?:den)?|prevent(?:ed|s|ing)?|not assigned|no .* task|do not)\b/i;
 const manualTask = /\b(?:after (?:the )?merge|after merging|run locally|local verification request|manual (?:validation|verification|check|test|step|action|work)|manually)\b/i;
 
@@ -29,7 +28,7 @@ function validatePlan(source: string, completed: boolean): string[] {
   for (const line of lines) {
     const prose = line.replace(/`[^`]*`/g, "");
     if (rejectedContext.test(prose)) continue;
-    if (manualTask.test(prose) || (humanActor.test(prose) && obligation.test(prose))) {
+    if (manualTask.test(prose) || humanDelegation.test(prose)) {
       violations.push(`delegates work to a human: ${line.trim()}`);
     }
   }
@@ -74,6 +73,7 @@ test("plan validation rejects hidden human follow-up patterns", () => {
   const examples = [
     "- [ ] Reviewer must run the final check.",
     "After merge, the operator should verify the deployment.",
+    "The user needs to configure the host.",
     "Run the validation manually on the local host.",
     "## Remaining external validation",
   ];

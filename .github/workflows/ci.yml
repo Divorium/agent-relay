@@ -54,3 +54,13 @@ jobs:
       - name: Fail when checks failed
         if: steps.checks.outcome == 'failure'
         run: exit 1
+
+  state-volume-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify Relay starts with a root-owned state volume
+        run: bash test/compose-state-permissions.test.sh

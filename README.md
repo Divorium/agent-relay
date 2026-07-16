@@ -94,7 +94,7 @@ Operational setup, dispatch, recovery, logs, and credential rotation are documen
 
 Active:
 
-- `docs/exec-plans/active/2026-07-16-restore-codex-runtime-and-failure-logs.md`
+- None.
 
 Completed:
 
@@ -103,3 +103,4 @@ Completed:
 - `docs/exec-plans/completed/2026-07-15-audit-codex-context.md`
 - `docs/exec-plans/completed/2026-07-15-review-9-script-integration.md`
 - `docs/exec-plans/completed/2026-07-16-remove-sudo-runtime.md`
+- `docs/exec-plans/completed/2026-07-16-restore-codex-runtime-and-failure-logs.md`

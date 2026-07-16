@@ -20,15 +20,17 @@ Keep the existing boundaries: the GitHub runner remains a separate container; `a
 - [x] (2026-07-16) Updated packaging, executor, flow, log-stream, and context-boundary tests to enforce the single-agent contract.
 - [x] (2026-07-16) Updated `README.md` and `docs/operations/README.md` with the direct single-agent runtime.
 - [x] (2026-07-16) Removed host-only checks that repository automation cannot execute or prove.
-- [x] (2026-07-16) Added durable repository rules in `AGENTS.md` forbidding hidden delegation of implementation, validation, review, or follow-up work to a human.
-- [x] (2026-07-16) Added independent CI validation for current and future plans without adding responsibility policy to the ExecPlan template.
-- [x] (2026-07-16) Restored pre-policy completed plans to their exact historical blobs and excluded only those immutable records from the new responsibility scan.
+- [x] (2026-07-16) Added a durable repository instruction in `AGENTS.md` forbidding hidden delegation of required repository work to a human.
+- [x] (2026-07-16) Kept `.agent/PLANS.md` limited to plan structure, lifecycle, blockers, and evidence.
+- [x] (2026-07-16) Removed the regex-based responsibility scan because it could not reliably distinguish human tasks from technical language.
+- [x] (2026-07-16) Restored pre-existing completed plans to their exact historical blobs.
 
 ## Surprises & Discoveries
 
 - Observation: the wrapper error proves the wrapper started under the wrong account; it is not a Codex failure.
 - Observation: the wrapper remains necessary because it owns environment cleanup and the fixed Codex invocation.
-- Observation: responsibility policy belongs in repository instructions and CI, while `.agent/PLANS.md` remains limited to plan format, lifecycle, blockers, and evidence.
+- Observation: responsibility policy belongs in repository instructions, not in the ExecPlan template.
+- Observation: a broad text scan is not a reliable enforcement mechanism for semantic delegation and creates false positives.
 
 ## Decision Log
 
@@ -44,6 +46,10 @@ Keep the existing boundaries: the GitHub runner remains a separate container; `a
   Rationale: lack of access must remain an explicit incomplete condition and must never become hidden work for another person.
   Date/Author: 2026-07-16 / user correction.
 
+- Decision: do not enforce semantic responsibility policy with a regular-expression CI test.
+  Rationale: technical terms and historical prose make such a scan both incomplete and prone to false positives.
+  Date/Author: 2026-07-16 / user correction.
+
 - Decision: completed plans created before this policy remain immutable historical records.
   Rationale: safeguards apply prospectively and must not rewrite historical evidence.
   Date/Author: 2026-07-16 / review correction.
@@ -52,15 +58,15 @@ Keep the existing boundaries: the GitHub runner remains a separate container; `a
 
 The runtime no longer depends on a second service account or user switching. Agent Relay and Codex execute as the same non-root `agent` account, while the separate runner container retains GitHub credentials and publication ownership. The fixed wrapper, environment replacement, workspace permissions, read-only Codex authentication mount, result-free contract, and finalizer behavior remain intact.
 
-Repository instructions and tests prevent current and future plans from assigning required work to a human or presenting an unexecuted check as completion evidence. The ExecPlan template remains focused only on writing and maintaining plans.
+`AGENTS.md` records the responsibility rule. The ExecPlan template remains focused only on writing and maintaining plans. No unreliable text-scanning test remains in the repository.
 
 ## Context and Orientation
 
-`Dockerfile` defines the service account and filesystem ownership. `src/server.ts` constructs `CodexExecutor`. `src/execution/codex-executor.ts` builds the permission profile and launches the child. `scripts/codex-run` clears generated state and creates the clean tool environment. `AGENTS.md` defines the responsibility boundary, and `test/plan-responsibility.test.ts` enforces it.
+`Dockerfile` defines the service account and filesystem ownership. `src/server.ts` constructs `CodexExecutor`. `src/execution/codex-executor.ts` builds the permission profile and launches the child. `scripts/codex-run` clears generated state and creates the clean tool environment. `AGENTS.md` defines the responsibility boundary.
 
 ## Plan of Work
 
-Simplify the image to one non-root account, simplify executor construction and launch, remove unverifiable host acceptance, and enforce that required repository work is executed only by the agent or automated CI.
+Simplify the image to one non-root account, simplify executor construction and launch, remove unverifiable host acceptance, and record the repository responsibility boundary without adding unreliable semantic scans.
 
 ## Concrete Steps
 
@@ -71,7 +77,7 @@ Run from the repository root:
 
 ## Validation and Acceptance
 
-The final image user is `agent`. The image contains no second service account or user-switching configuration. The executor directly spawns `/usr/local/bin/codex-run` and has no runtime-user parameter. The wrapper still requires `agent` and still uses `env -i`. Repository checks enforce the responsibility boundary for plans governed by the new policy.
+The final image user is `agent`. The image contains no second service account or user-switching configuration. The executor directly spawns `/usr/local/bin/codex-run` and has no runtime-user parameter. The wrapper still requires `agent` and still uses `env -i`. The full repository validation suite must pass.
 
 ## Idempotence and Recovery
 
@@ -86,4 +92,4 @@ No API or state-format migration is required. Existing disposable state can be r
 
 No new runtime dependency is allowed. The public API, job contracts, workflow inputs, credential names, Compose services, and launcher path remain unchanged.
 
-Revision note (2026-07-16): replaced the unrequested two-account runtime with direct single-agent execution, removed unverifiable host acceptance, kept responsibility policy outside the ExecPlan template, and added executable safeguards against hidden human work delegation.
+Revision note (2026-07-16): replaced the unrequested two-account runtime with direct single-agent execution, removed unverifiable host acceptance, kept responsibility policy outside the ExecPlan template, and removed the unreliable regex-based responsibility scan.

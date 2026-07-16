@@ -94,7 +94,7 @@ Operational setup, dispatch, recovery, logs, and credential rotation are documen
 
 Active:
 
-- None.
+- `docs/exec-plans/active/2026-07-16-persist-github-runner-registration.md`
 
 Completed:
 

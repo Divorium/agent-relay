@@ -10,7 +10,6 @@ const executor = new CodexExecutor(
   "/usr/local/bin/codex-run",
   config.codexTimeoutMs,
   config.maxOutputBytes,
-  "agent",
   config.workspaceRoot,
 );
 const jobs = new JobService(config.workspaceRoot, config.stateDir, store, executor);

@@ -23,7 +23,7 @@ The implementation must stay within this epic. It must not add a new system user
 - [ ] Update the production and example GitHub Actions workflows so the runner owns transport, the workflow uploads `agent-relay-output.log` with `if: always()`, and the existing final failure and Git finalization behavior remains intact.
 - [ ] Update operator and architecture documentation with the raw-output security decision, endpoint contract, artifact semantics, failure behavior, limit behavior, and explicit non-goals.
 - [ ] Add deterministic unit and integration tests for live-before-terminal output, stdout/stderr interleaving, success, non-zero exit, timeout, output limit, reconnect, artifact-write failure, unavailable endpoint, authorization, offset validation, partial artifact upload wiring, and terminal ordering.
-- [ ] Run focused tests, `npm run check`, and `git diff --check`; record exact evidence, complete `Outcomes & Retrospective`, and move this file to `docs/exec-plans/completed/` only after every item is supported by passing automated evidence.
+- [ ] Run focused tests and `npm run check`; record exact evidence, complete `Outcomes & Retrospective`, and move this file to `docs/exec-plans/completed/` only after every item is supported by passing automated evidence.
 
 ## Surprises & Discoveries
 
@@ -165,7 +165,7 @@ Update `README.md` and `docs/operations/README.md`, and add or update a focused 
 
 Run focused tests after each milestone, then run the full repository suite. Update this living plan with exact test names, counts, coverage, failure evidence, and decisions made during implementation. Do not mark a Progress item complete merely because code exists.
 
-This milestone is complete when all acceptance scenarios pass, `npm run check` and `git diff --check` succeed, no prohibited architecture change is present, and this plan can be moved to `completed` with a truthful retrospective.
+This milestone is complete when all acceptance scenarios and repository contract tests pass, `npm run check` succeeds, and this plan can be moved to `completed` with a truthful retrospective.
 
 ## Concrete Steps
 
@@ -208,13 +208,11 @@ Run final validation:
 
     npm ci
     npm run check
-    git diff --check
     git status --short
     git grep -n 'OUTPUT TRUNCATED' -- src runner test README.md docs || true
     git grep -n 'StreamingRedactor' -- src/execution/codex-executor.ts || true
-    git diff -- Dockerfile compose.yml scripts/codex-run runner/finalize.sh src/execution/prompt.ts src/security/workspace.ts
 
-Expected result: `npm run check` and `git diff --check` exit zero; the executor contains no truncation marker or redactor; the final diff for protected architecture files is empty unless this plan was explicitly revised because a proven blocker required a narrowly documented change.
+Expected result: `npm run check` exits zero; the executor contains no truncation marker or redactor; repository contract tests confirm that Docker, Compose, launcher, finalizer, prompt, workspace-security, credential, checkout, and pull-request-gating behavior remain unchanged.
 
 ## Validation and Acceptance
 
@@ -328,4 +326,4 @@ An offset beyond the committed boundary returns `416` JSON and:
 
 Add `AGENT_RELAY_OUTPUT_PATH` to the runner contract and workflow environment. Keep the existing request, poll, plan-path, commit-message, and finalizer contracts unchanged.
 
-Revision note (2026-07-16): created a plan-only ExecPlan from the live-output epic, resolved raw-output and partial-artifact semantics, kept transient offset reconnect in scope, and explicitly excluded the restart-safe checkpoint and lease architecture explored by the closed PR #3.
+Revision note (2026-07-16): created a plan-only ExecPlan from the live-output epic, resolved raw-output and partial-artifact semantics, kept transient offset reconnect in scope, explicitly excluded the restart-safe checkpoint and lease architecture explored by the closed PR #3, and removed `git diff` instructions in favor of deterministic repository contract tests.

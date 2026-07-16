@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "$(id -un)" != "agent" ]]; then
+agent_uid="$(id -u agent)"
+if [[ "$(id -u)" != "${agent_uid}" ]]; then
   echo "codex-run must execute as the isolated agent user" >&2
   exit 1
 fi

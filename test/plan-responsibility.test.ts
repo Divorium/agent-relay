@@ -10,7 +10,7 @@ const historicalPlansBeforeResponsibilityPolicy = new Set([
 
 const humanActor = /\b(?:operator|reviewer|user|human|deployment owner)\b/i;
 const obligation = /\b(?:must|should|needs? to|required to|has to|will need to|run|verify|record|configure|dispatch|rebuild|check)\b/i;
-const rejectedContext = /\b(?:reject(?:ed)?|remove(?:d)?|forbid(?:den)?|not assigned|no .* task|do not)\b/i;
+const rejectedContext = /\b(?:reject(?:ed)?|remove(?:d)?|forbid(?:den)?|prevent(?:ed|s|ing)?|not assigned|no .* task|do not)\b/i;
 const manualTask = /\b(?:after (?:the )?merge|after merging|run locally|local verification request|manual (?:validation|verification|check|test|step|action|work)|manually (?:run|verify|check|record|configure|dispatch|rebuild))\b/i;
 
 function validatePlan(source: string, completed: boolean): string[] {

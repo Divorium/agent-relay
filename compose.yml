@@ -21,6 +21,31 @@ services:
       agent-relay:
         condition: service_healthy
 
+  agent-relay-state-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        USER_ID: ${HOST_UID:-1000}
+        GROUP_ID: ${HOST_GID:-1000}
+    user: "0:0"
+    restart: "no"
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    entrypoint:
+      - /bin/sh
+      - -eu
+      - -c
+    command:
+      - |
+        mkdir -p /var/lib/agent-relay
+        chown -R agent:agent /var/lib/agent-relay
+        chmod 0700 /var/lib/agent-relay
+    volumes:
+      - relay-state:/var/lib/agent-relay
+
   agent-relay:
     build:
       context: .
@@ -48,6 +73,9 @@ services:
       interval: 10s
       timeout: 3s
       retries: 12
+    depends_on:
+      agent-relay-state-init:
+        condition: service_completed_successfully
 
 volumes:
   workspace:

@@ -27,7 +27,20 @@ docker compose exec agent-relay /usr/local/bin/codex login status
 docker compose exec agent-relay curl -fsS http://localhost:8080/health
 ```
 
-Agent Relay and its Codex child use the same non-root `agent` account. The GitHub Actions runner remains a separate container and continues to own checkout and publication credentials.
+Agent Relay and its Codex child use the same non-root `agent` kernel identity. The wrapper validates the effective UID against the UID assigned to `agent`; it does not depend on the display name returned by the base image's passwd database. The GitHub Actions runner remains a separate container and continues to own checkout and publication credentials.
+
+### One-time volume recreation after the runtime-account migration
+
+A named volume created by an older image may retain the numeric owner of the former Relay account. The volume mount hides ownership prepared in the current image and can cause `EACCES` under `/var/lib/agent-relay`.
+
+When the Compose volumes are disposable, recreate them once:
+
+```bash
+docker compose down -v
+docker compose up --build -d
+```
+
+`down -v` deletes both the Relay state and shared workspace volumes. This is upgrade recovery, not a recurring startup step. The deployment does not use an init container.
 
 ## Repository validation
 
@@ -69,13 +82,25 @@ No additional publication secret is required or supported by the workflow.
 
 ## Logs and outcomes
 
-The `Run Codex through Agent Relay` step pipes runner-client stdout and stderr through `tee`:
+Follow the live Agent Relay container stream:
 
-- output is visible in the live GitHub Actions log;
-- the same output is uploaded as the `agent-relay-output` artifact;
+```bash
+docker compose logs -f agent-relay
+```
+
+Codex stdout and stderr are redacted incrementally and written to this stream while the child is running. The same values are appended to the job log under `/var/lib/agent-relay/logs`. A non-zero child exit does not discard its output: Relay drains queued writes, reports the process failure, and persists the terminal job state. Relay also emits one terminal line in this form:
+
+```text
+Agent Relay job <job-id> failed: CODEX_FAILED: Codex exited with code <code>
+```
+
+The `Run Codex through Agent Relay` workflow step pipes runner-client stdout and stderr through `tee`:
+
+- runner-client status and transport output are visible in the GitHub Actions step log;
+- the same runner-client output is uploaded as the `agent-relay-output` artifact;
 - `$GITHUB_OUTPUT` is reserved for the runner-derived commit message.
 
-The complete redacted Codex process log is stored under the Agent Relay state volume.
+The complete redacted Codex process log remains stored under the Agent Relay state volume. Direct live transport of the Codex byte stream into the GitHub Actions step is a separate contract and is not implemented by this runtime-restoration change.
 
 Codex does not write a result file. Relay sets the technical outcome from the process:
 

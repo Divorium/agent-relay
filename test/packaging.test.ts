@@ -29,12 +29,12 @@ function instructions(source: string): Array<{ name: string; args: string }> {
 }
 
 function yamlBlock(source: string, name: string, indent: number): string {
-  const prefix = `${" ".repeat(indent)}${name}:\n`;
-  const start = source.indexOf(prefix);
-  assert.notEqual(start, -1, `Missing YAML block ${name}`);
-  const bodyStart = start + prefix.length;
+  const spaces = " ".repeat(indent);
+  const header = new RegExp(`^${spaces}${name}:\\n`, "m").exec(source);
+  assert.ok(header, `Missing YAML block ${name}`);
+  const bodyStart = header.index + header[0].length;
   const remainder = source.slice(bodyStart);
-  const boundary = new RegExp(`\\n(?:${" ".repeat(indent)}[A-Za-z0-9_-]+:|[A-Za-z0-9_-]+:)\\n`).exec(remainder);
+  const boundary = new RegExp(`^(?:${spaces}[A-Za-z0-9_-]+:|[A-Za-z0-9_-]+:)\\n`, "m").exec(remainder);
   return boundary ? remainder.slice(0, boundary.index) : remainder;
 }
 

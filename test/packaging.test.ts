@@ -49,7 +49,8 @@ test("service image definition contains the required toolchain and one non-root 
   assert.ok(parsed.some(({ name, args }) => name === "ARG" && args === "CODEX_VERSION=0.144.3"));
   assert.ok(parsed.some(({ name, args }) => name === "RUN" && args.includes("useradd") && args.includes("agent")));
   assert.ok(parsed.some(({ name, args }) => name === "RUN" && args.includes("apt-get purge -y openssh-client")));
-  assert.ok(!parsed.some(({ name, args }) => name === "RUN" && /useradd[^\n]*relay|sudo|sudoers/.test(args)));
+  assert.doesNotMatch(dockerfile, /groupadd --system relay|useradd --system[^\n]* relay|sudoers/);
+  assert.doesNotMatch(dockerfile, /\s+sudo\s*\\/);
   assert.equal(parsed.filter(({ name }) => name === "USER").at(-1)?.args, "agent");
   assert.deepEqual(parsed.filter(({ name }) => name === "CMD").at(-1)?.args, '["node", "dist/src/server.js"]');
   assert.ok(!dockerfile.includes("/home/relay"));

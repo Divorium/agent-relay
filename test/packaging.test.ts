@@ -28,6 +28,16 @@ function instructions(source: string): Array<{ name: string; args: string }> {
   });
 }
 
+function yamlBlock(source: string, name: string, indent: number): string {
+  const prefix = `${" ".repeat(indent)}${name}:\n`;
+  const start = source.indexOf(prefix);
+  assert.notEqual(start, -1, `Missing YAML block ${name}`);
+  const bodyStart = start + prefix.length;
+  const remainder = source.slice(bodyStart);
+  const boundary = new RegExp(`\\n(?:${" ".repeat(indent)}[A-Za-z0-9_-]+:|[A-Za-z0-9_-]+:)\\n`).exec(remainder);
+  return boundary ? remainder.slice(0, boundary.index) : remainder;
+}
+
 async function assertCopySourcesExist(path: string): Promise<void> {
   for (const instruction of instructions(await text(path))) {
     if (instruction.name !== "COPY" || /(?:^|\s)--from=/.test(instruction.args)) continue;
@@ -70,31 +80,47 @@ test("runner image definition contains the expected runner-owned entrypoints", a
   await assertCopySourcesExist("Dockerfile.runner");
 });
 
-test("Compose definition separates runner, Relay state and credentials", async () => {
+test("Compose definition separates runner, state initialization, Relay state and credentials", async () => {
   const compose = await text("compose.yml");
-  const runner = compose.match(/\n  runner:\n([\s\S]*?)\n  agent-relay:/)?.[1] ?? "";
-  const relay = compose.match(/\n  agent-relay:\n([\s\S]*?)\nvolumes:/)?.[1] ?? "";
+  const runner = yamlBlock(compose, "runner", 2);
+  const stateInit = yamlBlock(compose, "agent-relay-state-init", 2);
+  const relay = yamlBlock(compose, "agent-relay", 2);
 
   assert.match(runner, /workspace:\/runner\/_work/);
   assert.doesNotMatch(runner, /AGENT_RELAY_TOKEN|HOST_CODEX_AUTH_FILE|relay-state/);
+
+  assert.match(stateInit, /user: "0:0"/);
+  assert.match(stateInit, /network_mode: none/);
+  assert.match(stateInit, /read_only: true/);
+  assert.match(stateInit, /no-new-privileges:true/);
+  assert.match(stateInit, /relay-state:\/var\/lib\/agent-relay/);
+  assert.doesNotMatch(stateInit, /AGENT_RELAY_TOKEN|HOST_CODEX_AUTH_FILE|workspace:\/runner\/_work/);
+
   assert.match(relay, /AGENT_RELAY_TOKEN/);
   assert.match(relay, /workspace:\/runner\/_work/);
   assert.match(relay, /relay-state:\/var\/lib\/agent-relay/);
   assert.match(relay, /HOST_CODEX_AUTH_FILE.*:\/home\/agent\/\.codex\/auth\.json:ro/);
+  assert.match(relay, /agent-relay-state-init:[\s\S]*condition: service_completed_successfully/);
   assert.doesNotMatch(compose, /docker\.sock|privileged:\s*true/);
 });
 
-test("mandatory CI definition uses only the existing same-repository self-hosted runner", async () => {
+test("mandatory repository checks stay self-hosted and Docker integration stays isolated", async () => {
   const workflow = await text(".github/workflows/ci.yml");
+  const repositoryChecks = yamlBlock(workflow, "test", 2);
+  const stateVolumeIntegration = yamlBlock(workflow, "state-volume-integration", 2);
 
-  assert.match(workflow, /runs-on: \[self-hosted, agent-relay\]/);
-  assert.match(workflow, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
-  assert.match(workflow, /persist-credentials: false/);
-  assert.match(workflow, /npm ci/);
-  assert.match(workflow, /npm run check/);
-  assert.match(workflow, /GITHUB_STEP_SUMMARY/);
-  assert.match(workflow, /# start of coverage report/);
-  assert.doesNotMatch(workflow, /ubuntu-latest|\bdocker\b|privileged|agent-relay-host/i);
+  assert.match(repositoryChecks, /runs-on: \[self-hosted, agent-relay\]/);
+  assert.match(repositoryChecks, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
+  assert.match(repositoryChecks, /persist-credentials: false/);
+  assert.match(repositoryChecks, /npm ci/);
+  assert.match(repositoryChecks, /npm run check/);
+  assert.match(repositoryChecks, /GITHUB_STEP_SUMMARY/);
+  assert.match(repositoryChecks, /# start of coverage report/);
+  assert.doesNotMatch(repositoryChecks, /ubuntu-latest|\bdocker\b|privileged|agent-relay-host/i);
+
+  assert.match(stateVolumeIntegration, /runs-on: ubuntu-latest/);
+  assert.match(stateVolumeIntegration, /compose-state-permissions\.test\.sh/);
+  assert.doesNotMatch(workflow, /docker\.sock|privileged|agent-relay-host/i);
 });
 
 test("repository validation does not invoke Docker or GitHub APIs", async () => {

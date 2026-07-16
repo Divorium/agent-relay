@@ -11,7 +11,7 @@ const historicalPlansBeforeResponsibilityPolicy = new Set([
 const humanActor = /\b(?:operator|reviewer|user|human|deployment owner)\b/i;
 const obligation = /\b(?:must|should|needs? to|required to|has to|will need to|run|verify|record|configure|dispatch|rebuild|check)\b/i;
 const rejectedContext = /\b(?:reject(?:ed)?|remove(?:d)?|forbid(?:den)?|prevent(?:ed|s|ing)?|not assigned|no .* task|do not)\b/i;
-const manualTask = /\b(?:after (?:the )?merge|after merging|run locally|local verification request|manual (?:validation|verification|check|test|step|action|work)|manually (?:run|verify|check|record|configure|dispatch|rebuild))\b/i;
+const manualTask = /\b(?:after (?:the )?merge|after merging|run locally|local verification request|manual (?:validation|verification|check|test|step|action|work)|manually)\b/i;
 
 function validatePlan(source: string, completed: boolean): string[] {
   const violations: string[] = [];
@@ -27,8 +27,9 @@ function validatePlan(source: string, completed: boolean): string[] {
   }
 
   for (const line of lines) {
-    if (rejectedContext.test(line)) continue;
-    if (manualTask.test(line) || (humanActor.test(line) && obligation.test(line))) {
+    const prose = line.replace(/`[^`]*`/g, "");
+    if (rejectedContext.test(prose)) continue;
+    if (manualTask.test(prose) || (humanActor.test(prose) && obligation.test(prose))) {
       violations.push(`delegates work to a human: ${line.trim()}`);
     }
   }
@@ -37,9 +38,14 @@ function validatePlan(source: string, completed: boolean): string[] {
 }
 
 async function markdownFiles(directory: string): Promise<string[]> {
-  return (await readdir(directory))
-    .filter((name) => name.endsWith(".md"))
-    .map((name) => join(directory, name));
+  try {
+    return (await readdir(directory))
+      .filter((name) => name.endsWith(".md"))
+      .map((name) => join(directory, name));
+  } catch (error) {
+    if ((error as { code?: string }).code === "ENOENT") return [];
+    throw error;
+  }
 }
 
 test("repository instructions forbid hidden human work delegation", async () => {

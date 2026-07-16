@@ -12,19 +12,21 @@ Keep the existing boundaries: the GitHub runner remains a separate container; `a
 
 - [x] (2026-07-16) Confirmed that current `main` installs a user-switching tool, creates a second service account, and starts Agent Relay under that account.
 - [x] (2026-07-16) Confirmed that `src/server.ts` passes `agent` to `CodexExecutor`, which converts direct launch into a user-switching invocation.
-- [ ] Change the image to one runtime account, `agent`, and remove the second account and its switching configuration.
-- [ ] Run the service as `agent` with `HOME=/home/agent` and `WORKDIR=/app`.
-- [ ] Remove `createCodexInvocation`, `runAsUser`, and every user-switching execution path. Spawn the fixed launcher directly.
-- [ ] Remove `/home/relay` from the Codex filesystem policy while preserving all remaining workspace, application, temporary-directory, credential, and Git metadata boundaries.
-- [ ] Keep the wrapper's `agent` assertion and complete environment replacement.
-- [ ] Update packaging, executor, runtime-script, and context tests to prove the rejected model cannot return.
-- [ ] Update `README.md` and `docs/operations/README.md`.
-- [ ] Run `npm ci`, `npm run check`, and `git diff --check` and record exact results.
+- [x] (2026-07-16) Changed `Dockerfile` to one runtime account, `agent`, and removed the second account and its switching configuration.
+- [x] (2026-07-16) Configured the final service stage as `USER agent` with `HOME=/home/agent` and `WORKDIR=/app`.
+- [x] (2026-07-16) Removed `createCodexInvocation`, `runAsUser`, and every user-switching execution path; `CodexExecutor` now spawns the fixed launcher directly.
+- [x] (2026-07-16) Removed `/home/relay` from the Codex filesystem policy while preserving the remaining application, workspace, temporary-directory, credential, and Git metadata boundaries.
+- [x] (2026-07-16) Preserved the wrapper's `agent` assertion, agent-home cleanup, and complete environment replacement.
+- [x] (2026-07-16) Updated packaging, executor, flow, log-stream, and context-boundary tests to enforce the single-agent contract.
+- [x] (2026-07-16) Updated `README.md` and `docs/operations/README.md` with the direct single-agent runtime and migration note.
+- [x] (2026-07-16) GitHub Actions CI run `29460964856` completed successfully on head `40bb2e8730b9c82d4cf9240ff995aa4635e37977`; `npm run check` passed 114 tests with zero failures, skipped, todo, or cancelled tests.
+- [ ] Run `git diff --check` on the final branch. The assistant environment could not clone GitHub because outbound DNS resolution was unavailable, so this command remains an explicit reviewer check rather than a fabricated result.
 
 ## Surprises & Discoveries
 
 - Observation: the wrapper error proves the wrapper started under the wrong account; it is not a Codex failure.
 - Observation: the wrapper remains necessary because it owns environment cleanup and the fixed Codex invocation.
+- Observation: the first CI run found four remaining five-argument `CodexExecutor` calls; the second found one overbroad packaging regex; both were corrected before the successful run.
 
 ## Decision Log
 
@@ -38,7 +40,9 @@ Keep the existing boundaries: the GitHub runner remains a separate container; `a
 
 ## Outcomes & Retrospective
 
-Implementation is not yet complete.
+The runtime no longer depends on a second service account or user switching. Agent Relay and Codex execute as the same non-root `agent` account, while the separate runner container retains GitHub credentials and publication ownership. The fixed wrapper, environment replacement, workspace permissions, read-only Codex authentication mount, result-free contract, and finalizer behavior remain intact.
+
+The repository validation suite passes. Final whitespace validation remains explicitly unclaimed because the assistant execution environment could not clone the repository.
 
 ## Context and Orientation
 
@@ -66,8 +70,12 @@ No API or state-format migration is required. Existing state-volume ownership ma
 
 ## Artifacts and Notes
 
-Append exact validation evidence here.
+- CI run `29460795457`: typecheck failed on four stale constructor calls.
+- CI run `29460901279`: typecheck passed; 113 of 114 tests passed; one packaging assertion was overbroad.
+- CI run `29460964856`: `npm run check` passed; 114 tests passed, 0 failed, 0 skipped, 0 todo, 0 cancelled; aggregate line coverage 98.52%.
 
 ## Interfaces and Dependencies
 
 No new dependency is allowed. The public API, job contracts, workflow inputs, credential names, Compose services, and launcher path remain unchanged.
+
+Revision note (2026-07-16): replaced the unrequested two-account runtime with direct single-agent execution, preserved all external contracts and wrapper isolation behavior, updated tests and documentation, and recorded exact CI evidence without claiming unavailable local validation.

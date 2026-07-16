@@ -36,7 +36,6 @@ test("Codex arguments isolate the selected repository from its shared root", () 
   for (const expected of [
     '"/home/agent/.codex"="deny"',
     '"/app"="deny"',
-    '"/home/relay"="deny"',
     '"/runner"="deny"',
     '"/tmp"="deny"',
     '"/var/tmp"="deny"',
@@ -45,11 +44,12 @@ test("Codex arguments isolate the selected repository from its shared root", () 
     '"/work/root/repository"="write"',
     '"/work/root/repository/.git"="read"',
   ]) assert.match(filesystem, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(filesystem, /home\/relay/);
   assert.ok(args.includes("permissions.relay.network.enabled=true"));
   assert.notDeepEqual(args.slice(args.indexOf("exec") + 1, args.indexOf("exec") + 3), ["--sandbox", "danger-full-access"]);
 });
 
-test("CodexExecutor runs a real child process with filtered context and no result artifact", async () => {
+test("CodexExecutor runs a real child process directly with filtered context and no result artifact", async () => {
   const { root, workspaceRoot, workspace, outputPath } = await createRoot("executor");
   const executable = join(root, "fake-codex");
   await writeFile(executable, `#!/bin/sh
@@ -59,7 +59,6 @@ case "$args" in *'default_permissions="relay"'*) ;; *) exit 21 ;; esac
 case "$args" in *'permissions.relay.extends=":workspace"'*) ;; *) exit 22 ;; esac
 case "$args" in *'"/home/agent/.codex"="deny"'*) ;; *) exit 23 ;; esac
 case "$args" in *'"/app"="deny"'*) ;; *) exit 24 ;; esac
-case "$args" in *'"/home/relay"="deny"'*) ;; *) exit 25 ;; esac
 case "$args" in *'"/runner"="deny"'*) ;; *) exit 26 ;; esac
 case "$args" in *'"/tmp"="deny"'*) ;; *) exit 27 ;; esac
 case "$args" in *'"/var/tmp"="deny"'*) ;; *) exit 28 ;; esac
@@ -82,7 +81,7 @@ printf 'changed\n' > "$workspace/changed.txt"
 
   const previousRelayToken = process.env.AGENT_RELAY_TOKEN;
   process.env.AGENT_RELAY_TOKEN = "relay-secret";
-  const executor = new CodexExecutor(executable, 5_000, 100_000, undefined, workspaceRoot);
+  const executor = new CodexExecutor(executable, 5_000, 100_000, workspaceRoot);
   try {
     const outcome = await executor.run({ requestId: "executor-request", workspace: "workspace", planPath }, workspace, outputPath);
     assert.equal(outcome.exitCode, 0);
@@ -108,7 +107,7 @@ while true; do sleep 1; done
 `, { mode: 0o700 });
   await chmod(executable, 0o700);
 
-  const executor = new CodexExecutor(executable, 50, 100_000, undefined, workspaceRoot);
+  const executor = new CodexExecutor(executable, 50, 100_000, workspaceRoot);
   try {
     await assert.rejects(
       () => executor.run({ requestId: "timeout-request", workspace: "workspace", planPath }, workspace, outputPath),

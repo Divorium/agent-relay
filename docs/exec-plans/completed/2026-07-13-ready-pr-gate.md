@@ -59,8 +59,6 @@ GitHub Actions run `29290651956` completed successfully for commit `a9dd7ba34320
 - runner image build: passed;
 - runner image verification, including `/runner/resolve-pr.mjs`: passed.
 
-Remaining external validation:
+## Scope boundary
 
-- rebuild the local runner image after pulling this branch;
-- after merge, dispatch `.github/workflows/agent-relay.yml` against a ready pull request;
-- configure and verify `AGENT_RELAY_PUSH_TOKEN` when an ExecPlan modifies `.github/workflows/`.
+Repository acceptance is complete based on the recorded automated evidence. Deployment-specific exercises are outside this plan's acceptance and are not assigned as follow-up work.

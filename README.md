@@ -94,7 +94,7 @@ Operational setup, dispatch, recovery, logs, and credential rotation are documen
 
 Active:
 
-- `docs/exec-plans/active/2026-07-16-native-github-runner-and-codex.md`
+- `docs/exec-plans/active/2026-07-16-install-native-github-runner.md`
 
 Completed:
 

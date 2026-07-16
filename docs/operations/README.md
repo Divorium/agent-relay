@@ -15,7 +15,7 @@ Configure the same Relay bearer token as the repository Actions secret `AGENT_RE
 
 Only `auth.json` is mounted into the Codex home directory, read-only. Do not mount the complete host `~/.codex` directory. The launcher removes all generated agent-home content except `auth.json` before every execution.
 
-## Start and verify
+## Start
 
 ```bash
 docker compose build
@@ -27,22 +27,7 @@ docker compose exec agent-relay /usr/local/bin/codex login status
 docker compose exec agent-relay curl -fsS http://localhost:8080/health
 ```
 
-Verify the runtime user and filesystem boundary:
-
-```bash
-docker compose exec agent-relay sh -lc '
-set -eu
-test "$(id -un)" = agent
-test "$(stat -c %a /var/lib/agent-relay)" = 700
-test -r /home/agent/.codex/auth.json
-test ! -w /home/agent/.codex/auth.json
-! command -v sudo >/dev/null 2>&1
-'
-```
-
 Agent Relay and its Codex child use the same non-root `agent` account. The GitHub Actions runner remains a separate container and continues to own checkout and publication credentials.
-
-If an existing named state volume was created by the rejected two-account image and is not writable by the configured `HOST_UID` and `HOST_GID`, either recreate the disposable state volume or correct its ownership once before starting the new image. Do not add a privileged runtime path to the service.
 
 ## Repository validation
 
@@ -53,7 +38,7 @@ npm ci
 npm run check
 ```
 
-The suite uses local fixtures and validates only code and definitions stored in this repository. It does not invoke or validate Docker, Compose, GitHub APIs, hosted runners, network services, or credentials. Deployment commands above are operator procedures, not automated acceptance tests.
+The suite uses local fixtures and validates only code and definitions stored in this repository. It does not invoke or validate Docker, Compose, GitHub APIs, hosted runners, network services, or credentials.
 
 ## Install and dispatch the workflow
 

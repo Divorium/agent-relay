@@ -26,7 +26,7 @@ concurrency:
 jobs:
   codex:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: [self-hosted, agent-relay]
+    runs-on: [self-hosted]
     steps:
       - name: Resolve execution request
         id: request
@@ -65,7 +65,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ steps.request.outputs.pr_number }}
-        run: node /runner/resolve-pr.mjs
+        run: node /opt/agent-relay/runner/resolve-pr.mjs
 
       - uses: actions/checkout@v4
         with:
@@ -141,16 +141,16 @@ jobs:
 
           printf 'plan_path=%s\n' "${plan_path}" >> "${GITHUB_OUTPUT}"
 
-      - name: Run Codex through Agent Relay
-        id: relay
+      - name: Run Codex directly
+        id: codex
         continue-on-error: true
         shell: bash
         env:
-          AGENT_RELAY_TOKEN: ${{ secrets.AGENT_RELAY_TOKEN }}
-          AGENT_RELAY_PLAN_PATH: ${{ steps.plan.outputs.plan_path }}
+          CODEX_PLAN_PATH: ${{ steps.plan.outputs.plan_path }}
+          CODEX_WORKSPACE_ROOT: ${{ runner.workspace }}
         run: |
           set -o pipefail
-          node /runner/client.mjs 2>&1 | tee "${RUNNER_TEMP}/agent-relay-console.log"
+          node /opt/agent-relay/dist/src/run-codex.js 2>&1 | tee "${RUNNER_TEMP}/agent-relay-console.log"
 
       - name: Upload Agent Relay output
         if: always()
@@ -160,15 +160,15 @@ jobs:
           path: ${{ runner.temp }}/agent-relay-console.log
           if-no-files-found: warn
 
-      - name: Fail when Agent Relay failed
-        if: steps.relay.outcome == 'failure'
+      - name: Fail when Codex failed
+        if: steps.codex.outcome == 'failure'
         shell: bash
         run: exit 1
 
       - name: Commit and push
         shell: bash
         env:
-          COMMIT_MESSAGE: ${{ steps.relay.outputs.commit_message }}
+          COMMIT_MESSAGE: ${{ steps.codex.outputs.commit_message }}
           TARGET_BRANCH: ${{ steps.pr.outputs.head_ref }}
           GITHUB_PUSH_TOKEN: ${{ github.token }}
-        run: /runner/finalize.sh
+        run: /opt/agent-relay/runner/finalize.sh

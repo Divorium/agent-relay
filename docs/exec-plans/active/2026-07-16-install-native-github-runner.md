@@ -1,357 +1,217 @@
 # Install a native organization GitHub runner that executes Codex directly
 
-This ExecPlan is maintained according to `.agent/PLANS.md` and must be implemented together with `docs/native-github-runner-specification.md`.
+This ExecPlan is maintained according to `.agent/PLANS.md` and implemented together with `docs/native-github-runner-specification.md`.
 
 ## Purpose / Big Picture
 
-Replace the current two-container Docker Compose deployment with one fresh native Debian installation created and maintained by one repository script.
+Replace the former two-process container deployment with one fresh native Debian installation managed by one repository script.
 
-The target runtime has one long-lived service: the official GitHub Actions runner. Workflow jobs invoke a root-owned installed Codex harness directly in the checked-out repository. Remove the Agent Relay HTTP server, bearer token, polling client, queue, persisted Relay state, and second application service because the runner and Codex execute in the same operating-system environment.
+The target runtime has one long-lived service: the official GitHub Actions runner. Workflow jobs invoke a root-owned installed Codex harness directly in the checked-out pull-request workspace. There is no Agent Relay HTTP server, bearer token, polling client, queue, persisted Relay state, or second application service.
 
-This is not a migration or cutover procedure. The implementation must not inspect, stop, unregister, copy from, clean, or modify the previous Docker environment. Existing runner registration, volumes, Relay state, logs, and Codex authentication from that environment are not inputs.
+This is not a migration or cutover procedure. The implementation does not inspect, stop, unregister, copy from, clean, or modify the previous environment.
 
-The only setup and update entrypoint is:
+The source checkout in WSL is:
+
+```text
+/srv/github-runner/storage/agent-relay
+```
+
+The only installation and update entrypoint is:
 
 ```bash
+cd /srv/github-runner/storage/agent-relay
 ./install.sh
 ```
 
-The completed installer performs all installation and configuration. Its only interactive behavior is:
+## User-visible result
 
-- invoking `codex login` when the current user is not authenticated;
-- reading a time-limited GitHub organization runner registration token without echo when no registration exists.
+The completed installer:
 
-These are runtime interactions of the completed installer, not manual implementation or acceptance tasks.
+- configures WSL systemd when required and stops before continuing until WSL is restarted;
+- installs the required native toolchain;
+- validates the repository before replacing trusted runtime files;
+- installs the trusted harness under `/opt/agent-relay`;
+- invokes `codex login` only when authentication is absent;
+- asks once for a GitHub PAT only when no runner registration exists;
+- exchanges the PAT for GitHub's short-lived organization runner registration token;
+- installs and registers one organization runner named `gh-runner` with work directory `_work` and no custom labels;
+- installs, starts, and verifies the official runner systemd service.
 
-## Behavior to preserve
+The installer asks for no repository URL, organization name, runner name, labels, workspace path, Relay credential, authentication-file path, UID, GID, environment file, service setting, or manually generated runner registration token.
 
-Preserve the useful behavior of the current system:
+## Behavior preserved
 
 - reject fork-origin pull requests before untrusted repository code runs;
 - resolve an open, ready pull request and its exact head SHA/ref;
-- checkout that SHA with `persist-credentials: false`;
+- checkout the resolved SHA with `persist-credentials: false`;
 - verify that checkout credentials are absent before Codex starts;
 - select exactly one regular, non-symlink active ExecPlan;
 - give Codex only `.agent/PLANS.md` and the selected plan as task context;
 - prevent Codex from committing or pushing;
-- retain workspace containment, symlink protection, restricted filesystem access, and required network access;
-- retain timeout, SIGTERM, delayed SIGKILL, output cap, streaming redaction, and non-zero failure behavior;
+- enforce workspace containment, symlink protection, restricted filesystem access, and required network access;
+- enforce timeout, process-group `SIGTERM`, delayed `SIGKILL`, output cap, streaming redaction, and non-zero failure behavior;
 - treat a clean worktree as a successful no-op;
 - validate, commit, and push a changed worktree through the trusted finalizer;
 - keep redacted Codex output visible in GitHub Actions and upload it even when execution fails.
 
-## Scope
+## Implemented architecture
 
-### 1. Replace Relay transport with direct execution
+### Direct Codex execution
 
-Add `src/run-codex.ts` as a strict TypeScript CLI installed outside pull-request workspaces.
+`src/run-codex.ts` is the installed direct entrypoint. It validates `GITHUB_WORKSPACE`, `GITHUB_OUTPUT`, `CODEX_PLAN_PATH`, `CODEX_WORKSPACE_ROOT`, and `HOME`; validates optional positive execution limits; resolves the real workspace; validates the active plan; derives the commit message before execution; invokes the retained executor; and writes `commit_message` only after successful execution.
 
-It must:
+`src/execution/codex-executor.ts` retains the useful executor behavior without Relay DTOs or persistence. It starts the launcher in a detached process group, streams redacted stdout and stderr, caps output, sends `SIGTERM` on timeout, sends delayed `SIGKILL`, and returns non-zero failure through minimal execution errors.
 
-- validate `GITHUB_WORKSPACE`, `GITHUB_OUTPUT`, `CODEX_PLAN_PATH`, and `CODEX_WORKSPACE_ROOT`;
-- parse optional positive `CODEX_TIMEOUT_MS` and `MAX_OUTPUT_BYTES` values;
-- enforce realpath workspace containment and active-plan symlink protections;
-- derive the commit message before Codex starts;
-- build the existing minimal prompt;
-- invoke `/usr/local/bin/codex-run` through the retained executor;
-- stream redacted stdout and stderr;
-- enforce the current timeout and output cap;
-- append `commit_message` to `GITHUB_OUTPUT` only after successful execution;
-- return non-zero on validation, spawn, timeout, or Codex failure.
+The Codex permission profile:
 
-Remove HTTP requests, request IDs, job IDs, polling, HTTP response validation, persisted job DTOs, persisted Relay logs/state, and restart recovery.
+- disables memories;
+- denies the real home, `/opt/agent-relay`, `/opt/rust`, `/tmp`, `/var/tmp`, and the complete runner workspace root;
+- re-allows writes only to the selected repository and private runtime directory;
+- grants read access to the selected repository `.git` directory;
+- enables required network access;
+- never uses `danger-full-access`.
 
-Adapt rather than redesign the existing executor. Retain prompt construction, workspace checks, redaction, timeout, force-kill, output cap, and truncation behavior. Remove only Relay DTO, persistence, and HTTP-oriented error dependencies.
+### Native launcher
 
-### 2. Adapt the Codex launcher safely
+`scripts/codex-run`:
 
-Rewrite `scripts/codex-run` so it never deletes, copies, moves, rewrites, or symlinks files in the real user home.
+- refuses root execution;
+- verifies `$HOME/.codex/auth.json`;
+- creates one private per-run directory;
+- replaces the child environment through `env -i`;
+- exposes only the real `HOME`, current user identity, locale, deterministic toolchain paths, private Cargo/temp paths, and `GIT_OPTIONAL_LOCKS=0`;
+- forwards termination signals;
+- removes only its private directory.
 
-The launcher must:
+It does not delete, copy, move, rewrite, or symlink user-home, authentication, runner, source, or workspace files.
 
-- refuse root execution;
-- use `umask 0077`;
-- verify `$HOME/.codex/auth.json`;
-- create one private execution directory with `mktemp`;
-- clean only that directory on exit;
-- invoke Codex through `env -i` with explicit locale, current user identity, real `HOME`, native Java/Go/Rust paths, private cargo/temp paths, and `GIT_OPTIONAL_LOCKS=0`.
+### Installer
 
-Keep `HOME` pointed at the real home for Codex authentication. Deny that entire home to model-controlled tools through a neutral permission profile such as `agent`.
+`install.sh`:
 
-The profile must deny the trusted installation, Rust installation, runner workspace root, and general temporary roots before re-allowing only the selected repository, its `.git` read access, and the private execution directory. Keep required network access and never use `danger-full-access`.
+- runs as the existing non-root Debian user and uses `sudo` only for system changes;
+- resolves `SOURCE_ROOT` from `BASH_SOURCE`, so `/srv/github-runner/storage/agent-relay` requires no configuration;
+- verifies Debian x86-64, a writable home and source checkout, `sudo`, systemd, and outbound HTTPS;
+- configures `/etc/wsl.conf` without replacing unrelated settings when WSL needs systemd enabled;
+- installs system Node.js 22 and npm under `/usr/bin`;
+- installs TypeScript 5.8.3 and Codex CLI 0.144.4 under `/usr/local`;
+- installs Temurin Java 21, Go 1.24.5, Rust stable, Python, Git, Git LFS, build tools, archive utilities, and runner dependencies;
+- checksum-verifies Go and GitHub Actions Runner archives;
+- runs `npm ci`, `npm run check`, and the native toolchain/Codex-profile smoke test before replacing trusted files;
+- stages `/opt/agent-relay` on the same filesystem and restores the previous harness when a swap or launcher installation is interrupted;
+- preserves Codex authentication, runner registration, `_work`, diagnostics, and a newer runner version on rerun;
+- rejects a registered runner directory whose listener binary is missing instead of destroying its registration;
+- keeps the PAT and registration token out of command arguments, files, logs, services, profiles, installed payloads, and retained child environments.
 
-Only trusted organization repositories and workflows may use this runner because the Codex permission profile does not isolate arbitrary workflow steps from the runner user's account.
+Fresh installations pin:
 
-### 3. Add one idempotent installer
+- GitHub Actions Runner `2.335.1`, SHA-256 `4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf`;
+- Go `1.24.5`, SHA-256 `10ad9e86233e74c0f6590fe5426895de6bf388964210eac34a6d83f38918ecdc`;
+- TypeScript `5.8.3`;
+- Codex CLI `0.144.4`.
 
-Add root-level `install.sh` as the only installation and update path.
+### Workflows
 
-The installer must:
-
-- run as the existing non-root Debian user and use `sudo` only for system changes;
-- resolve the source root from its own location;
-- verify Debian, systemd, `sudo`, a writable home, and outbound HTTPS prerequisites;
-- use fixed organization URL `https://github.com/Divorium`;
-- require no `.env`, positional arguments, or routine configuration prompts;
-- avoid a general distribution upgrade;
-- install the toolchain currently supplied by the two Docker images;
-- run `npm ci` and `npm run check` before replacing installed application files;
-- stage and atomically install the trusted payload under `/opt/agent-relay`;
-- install `/usr/local/bin/codex-run` and system-wide Rust under `/opt/rust`;
-- run the native toolchain smoke test;
-- invoke Codex login only when authentication is absent;
-- install and checksum-verify the official GitHub runner archive when absent;
-- prompt without echo for an organization runner registration token only when `.runner` is absent;
-- register runner name `gh-runner`, work directory `_work`, and no custom labels;
-- install, enable, start, and verify the official service through `svc.sh`;
-- install GitHub's Debian `needrestart` service override;
-- preserve registration, Codex authentication, `_work`, diagnostics, and a newer self-updated runner on rerun;
-- never persist the registration token;
-- never invoke Docker, Docker Compose, host-lifecycle commands, or operations against the previous environment.
-
-The normal path asks for no repository URL, organization name, runner name, labels, workspace path, Relay credential, Codex auth path, UID, GID, environment file, or service setting.
-
-Retain these toolchain capabilities:
-
-- Node.js 22 and npm;
-- TypeScript 5.8.3;
-- Codex CLI 0.144.3;
-- Temurin Java 21;
-- Go 1.24.5;
-- Rust stable;
-- Python 3 with pip and venv;
-- Git and Git LFS;
-- C/C++ tools, clang, cmake, and pkg-config;
-- curl, wget, jq, archive tools, rsync, file, findutils, diffutils, and runner libraries.
-
-The native smoke test must validate required tools without rejecting unrelated installed software such as OpenSSH or .NET.
-
-Use GitHub Actions Runner `2.335.1` for a fresh installation and verify SHA-256:
-
-```text
-4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf
-```
-
-Keep the official updater enabled and never downgrade a newer runner.
-
-### 4. Register one organization runner
-
-Register against:
-
-```text
-https://github.com/Divorium
-```
-
-Do not pass `--labels`. Use runner name `gh-runner` and work directory `_work`.
-
-The runner enters the organization's default runner group and follows the existing repository-access policy. The installer must not introduce another GitHub credential to manage runner groups.
-
-Every maintained workflow job must use:
+The production workflow, example workflow, and CI use:
 
 ```yaml
 runs-on: [self-hosted]
 ```
 
-The user disables the old runner outside this repository. The implementation must not detect or manage it.
+They use trusted helpers only from `/opt/agent-relay`, preserve exact pull-request resolution and credential-free checkout, pass `${{ runner.workspace }}` as the workspace root, capture output through `tee`, upload the output artifact with `if: always()`, delay failure until after upload, and use the trusted finalizer for commit/push.
 
-### 5. Preserve workflow orchestration without Relay
+The Codex step receives no GitHub token. GitHub credentials remain step-scoped to pull-request resolution, checkout, and finalization.
 
-Update:
+## Removed repository elements
 
-- `.github/workflows/agent-relay.yml`;
-- `examples/github-actions/agent-relay.yml`;
-- `.github/workflows/ci.yml`.
+- `Dockerfile` and `Dockerfile.runner`;
+- `compose.yml` and `.dockerignore`;
+- `.env.example` and the obsolete `.env` ignore entry;
+- runner container entrypoint and Relay client;
+- Relay HTTP API, health endpoint, bearer authentication, configuration, job service, job store, queue/state DTOs, and server entrypoint;
+- persisted Relay log handling and polling/restart recovery;
+- tests and current operations documentation that covered only removed transport, persistence, packaging, or container startup.
 
-Use trusted installed helpers under `/opt/agent-relay`, never equivalent code from the pull-request checkout.
-
-Retain existing triggers, manual inputs, fork gate, installed PR resolver, exact checkout, credential verification, active-plan selection, `pipefail`, output capture through `tee`, artifact upload with `if: always()`, delayed failure, and the installed finalizer.
-
-Set `CODEX_WORKSPACE_ROOT` from `${{ runner.workspace }}`.
-
-Remove `AGENT_RELAY_TOKEN`, `AGENT_RELAY_URL`, request IDs, polling variables, container service names, and `/runner` paths. The Codex step receives no GitHub token; the token remains explicit only in PR resolution, checkout, and finalization.
-
-### 6. Remove superseded code only after replacements pass
-
-Remove:
-
-- `Dockerfile`, `Dockerfile.runner`, `compose.yml`, `.dockerignore`, and `.env.example`;
-- the obsolete `.env` ignore entry;
-- `runner/entrypoint.sh` and `runner/client.mjs`;
-- `src/server.ts`;
-- Relay HTTP server, configuration, job service, job store, and unused HTTP/job contracts;
-- tests whose only subject is removed transport, polling, persistence, Docker packaging, or container startup.
-
-Retain and adapt:
-
-- `src/execution/codex-executor.ts`;
-- `src/execution/prompt.ts`;
-- `src/security/redaction.ts`;
-- `src/security/workspace.ts`;
-- `runner/resolve-pr.mjs`;
-- `runner/finalize.sh`;
-- `scripts/codex-run`;
-- `scripts/toolchain-smoke.sh`;
-- repository instructions, workflows, README, and operations documentation.
-
-Update `package.json` to remove the server start command and container-entrypoint checks while retaining strict type checking, build, Node test coverage, shell validation, and `npm run check`.
-
-Do not modify historical files under `docs/exec-plans/completed/`.
-
-### 7. Adapt tests without expanding product scope
-
-Keep current behavioral tests for resolver, finalizer, prompt, redaction, workspace boundaries, executor process behavior, and Git publication where still applicable.
-
-Add or adapt deterministic tests for:
-
-- direct CLI validation, path boundaries, symlinks, integer parsing, commit-message normalization, and plan movement;
-- executor success, clean no-op, exit failure, spawn error, timeout, delayed force-kill, truncation, split UTF-8, split secrets, and live redaction;
-- launcher preservation of real home, authentication, runner, source, and unrelated workspaces;
-- installer preflight, toolchain decisions, current runner checksum, login branching, hidden token input, organization registration, `_work`, no custom labels, `svc.sh`, `needrestart`, failure preservation, and token-free rerun;
-- proof that the registration token is absent from output, generated files, installed files, units, profiles, and retained child environments;
-- workflow `[self-hosted]`, trusted installed paths, workspace propagation, token scoping, artifact upload, and finalization;
-- native packaging and absence of active Docker/Relay artifacts;
-- shell syntax for retained scripts.
-
-Tests must require no real credentials, downloads, systemd, Docker, or GitHub services.
-
-### 8. Rewrite current documentation
-
-README and operations documentation must describe:
-
-- the organization-level `Divorium` runner;
-- `./install.sh` as the only setup and update entrypoint;
-- installer-driven Codex login;
-- the hidden initial organization registration-token prompt;
-- runner name `gh-runner` and `runs-on: [self-hosted]`;
-- existing organization runner-group access;
-- direct Codex output and uploaded artifact;
-- updates through the same installer;
-- official re-registration and uninstall of only the new installation.
-
-Current documentation must not require a Relay secret, `.env`, copied auth file, UID/GID mapping, Docker command, custom labels, or manual service configuration.
-
-## Implementation sequence
-
-1. Implement the direct CLI and minimally adapt prompt, executor, errors, workspace checks, and redaction.
-2. Adapt `codex-run` and native toolchain paths without modifying the real home.
-3. Update production, example, and CI workflows for installed direct execution and `[self-hosted]` routing.
-4. Implement the single installer with organization runner registration.
-5. Add or adapt direct-execution, launcher, installer, workflow, and packaging tests.
-6. Remove obsolete Relay and Docker code only after replacement tests pass.
-7. Rewrite current README, operations documentation, package scripts, and ignore rules.
-8. Run the complete repository suite.
-9. Review every retained behavior against `docs/native-github-runner-specification.md` and repair all gaps.
-10. Move this plan to `completed` only after every Progress and acceptance item is supported by repository-owned evidence.
+Historical completed ExecPlans were not changed.
 
 ## Progress
 
-- [x] (2026-07-16) Reviewed Docker packaging, workflows, runner scripts, Relay HTTP/state code, Codex executor and launcher, security boundaries, package scripts, tests, and operations documentation.
-- [x] (2026-07-16) Produced a technical specification for a fresh native organization runner installation.
-- [x] (2026-07-17) Cross-checked the specification against current code and removed repository-scoped registration, custom-label routing, host-lifecycle dependencies, host-mounted workspaces, unsafe home cleanup, stale runner bootstrap, and unnecessary executor rewrites.
-- [ ] Implement and test the direct Codex CLI.
-- [ ] Adapt and test the native Codex launcher and permission profile.
-- [ ] Implement and test the single idempotent installer.
-- [ ] Update and test production, example, and CI workflows with `[self-hosted]` routing.
-- [ ] Remove superseded Relay and Docker code after replacements pass.
-- [ ] Rewrite current documentation, package scripts, and packaging checks.
-- [ ] Run the complete suite and final code/specification/plan consistency review.
-- [ ] Archive this ExecPlan with validation evidence.
+- [x] Reviewed the complete repository, current runtime, workflows, installer requirements, security boundaries, tests, and operations documentation.
+- [x] Produced and cross-checked the native runner technical specification.
+- [x] Implemented and tested the direct Codex CLI.
+- [x] Adapted and tested the executor, permission profile, redaction, workspace validation, and execution limits.
+- [x] Adapted and tested the native Codex launcher without destructive home operations.
+- [x] Implemented and statically validated the idempotent WSL/Debian installer, archive pins, rollback, login path, PAT exchange, registration, and service commands.
+- [x] Updated and tested production, example, and CI workflows with `[self-hosted]` routing and installed helpers.
+- [x] Removed superseded Relay and container runtime code.
+- [x] Rewrote current README, operations documentation, package scripts, and packaging checks.
+- [x] Fixed the streaming redactor so token patterns without capture groups cannot duplicate or leak the matched text.
+- [x] Added a real Codex CLI parser smoke command for the named permission profile before trusted harness replacement.
+- [x] Ran the complete repository validation suite from a clean `npm ci` as a non-root user.
+- [x] Completed the final code/specification/plan consistency review.
+- [ ] [blocked] Exercise the installer against the actual target WSL instance. Cause: this GitHub-connected execution environment has no access to the user's WSL, sudo session, Codex login, organization PAT, or systemd host. Impact: live package installation, Codex authentication, organization registration, service startup, runner-group visibility, and an end-to-end GitHub job are not evidenced here. Evidence: deterministic repository validation passes, but no target-host commands were run. Unblock condition: run `/srv/github-runner/storage/agent-relay/install.sh` in the target WSL environment with the required interactive credentials.
 
-## Surprises & Discoveries
+## Validation evidence
 
-- Relay transport, authentication, polling, and persistence exist because of the current two-container split and are unnecessary in direct execution.
-- The current launcher deletes most of `/home/agent`; substituting the real user's home would destroy runner state and unrelated files.
-- Useful executor behavior is independent from Relay and should be retained while DTO and persistence dependencies are removed.
-- `/runner` paths and the `relay` permissions profile are container-specific details.
-- The official runner `_work` directory and `${{ runner.workspace }}` provide the required workspace boundary without a host-specific path.
-- Organization-level registration is required for one runner to serve multiple `Divorium` repositories.
-- Custom labels are unnecessary because the user disables the old runner and maintained workflows use only `[self-hosted]`.
-- OpenSSH and .NET exclusions are image policy, not native Debian requirements.
-- Runner `2.325.0` is stale for a fresh bootstrap; use `2.335.1` and retain automatic updates.
+The current branch was reconstructed in an isolated filesystem and validated as a non-root user with a writable private HOME.
 
-## Decision Log
+Command:
 
-- Decision: remove Agent Relay as a process and transport while preserving workflow behavior.
-  Rationale: direct execution makes HTTP transport, bearer authentication, polling, and persisted job state unnecessary.
-  Date/Author: 2026-07-16 / user direction and repository review.
+```bash
+npm ci
+npm run check
+```
 
-- Decision: install one organization-level runner for `Divorium`.
-  Rationale: the same runner must serve multiple repositories.
-  Date/Author: 2026-07-17 / user direction.
+Result:
 
-- Decision: use only `runs-on: [self-hosted]` and no custom labels.
-  Rationale: the user disables the old runner outside the implementation.
-  Date/Author: 2026-07-17 / user direction.
+```text
+npm ci: passed, 0 vulnerabilities
+TypeScript typecheck: passed
+TypeScript build: passed
+Node test suites: 50 passed, 0 failed
+Bash syntax validation: passed
+Line coverage: 99.07%
+Branch coverage: 87.35%
+Function coverage: 98.61%
+```
 
-- Decision: use one installer and the existing Debian user.
-  Rationale: this is a fresh native installation, not a container identity migration.
-  Date/Author: 2026-07-16 / user direction.
+The passing tests include:
 
-- Decision: install the trusted harness root-owned outside Actions workspaces.
-  Rationale: pull-request content must not replace the resolver, launcher, executor policy, or finalizer used to execute it.
-  Date/Author: 2026-07-16 / security review.
+- direct CLI success, failure, active-plan movement, invalid limits, and symlink rejection;
+- executor environment isolation, redaction, workspace editing, spawn failure, timeout/process-group termination, and output truncation;
+- fixed token redaction including split UTF-8 and split secrets;
+- workspace containment and active-plan realpath checks;
+- launcher preservation of authentication, runner state, source files, unrelated workspaces, and environment isolation;
+- toolchain pins and Codex named-permission-profile smoke invocation;
+- organization runner installer contracts, WSL systemd ordering, deterministic system paths, checksum verification, rollback, hidden PAT handling, registration arguments, no custom labels, service commands, and rerun guards;
+- pull-request resolver behavior and workflow contracts;
+- finalizer clean no-op, branch/message validation, whitespace validation, commit/push, rollback after rejected push, and retry;
+- absence of active Relay transport and obsolete deployment artifacts;
+- native-only README and operations documentation.
 
-- Decision: keep real `HOME` for the Codex host process but deny it to model-controlled tools.
-  Rationale: Codex reuses the current login without copying credentials.
-  Date/Author: 2026-07-16 / credential review.
+## Decisions
 
-- Decision: never operate on the previous Docker environment.
-  Rationale: the new runtime is installed independently in a different environment.
-  Date/Author: 2026-07-16 / user direction.
+- Remove Agent Relay as a process and transport while preserving externally useful workflow behavior.
+- Install one organization-level runner for `Divorium`.
+- Use only `runs-on: [self-hosted]` and no custom labels.
+- Use one installer and the existing Debian user.
+- Keep the source checkout at `/srv/github-runner/storage/agent-relay` independent from the runner workspaces.
+- Install the trusted harness root-owned outside Actions workspaces.
+- Keep real `HOME` for Codex authentication while denying it to model-controlled tools.
+- Install deterministic system toolchain paths rather than depending on NVM or user npm prefixes.
+- Obtain the short-lived runner registration token inside the installer from one hidden PAT.
+- Never operate on the previous environment.
 
-## Validation and Acceptance
-
-Implementation is complete only when repository-owned evidence proves:
-
-1. `npm ci` and `npm run check` pass.
-2. The direct CLI and retained executor pass success, no-op, failure, timeout, force-kill, truncation, split-output redaction, and plan-movement tests.
-3. The launcher changes only its private temporary fixture and preserves home, authentication, runner, source, and unrelated workspace fixtures.
-4. The installer passes first-run and rerun fixture tests, including login branching, hidden token input, current archive/checksum, organization registration, `_work`, no custom labels, official service commands, `needrestart`, and token non-persistence.
-5. Production, example, and CI workflows use exactly `[self-hosted]` and trusted installed helpers.
-6. The Codex step receives `${{ runner.workspace }}`, uploads output on failure, and receives no GitHub token.
-7. Resolver and finalizer behavioral tests remain passing.
-8. Current documentation contains no Relay secret, `.env`, Docker command, copied auth file, UID/GID setup, custom-label requirement, or manual service configuration.
-9. No active Docker deployment, Relay HTTP/client path, persisted Relay job model, or old-environment operation remains.
-10. Final file-by-file comparison against the technical specification finds no uncovered behavior or conflicting instruction.
-
-Do not claim live credentials, runner-group access, package downloads, systemd, GitHub registration, or host lifecycle were exercised unless genuine evidence is available.
-
-## Idempotence and Recovery
+## Idempotence and recovery
 
 Rerunning `install.sh` updates required packages and the root-owned harness while preserving runner registration, Codex authentication, `_work`, diagnostics, and a newer runner version.
 
-Failed source validation or staged installation leaves the installed harness unchanged. Failed initial registration persists no token and can be retried through the same installer.
+Failed source validation or smoke checks occur before the trusted harness swap. An interrupted swap or launcher installation restores the previous harness. Failed initial registration persists no token and can be retried through the same installer.
 
-Recovery and uninstall apply only to the new installation and never read from or modify the previous Docker environment.
-
-## Interfaces
-
-Retained:
-
-- workflow triggers and manual inputs;
-- active ExecPlan semantics;
-- exact PR/head resolution;
-- checkout credential cleanup;
-- GitHub Actions log and artifact output;
-- runner-owned commit and push;
-- repository, package, and workflow names.
-
-Removed:
-
-- Agent Relay HTTP API and health endpoint;
-- Relay secret, URL, client, polling, IDs, and status DTOs;
-- Relay state and persisted logs;
-- Docker Compose and environment-file deployment;
-- repository-scoped runner registration;
-- custom runner labels.
-
-Added:
-
-- `./install.sh`;
-- one `Divorium` organization runner named `gh-runner`;
-- an installed direct Codex CLI;
-- `[self-hosted]` workflow routing.
+Recovery applies only to the new native installation and never reads from or modifies the previous environment.
 
 ## Outcomes & Retrospective
 
-Pending implementation and repository validation.
+The repository implementation is complete and internally consistent. Direct execution replaces Relay without broad application refactoring. The main defects found during final review were stale operations documentation, non-transactional harness replacement, ambiguous system tool paths, a broken token-redaction replacement callback, and an incomplete Codex-profile smoke check; all were corrected and covered by automated tests.
+
+The plan remains active only because live installation on the target WSL instance cannot be exercised from this environment. No claim is made that package downloads, interactive Codex login, GitHub organization registration, runner-group policy, systemd service installation, or an end-to-end self-hosted workflow were executed.

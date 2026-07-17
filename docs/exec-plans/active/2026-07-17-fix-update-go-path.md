@@ -22,13 +22,14 @@ The implementation must preserve the current Go installation layout, the persist
 - [x] (2026-07-17) Inspected the current `install.sh`, `update.sh`, `scripts/toolchain-smoke.sh`, `scripts/codex-run`, system update harness, runner specification, and observed target-host output.
 - [x] (2026-07-17) Confirmed the target-host failure occurs after all 66 Node tests and 100% coverage pass, when `scripts/toolchain-smoke.sh` invokes `go version` and the builder environment cannot resolve `go`.
 - [x] (2026-07-17) Confirmed the runner service remains inactive by design because `update.sh` does not activate the service after a validation failure.
-- [x] (2026-07-17) Created this plan-only branch from `main` commit `ce45008e94b1d60e0a75a1e773ec75e299dcb3c9`; this pull request contains no production implementation.
-- [ ] Define one deterministic builder toolchain `PATH` in `update.sh` that includes the installed Java, Go, Rust, local, and system binary directories.
-- [ ] Apply that explicit `PATH` to every build and validation command executed as `agent-relay-builder`, rather than depending on the administrator shell or `sudo` secure-path configuration.
-- [ ] Extend the system update harness so Go exists only in a fixture directory corresponding to `/usr/local/go/bin`, is absent from the ambient builder path, and is found only because the updater supplies the deterministic path.
-- [ ] Preserve and rerun the successful update, build-failure rollback, and service-start rollback scenarios.
-- [ ] Update the current native-runner technical specification with the deterministic builder toolchain-path contract and the recovery behavior for an already installed host.
-- [ ] Run `npm run check`, record exact evidence, complete `Outcomes & Retrospective`, and move this plan to `docs/exec-plans/completed/` only after every acceptance item is supported by passing automated evidence.
+- [x] (2026-07-17) Created the accepted plan branch from `main` commit `ce45008e94b1d60e0a75a1e773ec75e299dcb3c9` and began implementation only after explicit plan approval.
+- [x] (2026-07-17) Defined `BUILDER_PATH=/opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin` in `update.sh`.
+- [x] (2026-07-17) Applied the same explicit `HOME` and `PATH` to dependency installation, compilation, Node tests, shell checks, Node script checks, and the toolchain smoke check executed as `agent-relay-builder`.
+- [x] (2026-07-17) Extended the update system harness so fake Go exists only in a separate canonical-Go fixture directory, is absent from the ambient update path, and records that the smoke test invoked that exact fixture binary.
+- [x] (2026-07-17) Added harness assertions that every builder `env` command receives the deterministic path and retained the successful activation, build-failure rollback, and service-start rollback scenarios.
+- [x] (2026-07-17) Updated `docs/native-github-runner-specification.md` with the deterministic builder environment and no-reinstall recovery contract.
+- [x] (2026-07-17) Ran `bash -n /tmp/update.sh /tmp/update-script.integration.sh` against the exact proposed script contents; both syntax checks passed, and the resulting PR patches were inspected file by file.
+- [ ] [blocked] Run `npm run check` and the complete system scenarios. Cause: the pull-request CI run is queued on the currently inactive self-hosted runner, while this execution environment has no repository checkout or GitHub CLI and cannot execute the full suite. Impact: implementation is present, but repository acceptance and plan completion cannot yet be claimed. Unblock condition: a runner executes CI for the branch or an equivalent full checkout becomes available for `npm ci && npm run check`.
 
 ## Surprises & Discoveries
 
@@ -38,17 +39,23 @@ The implementation must preserve the current Go installation layout, the persist
 - Observation: `scripts/codex-run` already provides `/usr/local/go/bin` explicitly in the isolated Codex `PATH`.
   Evidence: its `env -i` invocation uses `PATH=/opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin`.
 
-- Observation: `update.sh` does not provide an explicit `PATH` to `agent-relay-builder` when it invokes the toolchain smoke script.
-  Evidence: the updater passes `HOME` and expected version variables through `env`, but leaves command lookup to the environment selected by `sudo`.
+- Observation: before implementation, `update.sh` did not provide an explicit `PATH` to `agent-relay-builder` when it invoked the toolchain smoke script.
+  Evidence: the original updater passed `HOME` and expected version variables through `env`, but left command lookup to the environment selected by `sudo`.
 
 - Observation: the target host uses a `sudo` path that can resolve standard system tools but not `/usr/local/go/bin/go`.
   Evidence: all Node tests and coverage checks completed, then `/srv/github-runner/storage/agent-relay/scripts/toolchain-smoke.sh: line 8: go: command not found` terminated the update.
 
-- Observation: the current system update harness masks this defect.
-  Evidence: it places a fake `go` executable in the same generic `FAKE_BIN` directory prepended to the test process `PATH`, so the smoke script succeeds without proving that `update.sh` supplies the production Go directory.
+- Observation: before implementation, the system update harness masked this defect.
+  Evidence: it placed a fake `go` executable in the same generic `FAKE_BIN` directory prepended to the test process `PATH`, so the smoke script succeeded without proving that `update.sh` supplied the production Go directory.
 
 - Observation: creating `/usr/local/bin/go` manually would make the current machine pass, but it would not correct the updater contract or prevent recurrence on a new host.
   Evidence: the canonical installed location is already valid and Codex already uses it directly; the missing boundary is the builder environment created by `update.sh`.
+
+- Observation: the fake `sudo` command log can verify the environment contract across every builder command without weakening the real updater flow.
+  Evidence: the updated harness fails if any `sudo -u agent-relay-builder -H env` invocation omits the fixture `PATH`, while the successful, build-failure, and service-start-failure scenarios remain in place.
+
+- Observation: pull-request CI cannot validate this branch until the registered self-hosted runner becomes active.
+  Evidence: GitHub Actions run `29592430955` is queued with no conclusion.
 
 ## Decision Log
 
@@ -83,9 +90,9 @@ The implementation must preserve the current Go installation layout, the persist
 
 ## Outcomes & Retrospective
 
-This plan is active and contains no implementation. The current target host has a registered runner and valid Codex authentication, but application activation is incomplete because the updater cannot resolve the installed Go binary during toolchain validation.
+The implementation is present on the pull-request branch. `update.sh` now owns one deterministic builder toolchain path and supplies it to every build and validation command executed through `env`. The regression harness separates fake Go from the ambient path, records the exact Go executable used by the smoke test, and rejects any builder `env` invocation that omits the configured path. The current technical specification matches this contract.
 
-Completion requires automated proof that an update succeeds when ambient command lookup cannot find Go, that the explicit builder path resolves the pinned Go installation, and that all existing rollback and security boundaries remain intact. Target-host success must be recorded separately after the implementation is merged and `./update.sh` completes with the runner service active.
+The plan remains active because the complete repository validation has not run. The queued CI run cannot start while the self-hosted runner is inactive, so successful activation and both rollback scenarios are implemented but not yet supported by fresh automated execution evidence. Target-host success also remains separate and must not be claimed until the implementation reaches `main` and the real machine completes `./update.sh` with the service active.
 
 ## Context and Orientation
 
@@ -95,11 +102,11 @@ Completion requires automated proof that an update succeeds when ambient command
 
 `scripts/toolchain-smoke.sh` resolves `node`, `npm`, `tsc`, `codex`, `go`, Java, Python, Rust, Git, and native build utilities by command name and validates pinned versions. It is intentionally a consumer of the builder environment rather than an installer.
 
-`scripts/codex-run` starts Codex through `env -i` and already defines the complete nonstandard toolchain path. The updater should use the same path ordering for the isolated builder transaction, while retaining its own `HOME` and expected-version variables.
+`scripts/codex-run` starts Codex through `env -i` and defines the complete nonstandard toolchain path. The updater now uses the same path ordering for the isolated builder transaction while retaining its own `HOME` and expected-version variables.
 
-`test-system/update-script.integration.sh` creates isolated Git repositories, a mock systemd service, a mock `sudo`, fake tool executables, and three update scenarios: successful activation, rollback after build failure, and rollback after service-start failure. Its current fake Go placement must be changed so the test reproduces the real host condition instead of inheriting a path that makes Go accidentally visible.
+`test-system/update-script.integration.sh` creates isolated Git repositories, a mock systemd service, a mock `sudo`, fake tool executables, and three update scenarios: successful activation, rollback after build failure, and rollback after service-start failure. Fake Go now lives outside the ambient update path, and the updater-specific transformed path is the only route to that fixture.
 
-`docs/native-github-runner-specification.md` is the current architecture contract. It must describe the deterministic builder path because the update transaction promises installed-toolchain smoke validation independent of interactive user configuration.
+`docs/native-github-runner-specification.md` is the current architecture contract. It now records the deterministic builder path and recovery behavior because the update transaction promises installed-toolchain smoke validation independent of interactive user configuration.
 
 The completed native-runner ExecPlan is historical evidence and must not be edited into a new active contract.
 
@@ -160,11 +167,9 @@ After automated validation, update `Progress`, `Surprises & Discoveries`, and `O
 
 ## Concrete Steps
 
-Implementation is intentionally deferred until this plan is accepted.
+Implementation began on the accepted plan branch after explicit approval. The production change is confined to `update.sh`; the regression change is confined to `test-system/update-script.integration.sh`; and the current technical specification records the same environment and recovery contract.
 
-The implementation agent should begin from the accepted plan branch or a fresh branch based on the then-current `main`, inspect the current versions of every named file, and preserve unrelated changes. The expected production edit is centered on `update.sh`; the expected regression edit is centered on `test-system/update-script.integration.sh`; the current technical specification must be updated to match the implementation.
-
-No command should be delegated to the operator as part of repository implementation or validation.
+Repository implementation and validation remain agent-owned. The plan stays active until the complete automated suite produces evidence for every acceptance item.
 
 After the implementation is merged to `main`, target-host acceptance consists of running:
 
@@ -229,3 +234,13 @@ Active: inactive (dead)
 ```
 
 This state is expected until a complete update transaction succeeds.
+
+Implementation evidence recorded on the pull-request branch:
+
+```text
+update.sh: deterministic BUILDER_PATH added and propagated to every builder env command
+test-system/update-script.integration.sh: ambient Go removed; canonical Go fixture and invocation evidence added
+docs/native-github-runner-specification.md: builder path and recovery contract aligned
+bash -n /tmp/update.sh /tmp/update-script.integration.sh: passed
+GitHub Actions CI run 29592430955: queued, awaiting the inactive self-hosted runner
+```

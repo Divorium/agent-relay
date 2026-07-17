@@ -41,6 +41,16 @@ test("installer uses pinned downloads and verifies archives", async () => {
   assert.match(script, /bin\/installdependencies\.sh/);
 });
 
+test("installer uses system runtimes and deterministic global binary paths", async () => {
+  const script = await installer();
+  assert.match(script, /\/usr\/bin\/node --version/);
+  assert.match(script, /\/usr\/bin\/java -version/);
+  assert.match(script, /\/usr\/local\/go\/bin\/go version/);
+  assert.match(script, /sudo \/usr\/bin\/npm install --global --prefix \/usr\/local/);
+  assert.match(script, /\[\[ -x \/usr\/local\/bin\/codex \]\]/);
+  assert.match(script, /\[\[ -x \/usr\/local\/bin\/tsc \]\]/);
+});
+
 test("installer validates the source and toolchain before replacing trusted files", async () => {
   const script = await installer();
   const npmCi = script.indexOf("npm ci");

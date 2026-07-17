@@ -148,5 +148,9 @@ test("README files mirror the filesystem decision recorded in the completed plan
     }
     assert.match(document, /\.\/install\.sh/);
     assert.match(document, /\.\/update\.sh/);
+    assert.doesNotMatch(document, /\/srv\/github-runner\/(?:runner|home|build|build-home)(?:\/|\s|$)/u);
+    assert.doesNotMatch(document, /\/opt\/agent-relay|docker compose|AGENT_RELAY_TOKEN/iu);
   }
+  assert.match(plan, /README files may summarize it but must not introduce additional filesystem decisions/);
+  assert.match(plan, /runner\/_work` is a managed symlink to `\.\.\/work/);
 });

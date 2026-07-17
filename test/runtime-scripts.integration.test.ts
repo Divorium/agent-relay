@@ -29,7 +29,7 @@ function fakeCommandSource(name: string, output: string): string {
   if (name === "head") {
     return `#!/bin/bash
 set -euo pipefail
-printf '%s %s\n' "${name}" "$*" >> "\${FAKE_COMMAND_LOG:?}"
+printf '%s %s\n' "${name}" "$*" >> "\${FAKE_HEAD_LOG:?}"
 exec /usr/bin/head "$@"
 `;
   }
@@ -214,6 +214,7 @@ test("toolchain smoke validates retained pins and the complete environment profi
   const stateRoot = join(root, "state");
   const home = join(root, "home");
   const log = join(root, "commands.log");
+  const headLog = join(root, "head.log");
   const stateDirectories = ["cargo", "go", "go-cache", "gradle", "npm", "pip", "cache", "config", "data", "tmp"];
   const generalCommands = [
     "node", "npm", "tsc", "python3", "git", "gcc", "g++", "clang", "make", "cmake", "pkg-config",
@@ -232,6 +233,7 @@ test("toolchain smoke validates retained pins and the complete environment profi
   await createFakeCommand(join(rustCargoHome, "bin"), "cargo");
   await createFakeCommand(join(rustCargoHome, "bin"), "rustup");
   await writeFile(log, "");
+  await writeFile(headLog, "");
 
   const profile = (await readFile(join(process.cwd(), "scripts", "toolchain-environment.sh"), "utf8"))
     .replace("TOOLCHAIN_JAVA_HOME=/opt/java/openjdk", `TOOLCHAIN_JAVA_HOME=${javaHome}`)
@@ -273,6 +275,7 @@ test("toolchain smoke validates retained pins and the complete environment profi
     EXPECTED_GO_VERSION: "1.24.5",
     EXPECTED_TOOLCHAIN_STATE_ROOT: stateRoot,
     FAKE_COMMAND_LOG: log,
+    FAKE_HEAD_LOG: headLog,
   };
 
   try {
@@ -284,10 +287,11 @@ test("toolchain smoke validates retained pins and the complete environment profi
     assert.equal(result.status, 0, result.stderr);
     const invocations = await readFile(log, "utf8");
     const expectedCommands = [...generalCommands, "java", "go", "rustc", "cargo", "rustup"]
-      .filter((name) => !["ssh", "dotnet"].includes(name));
+      .filter((name) => !["head", "ssh", "dotnet"].includes(name));
     for (const command of expectedCommands) {
       assert.match(invocations, new RegExp(`^${escapeRegExp(command)} `, "m"));
     }
+    assert.equal(await readFile(headLog, "utf8"), "head -n 1\n");
     assert.doesNotMatch(invocations, /^ssh |^dotnet /m);
     assert.match(invocations, /^rustup show active-toolchain$/m);
     assert.match(invocations, /^codex --ask-for-approval never exec --help$/m);

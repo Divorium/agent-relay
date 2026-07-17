@@ -12,6 +12,15 @@ CODEX_VERSION=0.144.4
 INSTALL_ROOT=/opt/agent-relay
 RUNNER_DIR="${HOME}/.local/share/actions-runner"
 SOURCE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+node_setup=""
+java_key=""
+go_archive=""
+rustup_script=""
+runner_archive=""
+cleanup_temporary_files() {
+  rm -f -- "${node_setup:-}" "${java_key:-}" "${go_archive:-}" "${rustup_script:-}" "${runner_archive:-}"
+}
+trap cleanup_temporary_files EXIT
 
 if (( $# != 0 )); then
   echo "install.sh does not accept arguments" >&2
@@ -48,13 +57,11 @@ sudo apt-get install -y --no-install-recommends \
   ca-certificates curl wget jq git git-lfs gnupg \
   python3 python3-pip python3-venv \
   build-essential clang cmake pkg-config \
-  zip unzip xz-utils zstd rsync file findutils diffutils \
-  libicu72 libssl3 libkrb5-3 zlib1g liblttng-ust1 libcurl4 libunwind8
+  zip unzip xz-utils zstd rsync file findutils diffutils
 curl -fsS --max-time 20 https://api.github.com/meta >/dev/null
 
 if ! command -v node >/dev/null || [[ "$(node --version)" != v22.* ]]; then
   node_setup="$(mktemp)"
-  trap 'rm -f -- "${node_setup:-}" "${java_key:-}" "${go_archive:-}" "${rustup_script:-}" "${runner_archive:-}"' EXIT
   curl -fsSL https://deb.nodesource.com/setup_22.x -o "${node_setup}"
   sudo -E bash "${node_setup}"
   sudo apt-get install -y nodejs
@@ -152,11 +159,14 @@ if [[ ! -f "${RUNNER_DIR}/.runner" ]]; then
   IFS= read -r -s github_token
   printf '\n' >&2
   [[ -n "${github_token}" ]] || { echo "GitHub token is required" >&2; exit 1; }
-  registration_response="$(curl -fsSL -X POST \
-    -H 'Accept: application/vnd.github+json' \
-    -H "Authorization: Bearer ${github_token}" \
-    -H 'X-GitHub-Api-Version: 2026-03-10' \
-    "https://api.github.com/orgs/${ORGANIZATION}/actions/runners/registration-token")"
+  registration_response="$(
+    printf 'Authorization: Bearer %s\n' "${github_token}" \
+      | curl -fsSL -X POST \
+          -H 'Accept: application/vnd.github+json' \
+          -H @- \
+          -H 'X-GitHub-Api-Version: 2026-03-10' \
+          "https://api.github.com/orgs/${ORGANIZATION}/actions/runners/registration-token"
+  )"
   unset github_token
   registration_token="$(jq -er '.token' <<< "${registration_response}")"
   unset registration_response
@@ -171,6 +181,7 @@ if [[ ! -f "${RUNNER_DIR}/.runner" ]]; then
   unset registration_token
 fi
 
+sudo install -d -m 0755 /etc/needrestart/conf.d
 printf '%s\n' '$nrconf{override_rc}{qr(^actions\.runner\..+\.service$)} = 0;' \
   | sudo tee /etc/needrestart/conf.d/actions_runner_services.conf >/dev/null
 cd "${RUNNER_DIR}"

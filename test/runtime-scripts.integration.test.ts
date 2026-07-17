@@ -184,9 +184,9 @@ test("toolchain smoke validates retained pins and the Codex permission profile",
     assert.match(invocations, /^codex --ask-for-approval never exec --help$/m);
 
     const profileInvocation = invocations.split("\n").find((line) => line.includes("permissions.agent.filesystem="));
-    assert.ok(profileInvocation);
+    if (!profileInvocation) throw new Error("Codex profile invocation was not recorded");
     const smokeRoot = /exec --cd (\/tmp\/agent-relay-smoke\.[A-Za-z0-9]+) --help$/.exec(profileInvocation)?.[1];
-    assert.ok(smokeRoot);
+    if (!smokeRoot) throw new Error("Codex profile invocation did not contain the private smoke workspace");
     assert.match(
       profileInvocation,
       new RegExp(

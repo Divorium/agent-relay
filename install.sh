@@ -10,7 +10,7 @@ GO_SHA256=10ad9e86233e74c0f6590fe5426895de6bf388964210eac34a6d83f38918ecdc
 TYPESCRIPT_VERSION=5.8.3
 CODEX_VERSION=0.144.4
 INSTALL_ROOT=/opt/agent-relay
-RUNNER_DIR="${HOME}/.local/share/actions-runner"
+RUNNER_DIR="${HOME:?HOME is required}/.local/share/actions-runner"
 SOURCE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 node_setup=""
 java_key=""
@@ -21,6 +21,50 @@ cleanup_temporary_files() {
   rm -f -- "${node_setup:-}" "${java_key:-}" "${go_archive:-}" "${rustup_script:-}" "${runner_archive:-}"
 }
 trap cleanup_temporary_files EXIT
+
+configure_wsl_systemd() {
+  local temporary
+  temporary="$(mktemp)"
+  if [[ -f /etc/wsl.conf ]]; then
+    awk '
+      BEGIN { in_boot = 0; saw_boot = 0; wrote_systemd = 0 }
+      /^\[boot\][[:space:]]*$/ {
+        in_boot = 1
+        saw_boot = 1
+        print
+        next
+      }
+      /^\[/ {
+        if (in_boot && !wrote_systemd) {
+          print "systemd=true"
+          wrote_systemd = 1
+        }
+        in_boot = 0
+      }
+      in_boot && /^[[:space:]]*systemd[[:space:]]*=/ {
+        if (!wrote_systemd) {
+          print "systemd=true"
+          wrote_systemd = 1
+        }
+        next
+      }
+      { print }
+      END {
+        if (in_boot && !wrote_systemd) {
+          print "systemd=true"
+        } else if (!saw_boot) {
+          print ""
+          print "[boot]"
+          print "systemd=true"
+        }
+      }
+    ' /etc/wsl.conf > "${temporary}"
+  else
+    printf '[boot]\nsystemd=true\n' > "${temporary}"
+  fi
+  sudo install -o root -g root -m 0644 "${temporary}" /etc/wsl.conf
+  rm -f -- "${temporary}"
+}
 
 if (( $# != 0 )); then
   echo "install.sh does not accept arguments" >&2
@@ -45,12 +89,21 @@ if [[ "${ID:-}" != "debian" ]]; then
 fi
 command -v sudo >/dev/null || { echo "sudo is required" >&2; exit 1; }
 command -v systemctl >/dev/null || { echo "systemd is required" >&2; exit 1; }
-[[ "$(ps -p 1 -o comm= | tr -d '[:space:]')" == "systemd" ]] || {
-  echo "systemd must run as PID 1" >&2
-  exit 1
-}
 [[ -d "${HOME}" && -w "${HOME}" ]] || { echo "HOME must be writable" >&2; exit 1; }
 sudo -v
+
+if [[ "$(ps -p 1 -o comm= | tr -d '[:space:]')" != "systemd" ]]; then
+  if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
+    configure_wsl_systemd
+    cat >&2 <<'MESSAGE'
+Enabled systemd in /etc/wsl.conf.
+Run `wsl --shutdown` from Windows, start Debian again, and rerun ./install.sh.
+MESSAGE
+    exit 2
+  fi
+  echo "systemd must run as PID 1" >&2
+  exit 1
+fi
 
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
@@ -112,7 +165,7 @@ stage="/opt/.agent-relay.stage.$$"
 backup="/opt/.agent-relay.previous.$$"
 sudo rm -rf "${stage}" "${backup}"
 sudo install -d -m 0755 "${stage}"
-sudo rsync -a --delete \
+sudo rsync -a \
   package.json package-lock.json tsconfig.json dist runner scripts types \
   "${stage}/"
 sudo chown -R root:root "${stage}"

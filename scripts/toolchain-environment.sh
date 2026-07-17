@@ -13,7 +13,8 @@ toolchain_validate_absolute_path() {
   local label="$1"
   local value="$2"
   if [[ -z "${value}" || "${value}" != /* || "${value}" == / || "${value}" == */ \
-    || "${value}" == *//* || "${value}" == */./* || "${value}" == */../* \
+    || "${value}" == *//* || "${value}" == */. || "${value}" == */.. \
+    || "${value}" == */./* || "${value}" == */../* \
     || "${value}" == *$'\n'* || "${value}" == *$'\r'* ]]; then
     printf 'Invalid %s: %s\n' "${label}" "${value}" >&2
     return 1

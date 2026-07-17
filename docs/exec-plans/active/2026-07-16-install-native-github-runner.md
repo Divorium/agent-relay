@@ -1,163 +1,142 @@
 # Install a native organization GitHub runner that executes Codex directly
 
-This ExecPlan is maintained according to `.agent/PLANS.md` and implemented together with `docs/native-github-runner-specification.md`.
+This ExecPlan follows `.agent/PLANS.md` and is implemented together with `docs/native-github-runner-specification.md`.
 
 ## Purpose / Big Picture
 
-Replace the former two-process container deployment with one fresh native Debian installation managed by one repository script.
+Replace the former container and Agent Relay runtime with one fresh native Debian installation managed by one script.
 
-The target runtime has one long-lived service: the official GitHub Actions runner. Workflow jobs invoke a root-owned installed Codex harness directly in the checked-out pull-request workspace. There is no Agent Relay HTTP server, bearer token, polling client, queue, persisted Relay state, or second application service.
+The official GitHub Actions runner is the only long-lived service. It invokes a trusted, root-owned Codex harness directly in the selected pull-request workspace. The implementation does not inspect, stop, unregister, copy from, clean, or modify the previous environment.
 
-This is not a migration or cutover procedure. The implementation does not inspect, stop, unregister, copy from, clean, or modify the previous environment.
-
-The source checkout in WSL is:
+The WSL source checkout is:
 
 ```text
 /srv/github-runner/storage/agent-relay
 ```
 
-The only installation and update entrypoint is:
+The only setup and update entrypoint is:
 
 ```bash
 cd /srv/github-runner/storage/agent-relay
 ./install.sh
 ```
 
-## User-visible result
+## Implemented result
 
-The completed installer:
+The repository now provides:
 
-- configures WSL systemd when required and stops before continuing until WSL is restarted;
-- installs the required native toolchain;
-- validates the repository before replacing trusted runtime files;
-- installs the trusted harness under `/opt/agent-relay`;
-- invokes `codex login` only when authentication is absent;
-- asks once for a GitHub PAT only when no runner registration exists;
-- exchanges the PAT for GitHub's short-lived organization runner registration token;
-- installs and registers one organization runner named `gh-runner` with work directory `_work` and no custom labels;
-- installs, starts, and verifies the official runner systemd service.
+- one executable, argument-free installer;
+- automatic WSL systemd configuration when required;
+- system Node.js 22, TypeScript 5.8.3, Codex CLI 0.144.4, Java 21, Go 1.24.5, Rust stable, Python, Git, build tools, and runner dependencies;
+- checksum verification for downloaded Go and GitHub Runner archives;
+- validation before transactional replacement of `/opt/agent-relay`;
+- rollback when the trusted harness swap or launcher installation fails;
+- conditional `codex login`;
+- one hidden GitHub PAT prompt only when runner registration is absent;
+- automatic exchange of that PAT for GitHub's short-lived organization registration token;
+- one `Divorium` organization runner named `gh-runner`, work directory `_work`, and no custom labels;
+- direct Codex execution without Relay HTTP, polling, queue, or persisted job state;
+- trusted pull-request resolution, checkout, output capture, and commit/push finalization.
 
-The installer asks for no repository URL, organization name, runner name, labels, workspace path, Relay credential, authentication-file path, UID, GID, environment file, service setting, or manually generated runner registration token.
+## Runtime boundaries
 
-## Behavior preserved
+The Codex execution path:
 
-- reject fork-origin pull requests before untrusted repository code runs;
-- resolve an open, ready pull request and its exact head SHA/ref;
-- checkout the resolved SHA with `persist-credentials: false`;
-- verify that checkout credentials are absent before Codex starts;
-- select exactly one regular, non-symlink active ExecPlan;
-- give Codex only `.agent/PLANS.md` and the selected plan as task context;
-- prevent Codex from committing or pushing;
-- enforce workspace containment, symlink protection, restricted filesystem access, and required network access;
-- enforce timeout, process-group `SIGTERM`, delayed `SIGKILL`, output cap, streaming redaction, and non-zero failure behavior;
-- treat a clean worktree as a successful no-op;
-- validate, commit, and push a changed worktree through the trusted finalizer;
-- keep redacted Codex output visible in GitHub Actions and upload it even when execution fails.
-
-## Implemented architecture
-
-### Direct Codex execution
-
-`src/run-codex.ts` is the installed direct entrypoint. It validates `GITHUB_WORKSPACE`, `GITHUB_OUTPUT`, `CODEX_PLAN_PATH`, `CODEX_WORKSPACE_ROOT`, and `HOME`; validates optional positive execution limits; resolves the real workspace; validates the active plan; derives the commit message before execution; invokes the retained executor; and writes `commit_message` only after successful execution.
-
-`src/execution/codex-executor.ts` retains the useful executor behavior without Relay DTOs or persistence. It starts the launcher in a detached process group, streams redacted stdout and stderr, caps output, sends `SIGTERM` on timeout, sends delayed `SIGKILL`, and returns non-zero failure through minimal execution errors.
-
-The Codex permission profile:
-
+- validates the real runner workspace and one direct active ExecPlan;
+- builds only the plan-based prompt;
+- runs through `/usr/local/bin/codex-run`;
 - disables memories;
-- denies the real home, `/opt/agent-relay`, `/opt/rust`, `/tmp`, `/var/tmp`, and the complete runner workspace root;
-- re-allows writes only to the selected repository and private runtime directory;
-- grants read access to the selected repository `.git` directory;
+- denies the real home, `/opt/agent-relay`, runner workspace root, `/tmp`, and `/var/tmp` to model-controlled tools;
+- exposes `/opt/rust` read-only so Cargo and Rust remain usable but immutable;
+- allows writes only to the selected repository and one private per-run directory;
+- keeps the selected repository's `.git` directory read-only;
+- redirects Cargo, npm, pip, Go, Gradle, XDG, and temporary state into the private directory;
+- prevents model-controlled Git from reading `$HOME/.gitconfig`;
 - enables required network access;
-- never uses `danger-full-access`.
+- streams redacted output;
+- enforces a combined output limit, process-group timeout, `SIGTERM`, and delayed `SIGKILL`.
 
-### Native launcher
+The workflow gives no GitHub token to Codex. GitHub credentials remain limited to pull-request resolution, checkout, and finalization.
 
-`scripts/codex-run`:
+## Installer and service security
 
-- refuses root execution;
-- verifies `$HOME/.codex/auth.json`;
-- creates one private per-run directory;
-- replaces the child environment through `env -i`;
-- exposes only the real `HOME`, current user identity, locale, deterministic toolchain paths, private Cargo/temp paths, and `GIT_OPTIONAL_LOCKS=0`;
-- forwards termination signals;
-- removes only its private directory.
+The installer:
 
-It does not delete, copy, move, rewrite, or symlink user-home, authentication, runner, source, or workspace files.
+- resolves its source from `BASH_SOURCE` and does not depend on `$HOME` placement;
+- performs source and toolchain checks before root-owned installation;
+- installs Codex and TypeScript at deterministic `/usr/local/bin` paths;
+- preserves Codex authentication, runner registration, `_work`, diagnostics, and newer runner updates on rerun;
+- never passes the PAT in process arguments and unsets it immediately after the registration-token API call;
+- passes the short-lived registration token only to official `config.sh --token` and unsets it after configuration;
+- executes `installdependencies.sh` as root only immediately after checksum-verified extraction;
+- executes `svc.sh install` as root only after a runner extraction or registration completed in the current installer process;
+- manages an existing service through a validated `.service` name and `systemctl`, not through user-writable runner scripts;
+- supports rerunning after an interrupted or failed initial registration;
+- does not perform any action against the previous environment.
 
-### Installer
+## Removed elements
 
-`install.sh`:
-
-- runs as the existing non-root Debian user and uses `sudo` only for system changes;
-- resolves `SOURCE_ROOT` from `BASH_SOURCE`, so `/srv/github-runner/storage/agent-relay` requires no configuration;
-- verifies Debian x86-64, a writable home and source checkout, `sudo`, systemd, and outbound HTTPS;
-- configures `/etc/wsl.conf` without replacing unrelated settings when WSL needs systemd enabled;
-- installs system Node.js 22 and npm under `/usr/bin`;
-- installs TypeScript 5.8.3 and Codex CLI 0.144.4 under `/usr/local`;
-- installs Temurin Java 21, Go 1.24.5, Rust stable, Python, Git, Git LFS, build tools, archive utilities, and runner dependencies;
-- checksum-verifies Go and GitHub Actions Runner archives;
-- runs `npm ci`, `npm run check`, and the native toolchain/Codex-profile smoke test before replacing trusted files;
-- stages `/opt/agent-relay` on the same filesystem and restores the previous harness when a swap or launcher installation is interrupted;
-- preserves Codex authentication, runner registration, `_work`, diagnostics, and a newer runner version on rerun;
-- rejects a registered runner directory whose listener binary is missing instead of destroying its registration;
-- keeps the PAT out of command arguments, files, logs, services, profiles, installed payloads, and retained child environments;
-- passes GitHub's short-lived registration token only to the official `config.sh --token` argument, then unsets it immediately after configuration.
-
-Fresh installations pin:
-
-- GitHub Actions Runner `2.335.1`, SHA-256 `4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf`;
-- Go `1.24.5`, SHA-256 `10ad9e86233e74c0f6590fe5426895de6bf388964210eac34a6d83f38918ecdc`;
-- TypeScript `5.8.3`;
-- Codex CLI `0.144.4`.
-
-### Workflows
-
-The production workflow, example workflow, and CI use:
-
-```yaml
-runs-on: [self-hosted]
-```
-
-They use trusted helpers only from `/opt/agent-relay`, preserve exact pull-request resolution and credential-free checkout, pass `${{ runner.workspace }}` as the workspace root, capture output through `tee`, upload the output artifact with `if: always()`, delay failure until after upload, and use the trusted finalizer for commit/push.
-
-The Codex step receives no GitHub token. GitHub credentials remain step-scoped to pull-request resolution, checkout, and finalization.
-
-## Removed repository elements
-
-- `Dockerfile` and `Dockerfile.runner`;
-- `compose.yml` and `.dockerignore`;
-- `.env.example` and the obsolete `.env` ignore entry;
+- Dockerfiles, Compose, `.dockerignore`, and `.env.example`;
 - runner container entrypoint and Relay client;
-- Relay HTTP API, health endpoint, bearer authentication, configuration, job service, job store, queue/state DTOs, and server entrypoint;
-- persisted Relay log handling and polling/restart recovery;
-- tests and current operations documentation that covered only removed transport, persistence, packaging, or container startup.
+- Relay HTTP server, health endpoint, bearer secret, polling, request/job DTOs, queue, persisted state, and restart recovery;
+- current tests and operations instructions that covered only the removed runtime.
 
-Historical completed ExecPlans were not changed.
+Historical completed ExecPlans were not modified.
 
 ## Progress
 
-- [x] Reviewed the complete repository, current runtime, workflows, installer requirements, security boundaries, tests, and operations documentation.
-- [x] Produced and cross-checked the native runner technical specification.
-- [x] Implemented and tested the direct Codex CLI.
-- [x] Adapted and tested the executor, permission profile, redaction, workspace validation, and execution limits.
-- [x] Adapted and tested the native Codex launcher without destructive home operations.
-- [x] Implemented and statically validated the idempotent WSL/Debian installer, archive pins, rollback, login path, PAT exchange, registration, and service commands.
-- [x] Updated and tested production, example, and CI workflows with `[self-hosted]` routing and installed helpers.
-- [x] Removed superseded Relay and container runtime code.
-- [x] Rewrote current README, operations documentation, package scripts, and packaging checks.
-- [x] Fixed the streaming redactor so token patterns without capture groups cannot duplicate or leak the matched text.
-- [x] Added a real Codex CLI parser smoke command with a private existing workspace for the named permission profile before trusted harness replacement.
-- [x] Made `install.sh` executable in the Git tree so `./install.sh` works after cloning.
-- [x] Ran the complete repository validation suite from a clean `npm ci` as a non-root user.
-- [x] Completed the final code/specification/plan consistency review.
-- [ ] [blocked] Exercise the installer against the actual target WSL instance. Cause: this GitHub-connected execution environment has no access to the user's WSL, sudo session, Codex login, organization PAT, or systemd host. Impact: live package installation, Codex authentication, organization registration, service startup, runner-group visibility, and an end-to-end GitHub job are not evidenced here. Evidence: deterministic repository validation passes, but no target-host commands were run. Unblock condition: run `/srv/github-runner/storage/agent-relay/install.sh` in the target WSL environment with the required interactive credentials.
+- [x] Reviewed the complete repository and previous runtime boundaries.
+- [x] Produced and cross-checked the native runner specification.
+- [x] Implemented direct Codex execution and removed Relay transport/state.
+- [x] Preserved PR resolution, exact checkout, credential cleanup, artifact output, and trusted finalization.
+- [x] Implemented the idempotent WSL/Debian installer.
+- [x] Added transactional harness replacement and recovery.
+- [x] Corrected token redaction, deterministic tool paths, executable file mode, and Codex permission-profile validation.
+- [x] Preserved tool usability through read-only Rust access and private package/build caches.
+- [x] Removed privileged rerun execution from existing user-owned runner scripts.
+- [x] Added recovery after failed initial registration.
+- [x] Updated README, operations documentation, workflows, package scripts, and tests.
+- [x] Ran a clean non-root repository validation after the final code changes.
+- [x] Reviewed the final implementation against this plan and the technical specification.
+- [ ] [blocked] Exercise the installer on the actual target WSL instance. Cause: this environment has no access to the user's WSL, sudo session, Codex login, organization PAT, or systemd host. Impact: live package installation, Codex authentication, organization registration, service startup, runner-group visibility, and one end-to-end GitHub job are not evidenced. Evidence: repository-owned deterministic validation passes, while the GitHub CI job remains queued without an eligible runner. Unblock condition: run `/srv/github-runner/storage/agent-relay/install.sh` on the target WSL and allow the resulting runner to execute PR #16 CI.
 
-## Validation evidence
+## Surprises & Discoveries
 
-The current branch was reconstructed in an isolated filesystem and validated as a non-root user with a writable private HOME.
+- The useful executor logic was independent from Relay and could be retained without a broad refactor.
+- The old launcher could not be adapted by substituting the real home because its cleanup would have destroyed unrelated state.
+- Git file mode mattered: `install.sh` initially existed as `100644`, making the documented `./install.sh` command invalid.
+- The original redaction replacement callback treated regex offsets as capture groups and could leak or duplicate token text.
+- Denying `/opt/rust` would have protected the directory but broken Cargo/Rust toolchain reads; read-only access is required.
+- Denying the real home requires explicit private cache/config paths for npm, pip, Go, Gradle, Cargo, XDG, and Git.
+- Running `svc.sh start/status` or `installdependencies.sh` through `sudo` during reruns would trust user-owned files unnecessarily.
+- A strict fresh-extraction-only service guard needed a second trusted state for recovery when registration succeeds on a later rerun.
 
-Command:
+## Decision Log
+
+- Decision: remove Relay transport and state, but retain direct execution controls and workflow behavior.
+  Rationale: runner and Codex now share one OS environment.
+
+- Decision: use one organization runner and `runs-on: [self-hosted]` without custom labels.
+  Rationale: the same runner must serve approved `Divorium` repositories and the old runner is disabled outside this repository.
+
+- Decision: keep the harness root-owned outside runner workspaces.
+  Rationale: pull-request content must not replace the resolver, executor policy, launcher, or finalizer used to execute it.
+
+- Decision: preserve real `HOME` for the Codex host, deny it to model-controlled tools, and redirect tool state to a private runtime directory.
+  Rationale: authentication remains available without exposing or modifying runner/user state.
+
+- Decision: expose `/opt/rust` read-only.
+  Rationale: Cargo and Rust need to read the installed toolchain, but model-controlled processes must not modify it.
+
+- Decision: execute runner-owned root scripts only after current-process trust establishment and manage existing services through `systemctl`.
+  Rationale: reruns must not promote mutable user-owned files to root execution.
+
+- Decision: never interact with the previous environment.
+  Rationale: this is an independent installation, not migration or cleanup.
+
+## Validation Evidence
+
+The final code was reconstructed in an isolated filesystem and validated as a non-root user with a writable private HOME:
 
 ```bash
 npm ci
@@ -170,50 +149,23 @@ Result:
 npm ci: passed, 0 vulnerabilities
 TypeScript typecheck: passed
 TypeScript build: passed
-Node test suites: 50 passed, 0 failed
+Node tests: 51 passed, 0 failed
 Bash syntax validation: passed
-Line coverage: 99.08%
-Branch coverage: 86.69%
-Function coverage: 98.62%
+Line coverage: 99.11%
+Branch coverage: 86.06%
+Function coverage: 98.63%
 ```
 
-The passing tests include:
+The suite covers direct CLI behavior, workspace/plan boundaries, executor failure and timeout, process-group termination, output truncation, split secret redaction, launcher environment isolation, private caches, installer ordering and rollback, PAT handling, registration recovery, service trust boundaries, workflow token scoping, resolver behavior, and finalizer push rollback/retry.
 
-- direct CLI success, failure, active-plan movement, invalid limits, and symlink rejection;
-- executor environment isolation, redaction, workspace editing, spawn failure, timeout/process-group termination, and output truncation;
-- fixed token redaction including split UTF-8 and split secrets;
-- workspace containment and active-plan realpath checks;
-- launcher preservation of authentication, runner state, source files, unrelated workspaces, and environment isolation;
-- toolchain pins and Codex named-permission-profile smoke invocation in a private workspace that is removed after validation;
-- organization runner installer contracts, WSL systemd ordering, deterministic system paths, checksum verification, rollback, hidden PAT handling, registration arguments, no custom labels, service commands, and rerun guards;
-- pull-request resolver behavior and workflow contracts;
-- finalizer clean no-op, branch/message validation, whitespace validation, commit/push, rollback after rejected push, and retry;
-- absence of active Relay transport and obsolete deployment artifacts;
-- native-only README and operations documentation.
+## Idempotence and Recovery
 
-## Decisions
+Rerunning `install.sh` updates packages and the trusted harness while preserving valid authentication, runner registration, `_work`, diagnostics, and newer runner updates.
 
-- Remove Agent Relay as a process and transport while preserving externally useful workflow behavior.
-- Install one organization-level runner for `Divorium`.
-- Use only `runs-on: [self-hosted]` and no custom labels.
-- Use one installer and the existing Debian user.
-- Keep the source checkout at `/srv/github-runner/storage/agent-relay` independent from the runner workspaces.
-- Install the trusted harness root-owned outside Actions workspaces.
-- Keep real `HOME` for Codex authentication while denying it to model-controlled tools.
-- Install deterministic system toolchain paths rather than depending on NVM or user npm prefixes.
-- Obtain the short-lived runner registration token inside the installer from one hidden PAT.
-- Never operate on the previous environment.
-
-## Idempotence and recovery
-
-Rerunning `install.sh` updates required packages and the root-owned harness while preserving runner registration, Codex authentication, `_work`, diagnostics, and a newer runner version.
-
-Failed source validation or smoke checks occur before the trusted harness swap. An interrupted swap or launcher installation restores the previous harness. Failed initial registration persists no token and can be retried through the same installer.
-
-Recovery applies only to the new native installation and never reads from or modifies the previous environment.
+Source validation and smoke failures occur before the harness swap. An interrupted swap restores the previous harness. Failed registration persists no token and can be retried. A later successful registration is considered trusted only for completing service installation in that same process.
 
 ## Outcomes & Retrospective
 
-The repository implementation is complete and internally consistent. Direct execution replaces Relay without broad application refactoring. The main defects found during final review were stale operations documentation, non-transactional harness replacement, ambiguous system tool paths, a broken token-redaction replacement callback, an incomplete Codex-profile smoke check, and a missing executable bit on the installer; all were corrected and covered by automated or Git-tree validation.
+The repository implementation is complete and internally consistent. The remaining unchecked item is target-host acceptance, not missing repository code.
 
-The plan remains active only because live installation on the target WSL instance cannot be exercised from this environment. No claim is made that package downloads, interactive Codex login, GitHub organization registration, runner-group policy, systemd service installation, or an end-to-end self-hosted workflow were executed.
+No claim is made that live downloads, Codex login, organization registration, runner-group policy, systemd installation, service startup, or an end-to-end self-hosted job were exercised from this environment.

@@ -33,7 +33,7 @@ export function createCodexArgs(
   const entries = [
     permission(resolve(home), "deny"),
     permission("/opt/agent-relay", "deny"),
-    permission("/opt/rust", "deny"),
+    permission("/opt/rust", "read"),
     permission("/tmp", "deny"),
     permission("/var/tmp", "deny"),
     permission(resolvedRoot, "deny"),

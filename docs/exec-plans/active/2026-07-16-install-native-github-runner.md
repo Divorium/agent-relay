@@ -101,7 +101,8 @@ It does not delete, copy, move, rewrite, or symlink user-home, authentication, r
 - stages `/opt/agent-relay` on the same filesystem and restores the previous harness when a swap or launcher installation is interrupted;
 - preserves Codex authentication, runner registration, `_work`, diagnostics, and a newer runner version on rerun;
 - rejects a registered runner directory whose listener binary is missing instead of destroying its registration;
-- keeps the PAT and registration token out of command arguments, files, logs, services, profiles, installed payloads, and retained child environments.
+- keeps the PAT out of command arguments, files, logs, services, profiles, installed payloads, and retained child environments;
+- passes GitHub's short-lived registration token only to the official `config.sh --token` argument, then unsets it immediately after configuration.
 
 Fresh installations pin:
 
@@ -146,7 +147,8 @@ Historical completed ExecPlans were not changed.
 - [x] Removed superseded Relay and container runtime code.
 - [x] Rewrote current README, operations documentation, package scripts, and packaging checks.
 - [x] Fixed the streaming redactor so token patterns without capture groups cannot duplicate or leak the matched text.
-- [x] Added a real Codex CLI parser smoke command for the named permission profile before trusted harness replacement.
+- [x] Added a real Codex CLI parser smoke command with a private existing workspace for the named permission profile before trusted harness replacement.
+- [x] Made `install.sh` executable in the Git tree so `./install.sh` works after cloning.
 - [x] Ran the complete repository validation suite from a clean `npm ci` as a non-root user.
 - [x] Completed the final code/specification/plan consistency review.
 - [ ] [blocked] Exercise the installer against the actual target WSL instance. Cause: this GitHub-connected execution environment has no access to the user's WSL, sudo session, Codex login, organization PAT, or systemd host. Impact: live package installation, Codex authentication, organization registration, service startup, runner-group visibility, and an end-to-end GitHub job are not evidenced here. Evidence: deterministic repository validation passes, but no target-host commands were run. Unblock condition: run `/srv/github-runner/storage/agent-relay/install.sh` in the target WSL environment with the required interactive credentials.
@@ -170,9 +172,9 @@ TypeScript typecheck: passed
 TypeScript build: passed
 Node test suites: 50 passed, 0 failed
 Bash syntax validation: passed
-Line coverage: 99.07%
-Branch coverage: 87.35%
-Function coverage: 98.61%
+Line coverage: 99.08%
+Branch coverage: 86.69%
+Function coverage: 98.62%
 ```
 
 The passing tests include:
@@ -182,7 +184,7 @@ The passing tests include:
 - fixed token redaction including split UTF-8 and split secrets;
 - workspace containment and active-plan realpath checks;
 - launcher preservation of authentication, runner state, source files, unrelated workspaces, and environment isolation;
-- toolchain pins and Codex named-permission-profile smoke invocation;
+- toolchain pins and Codex named-permission-profile smoke invocation in a private workspace that is removed after validation;
 - organization runner installer contracts, WSL systemd ordering, deterministic system paths, checksum verification, rollback, hidden PAT handling, registration arguments, no custom labels, service commands, and rerun guards;
 - pull-request resolver behavior and workflow contracts;
 - finalizer clean no-op, branch/message validation, whitespace validation, commit/push, rollback after rejected push, and retry;
@@ -212,6 +214,6 @@ Recovery applies only to the new native installation and never reads from or mod
 
 ## Outcomes & Retrospective
 
-The repository implementation is complete and internally consistent. Direct execution replaces Relay without broad application refactoring. The main defects found during final review were stale operations documentation, non-transactional harness replacement, ambiguous system tool paths, a broken token-redaction replacement callback, and an incomplete Codex-profile smoke check; all were corrected and covered by automated tests.
+The repository implementation is complete and internally consistent. Direct execution replaces Relay without broad application refactoring. The main defects found during final review were stale operations documentation, non-transactional harness replacement, ambiguous system tool paths, a broken token-redaction replacement callback, an incomplete Codex-profile smoke check, and a missing executable bit on the installer; all were corrected and covered by automated or Git-tree validation.
 
 The plan remains active only because live installation on the target WSL instance cannot be exercised from this environment. No claim is made that package downloads, interactive Codex login, GitHub organization registration, runner-group policy, systemd service installation, or an end-to-end self-hosted workflow were executed.

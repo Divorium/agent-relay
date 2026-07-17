@@ -16,12 +16,12 @@ The setup and update entrypoint is:
 ./install.sh
 ```
 
-The installer performs all package installation, repository validation, trusted-harness installation, Codex authentication checks, GitHub runner installation, organization registration, and service configuration. Its only interactive behavior is:
+The installer performs all package installation, repository validation, trusted-harness installation, Codex authentication checks, GitHub runner installation, organization registration, and service configuration. The only interactive behavior of the completed installer, is :
 
-- invoking `codex login` when the current user is not authenticated;
-- reading a time-limited GitHub organization runner registration token without echo when the runner is not registered.
+- invoke `codex login` when the current user is not authenticated;
+- read a time-limited GitHub organization runner registration token without echo when the runner is not registered.
 
-These are interactions of the finished installer, not manual implementation or acceptance work.
+These are runtime interactions of the finished installer, not manual implementation or acceptance tasks.
 
 ## Required behavior to preserve
 
@@ -33,7 +33,7 @@ Preserve the current externally useful behavior while removing only Docker and R
 - explicit verification that checkout credentials are absent before Codex starts;
 - exactly one selected regular, non-symlink active ExecPlan;
 - minimal Codex prompt pointing only to `.agent/PLANS.md` and the selected plan;
-- Codex cannot commit or push;
+- Codex must not commit or push;
 - workspace containment and symlink protections;
 - restricted Codex filesystem permissions and required network access;
 - timeout, SIGTERM, delayed SIGKILL, output cap, streaming redaction, and non-zero failure behavior;
@@ -57,12 +57,12 @@ The CLI must:
 - invoke `/usr/local/bin/codex-run` through the retained executor behavior;
 - stream redacted stdout and stderr directly to the workflow step;
 - enforce the current timeout and output limit;
-- write `commit_message` to `GITHUB_OUTPUT` only after successful Codex execution;
+- write `commit_message` to `GITHUB_OUTPUT  only after successful Codex execution;
 - exit non-zero on validation, spawn, timeout, or Codex failure.
 
 Remove HTTP requests, request IDs, job IDs, polling, HTTP response validation, persisted job DTOs, persisted Relay logs/state, and restart recovery.
 
-Adapt rather than rewrite the useful executor logic. Keep prompt construction, workspace checks, streaming redaction, timeout, force-kill, output-cap, and truncation behavior. Remove only the `CreateJobRequest`, persisted output file, and Relay-specific error metadata.
+Adapt rather than rewrite the useful executor logic. Keep prompt construction, workspace checks, streaming redaction, timeout, force-kill, output-cap, and truncation behavior. Remove only the `CreateJobRequest`, output-file persistence, and Relay-specific error metadata.
 
 ### 2. Make the Codex launcher safe for the existing Debian user
 
@@ -80,7 +80,7 @@ The launcher must:
 
 Keep `HOME` pointed at the real home so the Codex host process can use the existing login. The model-controlled permission profile must deny the complete real home.
 
-Use a neutral Codex permissions profile such as `agent`. Remove container-only `/app`, `/runner`, `/home/agent`, and fixed `/tmp/agent-relay-runtime` assumptions. The profile must:
+Use a neutral Codex permissions profile such as `agent`. Remove container-only `/app`, `/runner`, `/home/agent`, and fixed `/home/agent-relay-runtime` assumptions. The profile must:
 
 - disable memories;
 - deny the complete real user home;
@@ -92,7 +92,7 @@ Use a neutral Codex permissions profile such as `agent`. Remove container-only `
 - retain network access;
 - never use `danger-full-access`.
 
-The sandbox constrains model-controlled Codex tools. It does not isolate arbitrary workflow steps from the runner user's home. Only trusted repositories and workflows may use this organization runner.
+The sandbox constrains model-controlled Codex tools. It does not isolate arbitrary workflow steps from the runner user's home. Only trusted repositories and workflows may therefore be granted access to this organization runner.
 
 ### 3. Add one idempotent installer
 
@@ -101,9 +101,9 @@ Add root-level `install.sh` as the only installation and update path.
 The installer must:
 
 - run as the existing non-root Debian user and use `sudo` only for system changes;
-- resolve the source root from its own location and not require a Git remote;
+- resolve the source root from its own location;
 - verify Debian, systemd, `sudo`, a writable user home, and outbound HTTPS prerequisites;
-- use the fixed organization registration URL `https://github.com/Divorium`;
+- use the fixed runner registration URL `https://github.com/Divorium`;
 - install the complete toolchain currently supplied by the Docker images;
 - avoid a general distribution upgrade;
 - run `npm ci` and `npm run check` before replacing installed application files;
@@ -115,10 +115,10 @@ The installer must:
 - prompt without echo for an organization runner registration token only when `.runner` is absent;
 - register runner name `gh-runner` with work directory `_work` and no custom labels;
 - install, enable, start, and verify the official service through `svc.sh`;
-- install GitHub's Debian `needrestart` service override;
+- install the GitHub-recommended Debian `needrestart` override;
 - preserve existing runner registration, Codex authentication, `_work`, diagnostics, and a newer self-updated runner on rerun;
 - never persist the registration token;
-- never invoke Docker, Docker Compose, WSL commands, PowerShell, or operations against the previous environment.
+- never invoke Docker, Docker Compose, host-lifecycle commands, or operations against the previous environment.
 
 The normal path asks for no repository URL, organization name, runner name, label, workspace path, Relay credential, Codex auth path, UID, GID, environment file, or service setting.
 
@@ -130,7 +130,7 @@ Use GitHub Actions Runner `2.335.1` as the fresh bootstrap archive and verify SH
 
 Retain the official runner updater. Do not downgrade a newer runner or require exact version equality after registration.
 
-The runner is added to the organization's default runner group. Repository access follows the existing `Divorium` runner-group policy. The installer must not introduce a PAT or GitHub App solely to manage runner groups.
+The runner is added to the organization's default runner group. Repository access follows the existing `Divorium` runner-group policy. The installer does not manage runner groups or require another GitHub credential for them.
 
 ### 4. Register one organization runner usable by multiple repositories
 
@@ -232,7 +232,7 @@ Add or adapt deterministic tests for:
 - native packaging and absence of active Docker/Relay runtime artifacts;
 - shell syntax for every retained script.
 
-Tests must not require real credentials, downloads, systemd, Docker, WSL, or GitHub services. Use controlled command, process, filesystem, HTTP, and Git fixtures.
+Tests must not require real credentials, downloads, systemd, Docker, or GitHub services. Use controlled command, process, filesystem, HTTP, and Git fixtures.
 
 ### 8. Rewrite current documentation
 
@@ -246,9 +246,9 @@ README and operations documentation must describe:
 - existing organization runner-group access;
 - direct Codex output and uploaded artifact;
 - updates through the same installer;
-- official re-registration and uninstall of only the new installation.
+- official re-registration and uninstall of only the new installation;
 
-Current documentation must not require a Relay secret, `.env`, copied auth file, UID/GID mapping, Docker command, custom labels, or manual service configuration. Host lifecycle commands may be documented for the user, but runtime code and the installer must not depend on them.
+Current documentation must not require a Relay secret, `.env`, copied auth file, UID/GID mapping, Docker command, or manual service configuration.
 
 ## Implementation sequence
 
@@ -267,7 +267,7 @@ Current documentation must not require a Relay secret, `.env`, copied auth file,
 
 - [x] (2026-07-16) Reviewed current Docker packaging, workflow files, runner scripts, Relay HTTP/state code, Codex executor and launcher, security boundaries, package scripts, tests, and operations documentation.
 - [x] (2026-07-16) Produced a technical specification for a fresh native organization runner installation.
-- [x] (2026-07-17) Cross-checked the specification against current code and removed repository-scoped registration, custom-label routing, WSL dependencies, host-mounted workspaces, unsafe home cleanup, stale runner bootstrap, and unnecessary executor rewrites.
+- [x] (2026-07-16) Cross-checked the specification against current code and removed repository-scoped registration, custom-label routing, host-lifecycle dependencies, host-mounted workspaces, unsafe home cleanup, stale runner bootstrap, and unnecessary executor rewrites.
 - [ ] Implement and test the direct Codex CLI.
 - [ ] Adapt and test the native Codex launcher and permission profile.
 - [ ] Implement and test the single idempotent installer.
@@ -283,15 +283,15 @@ Current documentation must not require a Relay secret, `.env`, copied auth file,
 - `scripts/codex-run` currently deletes most of `/home/agent`; substituting a real user's home would destroy runner state and unrelated user files.
 - The useful executor behavior is independent from Relay. It should be retained while its DTO and persisted-log dependencies are removed.
 - `/runner` helper paths and the `relay` permissions profile are container-specific details.
-- Runner workspaces do not need a host-mounted source folder. The official Linux `_work` directory and `${{ runner.workspace }}` provide the required boundary.
-- Organization-level registration is required for one runner to serve multiple `Divorium` repositories.
+- Runner workspaces do not need the Windows-mounted source folder. The official Linux `_work` directory and `${{ runner.workspace }}` provide the required boundary.
+- Organization-level registration is required for one runner to serve multiple `Divorium` repositories. The runner uses the existing organization runner-group access policy.
 - No custom labels are required. The user will disable the old runner, and all maintained workflows use only `[self-hosted]`.
 - OpenSSH and .NET exclusion checks are image policy, not native Debian requirements.
-- Runner `2.325.0` is stale as a fresh bootstrap. The current official release is `2.335.1`; preserve automatic updates.
+- Runner `2.325.0` is stale as a fresh bootstrap. Use current `2.335.1`, verify its archive checksum, and retain automatic updates.
 
 ## Decision Log
 
-- Decision: remove Agent Relay as a process and transport while preserving existing workflow behavior.
+- Decision: remove Agent Relay as a process and transport while preserving the existing workflow behavior.
   Rationale: the runner and Codex execute in the same operating-system environment, so HTTP transport, bearer authentication, polling, and persisted job state are unnecessary.
   Date/Author: 2026-07-16 / user direction and repository review.
 
@@ -301,7 +301,7 @@ Current documentation must not require a Relay secret, `.env`, copied auth file,
 
 - Decision: use only `runs-on: [self-hosted]` and no custom labels.
   Rationale: the user will disable the old runner outside the implementation, and additional routing labels add no value.
-  Date/Author: 2026-07-17 / user direction.
+  Date/Author: 2026-07-16 / user direction.
 
 - Decision: use one installer and the existing Debian user rather than recreating container accounts or UID/GID mapping.
   Rationale: this is a fresh native installation, not a container identity migration.
@@ -338,7 +338,7 @@ Implementation is complete only when repository-owned evidence proves:
 9. No active Docker deployment, Relay HTTP/client path, persisted Relay job model, or old-environment operation remains.
 10. A final file-by-file comparison against the technical specification finds no uncovered behavior or conflicting instruction.
 
-Do not claim live credentials, runner-group policy, package downloads, systemd, GitHub registration, or host lifecycle were exercised unless genuine evidence is available. Deterministic repository tests must still validate every installer decision and installed command contract through fixtures.
+Do not claim live credentials, organization runner-group access, package downloads, systemd, GitHub registration, or host lifecycle were exercised unless genuine evidence is available. Deterministic repository tests must still validate every installer decision and installed command contract through fixtures.
 
 ## Idempotence and Recovery
 

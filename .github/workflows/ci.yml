@@ -2,55 +2,22 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.repository }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   test:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: [self-hosted, agent-relay]
-    timeout-minutes: 20
+    runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - name: Run checks
-        id: checks
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          npm run check 2>&1 | tee check.log
-      - name: Publish coverage summary
-        if: always()
-        shell: bash
-        run: |
-          {
-            echo '## Test coverage'
-            echo
-            echo '```text'
-            sed -n '/# start of coverage report/,/# end of coverage report/p' check.log
-            echo '```'
-          } >> "${GITHUB_STEP_SUMMARY}"
-      - name: Upload check log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: check-log
-          path: check.log
-      - name: Fail when checks failed
-        if: steps.checks.outcome == 'failure'
-        run: exit 1
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate repository
+        run: npm run check

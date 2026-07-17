@@ -22,12 +22,11 @@ function runProcess(command: string, args: string[], options: Record<string, unk
   });
 }
 
-async function runResolver(statusCode: number, responseBody: Record<string, unknown>): Promise<{ status: number; stdout: string; stderr: string; output: string }> {
+async function runResolver(statusCode: number, responseBody: Record<string, unknown>) {
   const root = join(tmpdir(), `agent-relay-pr-resolver-${process.pid}-${Date.now()}-${Math.random()}`);
   const outputPath = join(root, "github-output");
   await mkdir(root, { recursive: true });
   await writeFile(outputPath, "");
-
   const server = createServer((req: any, res: any) => {
     assert.equal(req.method, "GET");
     assert.equal(req.url, `/repos/${repository}/pulls/${pullRequestNumber}`);
@@ -36,11 +35,9 @@ async function runResolver(statusCode: number, responseBody: Record<string, unkn
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify(responseBody));
   });
-
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address === "object");
-
   try {
     const result = await runProcess(process.execPath, [join(process.cwd(), "runner", "resolve-pr.mjs")], {
       cwd: process.cwd(),
@@ -66,93 +63,78 @@ function pullRequest(overrides: Record<string, unknown> = {}): Record<string, un
     number: pullRequestNumber,
     state: "open",
     draft: false,
-    head: {
-      ref: "agent/change",
-      sha: headSha,
-      repo: { full_name: repository },
-    },
+    head: { ref: "agent/change", sha: headSha, repo: { full_name: repository } },
     ...overrides,
   };
 }
 
 function assertApprovalWorkflow(workflow: string): void {
-  const requestIndex = workflow.indexOf("Resolve execution request");
-  const resolverIndex = workflow.indexOf("node /runner/resolve-pr.mjs");
+  const requestIndex = workflow.indexOf("runner/resolve-request.mjs");
+  const resolverIndex = workflow.indexOf("runner/resolve-pr.mjs");
   const checkoutIndex = workflow.indexOf("actions/checkout@v4");
-  const planIndex = workflow.indexOf("Resolve active ExecPlan");
-  const relayIndex = workflow.indexOf("node /runner/client.mjs");
-
-  assert.match(workflow, /pull_request:\s*\n\s*types:\s*\n\s*- ready_for_review/);
-  assert.match(workflow, /workflow_dispatch:/);
-  assert.doesNotMatch(workflow, /^\s*-\s+(?:synchronize|opened|reopened)\s*$/m);
-  assert.match(workflow, /github\.event\.pull_request\.number \|\| inputs\.pr_number \|\| github\.run_id/);
-  assert.match(workflow, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
-  assert.match(workflow, /EVENT_PR_NUMBER: \$\{\{ github\.event\.pull_request\.number \}\}/);
-  assert.match(workflow, /pr_number="\$\{EVENT_PR_NUMBER\}"/);
-  assert.match(workflow, /PR_NUMBER: \$\{\{ steps\.request\.outputs\.pr_number \}\}/);
-  assert.match(workflow, /--diff-filter=AM/);
-  assert.match(workflow, /\$\{BASE_SHA\}\.\.\.\$\{HEAD_SHA\}/);
-  assert.match(workflow, /Expected exactly one added or modified active ExecPlan/);
-  assert.match(workflow, /AGENT_RELAY_PLAN_PATH: \$\{\{ steps\.plan\.outputs\.plan_path \}\}/);
-  assert.match(workflow, /tee "\$\{RUNNER_TEMP\}\/agent-relay-console\.log"/);
-  assert.match(workflow, /\$\{\{ runner\.temp \}\}\/agent-relay-console\.log/);
-  assert.match(workflow, /token: \$\{\{ github\.token \}\}/);
-  assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ github\.token \}\}/);
-  assert.doesNotMatch(workflow, /AGENT_RELAY_PUSH_TOKEN/);
-  assert.doesNotMatch(workflow, /\bmode:|AGENT_RELAY_MODE|AGENT_RELAY_OUTPUT_ARCHIVE_PATH|agent-relay-output\.log/);
+  const planIndex = workflow.indexOf("runner/resolve-plan.mjs");
+  const codexIndex = workflow.indexOf("runner/run-codex.mjs");
+  const finalizerIndex = workflow.indexOf("runner/finalize.sh");
+  assert.match(workflow, /pull_request:\s*\n\s*types:\s*\n\s*- ready_for_review/u);
+  assert.match(workflow, /workflow_dispatch:/u);
+  assert.doesNotMatch(workflow, /^\s*-\s+(?:synchronize|opened|reopened)\s*$/mu);
+  assert.match(workflow, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/u);
+  assert.match(workflow, /EVENT_PR_NUMBER: \$\{\{ github\.event\.pull_request\.number \}\}/u);
+  assert.match(workflow, /PR_NUMBER: \$\{\{ steps\.request\.outputs\.pr_number \}\}/u);
+  assert.match(workflow, /BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/u);
+  assert.match(workflow, /HEAD_SHA: \$\{\{ steps\.pr\.outputs\.head_sha \}\}/u);
+  assert.match(workflow, /persist-credentials: false/u);
+  assert.match(workflow, /tee "\$\{RUNNER_TEMP\}\/agent-relay-console\.log"/u);
+  assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ github\.token \}\}/u);
+  assert.doesNotMatch(workflow, /\/opt\/agent-relay|AGENT_RELAY_TOKEN|AGENT_RELAY_URL|runner\/client\.mjs/u);
   assert.ok(requestIndex >= 0);
   assert.ok(resolverIndex > requestIndex);
   assert.ok(checkoutIndex > resolverIndex);
   assert.ok(planIndex > checkoutIndex);
-  assert.ok(relayIndex > planIndex);
-  assert.doesNotMatch(workflow, /inputs\.branch/);
+  assert.ok(codexIndex > planIndex);
+  assert.ok(finalizerIndex > codexIndex);
 }
 
 test("ready open pull request is accepted and produces API-derived checkout outputs", async () => {
   const result = await runResolver(200, pullRequest());
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Resolved ready pull request #42/);
+  assert.match(result.stdout, /Resolved ready pull request #42/u);
   assert.equal(result.output, `head_ref=agent/change\nhead_sha=${headSha}\n`);
 });
 
-test("draft pull request is rejected before checkout or Agent Relay invocation", async () => {
+test("draft pull request is rejected before checkout or Codex invocation", async () => {
   const result = await runResolver(200, pullRequest({ draft: true }));
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /not ready for review/);
+  assert.match(result.stderr, /not ready for review/u);
   assert.equal(result.output, "");
 });
 
 test("closed pull request is rejected", async () => {
   const result = await runResolver(200, pullRequest({ state: "closed" }));
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /is not open/);
+  assert.match(result.stderr, /is not open/u);
   assert.equal(result.output, "");
 });
 
 test("missing pull request is rejected", async () => {
   const result = await runResolver(404, { message: "Not Found" });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /was not found/);
+  assert.match(result.stderr, /was not found/u);
   assert.equal(result.output, "");
 });
 
 test("foreign head repository is rejected", async () => {
   const result = await runResolver(200, pullRequest({
-    head: {
-      ref: "agent/change",
-      sha: headSha,
-      repo: { full_name: "fork/repository" },
-    },
+    head: { ref: "agent/change", sha: headSha, repo: { full_name: "fork/repository" } },
   }));
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /head must belong to the target repository/);
+  assert.match(result.stderr, /head must belong to the target repository/u);
   assert.equal(result.output, "");
 });
 
 test("production and example workflows enforce the approval contract", async () => {
   const production = await readFile(join(process.cwd(), ".github", "workflows", "agent-relay.yml"), "utf8");
   const example = await readFile(join(process.cwd(), "examples", "github-actions", "agent-relay.yml"), "utf8");
-
   assertApprovalWorkflow(production);
   assertApprovalWorkflow(example);
   assert.equal(example, production);

@@ -14,18 +14,23 @@ SEED_ROOT="${ROOT}/seed"
 RELEASE_ROOT="${ROOT}/release"
 REMOTE_ROOT="${ROOT}/remote.git"
 FAKE_BIN="${ROOT}/bin"
+FAKE_GO_BIN="${ROOT}/usr-local-go-bin"
 ADMIN_FILE="${ROOT}/administrator"
 LOG_FILE="${ROOT}/commands.log"
+GO_LOG="${ROOT}/go.log"
 SERVICE_STATE="${ROOT}/service.state"
 FAIL_NEXT_START="${ROOT}/fail-next-start"
 FAIL_NEXT_BUILD="${ROOT}/fail-next-build"
 FAST_VALIDATION="${ROOT}/fast-validation"
 REAL_NODE="$(command -v node)"
 ADMIN_HOME="${ROOT}/admin-home"
+AMBIENT_PATH="${FAKE_BIN}:/usr/bin:/bin"
+BUILDER_PATH_FIXTURE="${FAKE_GO_BIN}:${FAKE_BIN}:/usr/local/bin:/usr/bin:/bin"
 
-mkdir -p "${SEED_ROOT}" "${FAKE_BIN}" "${ADMIN_HOME}" "${STORAGE_ROOT}"
+mkdir -p "${SEED_ROOT}" "${FAKE_BIN}" "${FAKE_GO_BIN}" "${ADMIN_HOME}" "${STORAGE_ROOT}"
 rsync -a --exclude=.git --exclude=node_modules --exclude=dist ./ "${SEED_ROOT}/"
 BASE_ROOT="${BASE_ROOT}" ADMIN_FILE="${ADMIN_FILE}" SOURCE_ROOT="${SOURCE_ROOT}" \
+BUILDER_PATH_FIXTURE="${BUILDER_PATH_FIXTURE}" \
 python3 - "${SEED_ROOT}/update.sh" <<'PY'
 import json
 import os
@@ -35,6 +40,10 @@ path = pathlib.Path(sys.argv[1])
 source = path.read_text()
 source = source.replace("BASE_ROOT=/srv/github-runner", f"BASE_ROOT={json.dumps(os.environ['BASE_ROOT'])}")
 source = source.replace("ADMIN_FILE=/etc/agent-relay/administrator", f"ADMIN_FILE={json.dumps(os.environ['ADMIN_FILE'])}")
+source = source.replace(
+    "BUILDER_PATH=/opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin",
+    f"BUILDER_PATH={json.dumps(os.environ['BUILDER_PATH_FIXTURE'])}",
+)
 source = source.replace('SCRIPT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"', f"SCRIPT_ROOT={json.dumps(os.environ['SOURCE_ROOT'])}")
 path.write_text(source)
 PY
@@ -67,6 +76,7 @@ mkdir -p "${SOURCE_ROOT}/dist" "${BUILD_ROOT}" "${BUILD_HOME}"
 printf 'old\n' > "${SOURCE_ROOT}/dist/old-runtime.js"
 printf '%s\n' "$(id -un)" > "${ADMIN_FILE}"
 : > "${LOG_FILE}"
+: > "${GO_LOG}"
 printf 'active\n' > "${SERVICE_STATE}"
 
 cat > "${FAKE_BIN}/ps" <<'EOF_PS'
@@ -144,8 +154,9 @@ cat > "${FAKE_BIN}/codex" <<'EOF_CODEX'
 if [[ "${1:-}" == "--version" ]]; then echo 'codex-cli 0.144.4'; fi
 exit 0
 EOF_CODEX
-cat > "${FAKE_BIN}/go" <<'EOF_GO'
+cat > "${FAKE_GO_BIN}/go" <<EOF_GO
 #!/usr/bin/env bash
+printf '%s\n' "\$0" >> "${GO_LOG}"
 echo 'go version go1.24.5 linux/amd64'
 EOF_GO
 cat > "${FAKE_BIN}/rustc" <<'EOF_RUSTC'
@@ -161,12 +172,17 @@ cat > "${FAKE_BIN}/git" <<'EOF_GIT'
 if [[ "${1:-}" == "lfs" ]]; then echo 'git-lfs/3.7.0 (mock)'; exit 0; fi
 exec /usr/bin/git "$@"
 EOF_GIT
-chmod 0700 "${FAKE_BIN}"/*
+chmod 0700 "${FAKE_BIN}"/* "${FAKE_GO_BIN}/go"
+
+if PATH="${AMBIENT_PATH}" command -v go >/dev/null 2>&1; then
+  echo 'Ambient update PATH unexpectedly resolves go' >&2
+  exit 1
+fi
 
 export HOME="${ADMIN_HOME}"
 export XDG_CONFIG_HOME="${ADMIN_HOME}/.config"
 export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-${ADMIN_HOME}/.npm}"
-export PATH="${FAKE_BIN}:${PATH}"
+export PATH="${AMBIENT_PATH}"
 export USER="$(id -un)"
 
 run_update() {
@@ -186,6 +202,14 @@ grep -q 'systemctl stop' "${LOG_FILE}"
 grep -q 'systemctl enable' "${LOG_FILE}"
 grep -q 'systemctl start' "${LOG_FILE}"
 grep -q 'Agent Relay updated successfully' "${ROOT}/update-success.out"
+grep -q 'go version go1.24.5 linux/amd64' "${ROOT}/update-success.out"
+grep -qx "${FAKE_GO_BIN}/go" "${GO_LOG}"
+grep -Fq "sudo -u agent-relay-builder -H env HOME=${BUILD_HOME} PATH=${BUILDER_PATH_FIXTURE}" "${LOG_FILE}"
+if grep -F 'sudo -u agent-relay-builder -H env ' "${LOG_FILE}" \
+  | grep -v -F "PATH=${BUILDER_PATH_FIXTURE}" >/dev/null; then
+  echo 'A builder command did not receive the deterministic toolchain PATH' >&2
+  exit 1
+fi
 grep -qx reexec "${ROOT}/reexec.marker"
 
 SUCCESSFUL_HEAD="$(git -C "${SOURCE_ROOT}" rev-parse HEAD)"

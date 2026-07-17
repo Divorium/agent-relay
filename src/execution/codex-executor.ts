@@ -1,45 +1,46 @@
 import { spawn } from "node:child_process";
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
-import { RelayError } from "../contracts/errors.js";
-import type { CreateJobRequest } from "../contracts/job.js";
+import { join, resolve } from "node:path";
 import { buildCodexPrompt } from "./prompt.js";
+import { CodexExecutionError } from "./errors.js";
 import { StreamingRedactor } from "../security/redaction.js";
 
-export interface ExecutionOutcome { exitCode: number; }
-
-const ISOLATED_CODEX_HOME = "/home/agent/.codex";
-const RELAY_APPLICATION_ROOT = "/app";
-const RUNNER_ROOT = "/runner";
-const SYSTEM_TEMP_ROOT = "/tmp";
-const SYSTEM_VAR_TEMP_ROOT = "/var/tmp";
-const AGENT_TEMP_ROOT = "/tmp/agent-relay-runtime";
-
-export function createCodexEnvironment(): Record<string, string> {
-  return {
-    LANG: "C.UTF-8",
-    LC_ALL: "C.UTF-8",
-  };
+export interface ExecutionOutcome {
+  exitCode: number;
 }
 
 function permission(path: string, access: "deny" | "read" | "write"): string {
   return `${JSON.stringify(path)}=${JSON.stringify(access)}`;
 }
 
-export function createCodexArgs(workspace: string, prompt: string, workspaceRoot = workspace): string[] {
+export function createCodexEnvironment(home: string, runtimeRoot: string): Record<string, string> {
+  return {
+    HOME: home,
+    CODEX_RUNTIME_ROOT: runtimeRoot,
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+  };
+}
+
+export function createCodexArgs(
+  workspace: string,
+  prompt: string,
+  workspaceRoot: string,
+  home: string,
+  runtimeRoot: string,
+): string[] {
   const resolvedWorkspace = resolve(workspace);
   const resolvedRoot = resolve(workspaceRoot);
   const entries = [
-    permission(ISOLATED_CODEX_HOME, "deny"),
-    permission(RELAY_APPLICATION_ROOT, "deny"),
-    permission(RUNNER_ROOT, "deny"),
-    permission(SYSTEM_TEMP_ROOT, "deny"),
-    permission(SYSTEM_VAR_TEMP_ROOT, "deny"),
-    permission(AGENT_TEMP_ROOT, "write"),
+    permission(resolve(home), "deny"),
+    permission("/opt/agent-relay", "deny"),
+    permission("/opt/rust", "deny"),
+    permission("/tmp", "deny"),
+    permission("/var/tmp", "deny"),
+    permission(resolvedRoot, "deny"),
+    permission(resolve(runtimeRoot), "write"),
+    permission(resolvedWorkspace, "write"),
+    permission(join(resolvedWorkspace, ".git"), "read"),
   ];
-  if (resolvedRoot !== resolvedWorkspace) entries.push(permission(resolvedRoot, "deny"));
-  entries.push(permission(resolvedWorkspace, "write"));
-  entries.push(permission(join(resolvedWorkspace, ".git"), "read"));
 
   return [
     "--ask-for-approval",
@@ -47,13 +48,13 @@ export function createCodexArgs(workspace: string, prompt: string, workspaceRoot
     "-c",
     "features.memories=false",
     "-c",
-    "default_permissions=\"relay\"",
+    "default_permissions=\"agent\"",
     "-c",
-    "permissions.relay.extends=\":workspace\"",
+    "permissions.agent.extends=\":workspace\"",
     "-c",
-    `permissions.relay.filesystem={${entries.join(",")}}`,
+    `permissions.agent.filesystem={${entries.join(",")}}`,
     "-c",
-    "permissions.relay.network.enabled=true",
+    "permissions.agent.network.enabled=true",
     "exec",
     "--cd",
     resolvedWorkspace,
@@ -66,33 +67,30 @@ export class CodexExecutor {
     private readonly command: string,
     private readonly timeoutMs: number,
     private readonly maxOutputBytes: number,
-    private readonly workspaceRoot?: string,
+    private readonly workspaceRoot: string,
+    private readonly home: string,
+    private readonly runtimeRoot: string,
   ) {}
 
-  async run(request: CreateJobRequest, workspace: string, outputPath: string): Promise<ExecutionOutcome> {
-    await mkdir(dirname(outputPath), { recursive: true });
-    await writeFile(outputPath, "", { mode: 0o600 });
-
-    const prompt = buildCodexPrompt(request);
+  async run(planPath: string, workspace: string): Promise<ExecutionOutcome> {
+    const prompt = buildCodexPrompt(planPath);
     const child = spawn(
       this.command,
-      createCodexArgs(workspace, prompt, this.workspaceRoot ?? workspace),
+      createCodexArgs(workspace, prompt, this.workspaceRoot, this.home, this.runtimeRoot),
       {
         cwd: workspace,
-        env: createCodexEnvironment(),
+        env: createCodexEnvironment(this.home, this.runtimeRoot),
         stdio: ["ignore", "pipe", "pipe"],
+        detached: true,
       },
     );
 
     let outputBytes = 0;
     let outputTruncated = false;
-    let pendingWrite = Promise.resolve();
     const stdoutRedactor = new StreamingRedactor();
     const stderrRedactor = new StreamingRedactor();
     const writeRedacted = (value: string): void => {
-      if (!value) return;
-      process.stdout.write(value);
-      pendingWrite = pendingWrite.then(() => appendFile(outputPath, value, { mode: 0o600 }));
+      if (value) process.stdout.write(value);
     };
     const collect = (redactor: StreamingRedactor) => (chunk: unknown): void => {
       if (outputBytes >= this.maxOutputBytes) {
@@ -109,19 +107,28 @@ export class CodexExecutor {
     child.stdout?.on("data", collect(stdoutRedactor));
     child.stderr?.on("data", collect(stderrRedactor));
 
+    const signalProcessGroup = (signal: "SIGTERM" | "SIGKILL"): void => {
+      try {
+        if (typeof child.pid === "number") process.kill(-child.pid, signal);
+        else child.kill(signal);
+      } catch {
+        child.kill(signal);
+      }
+    };
+
     let timedOut = false;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
     const exitCode = await new Promise<number>((resolvePromise, reject) => {
       const timeoutTimer = setTimeout(() => {
         timedOut = true;
-        child.kill("SIGTERM");
-        forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 5000);
+        signalProcessGroup("SIGTERM");
+        forceKillTimer = setTimeout(() => signalProcessGroup("SIGKILL"), 5_000);
       }, this.timeoutMs);
 
       child.on("error", () => {
         clearTimeout(timeoutTimer);
         if (forceKillTimer) clearTimeout(forceKillTimer);
-        reject(new RelayError("CODEX_FAILED", "Codex process could not be started", 502));
+        reject(new CodexExecutionError("CODEX_FAILED", "Codex process could not be started"));
       });
       child.on("close", (code: number | null) => {
         clearTimeout(timeoutTimer);
@@ -138,10 +145,9 @@ export class CodexExecutor {
       writeRedacted(stdoutRedactor.end());
       writeRedacted(stderrRedactor.end());
     }
-    await pendingWrite;
 
-    if (timedOut) throw new RelayError("CODEX_TIMEOUT", "Codex execution timed out", 504);
-    if (exitCode !== 0) throw new RelayError("CODEX_FAILED", `Codex exited with code ${exitCode}`, 502);
+    if (timedOut) throw new CodexExecutionError("CODEX_TIMEOUT", "Codex execution timed out");
+    if (exitCode !== 0) throw new CodexExecutionError("CODEX_FAILED", `Codex exited with code ${exitCode}`);
     return { exitCode };
   }
 }

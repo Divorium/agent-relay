@@ -77,10 +77,11 @@ function pullRequest(overrides: Record<string, unknown> = {}): Record<string, un
 
 function assertApprovalWorkflow(workflow: string): void {
   const requestIndex = workflow.indexOf("Resolve execution request");
-  const resolverIndex = workflow.indexOf("node /runner/resolve-pr.mjs");
+  const resolverIndex = workflow.indexOf("node /opt/agent-relay/runner/resolve-pr.mjs");
   const checkoutIndex = workflow.indexOf("actions/checkout@v4");
   const planIndex = workflow.indexOf("Resolve active ExecPlan");
-  const relayIndex = workflow.indexOf("node /runner/client.mjs");
+  const codexIndex = workflow.indexOf("node /opt/agent-relay/dist/src/run-codex.js");
+  const finalizerIndex = workflow.indexOf("run: /opt/agent-relay/runner/finalize.sh");
 
   assert.match(workflow, /pull_request:\s*\n\s*types:\s*\n\s*- ready_for_review/);
   assert.match(workflow, /workflow_dispatch:/);
@@ -93,18 +94,20 @@ function assertApprovalWorkflow(workflow: string): void {
   assert.match(workflow, /--diff-filter=AM/);
   assert.match(workflow, /\$\{BASE_SHA\}\.\.\.\$\{HEAD_SHA\}/);
   assert.match(workflow, /Expected exactly one added or modified active ExecPlan/);
-  assert.match(workflow, /AGENT_RELAY_PLAN_PATH: \$\{\{ steps\.plan\.outputs\.plan_path \}\}/);
+  assert.match(workflow, /CODEX_PLAN_PATH: \$\{\{ steps\.plan\.outputs\.plan_path \}\}/);
+  assert.match(workflow, /CODEX_WORKSPACE_ROOT: \$\{\{ runner\.workspace \}\}/);
   assert.match(workflow, /tee "\$\{RUNNER_TEMP\}\/agent-relay-console\.log"/);
   assert.match(workflow, /\$\{\{ runner\.temp \}\}\/agent-relay-console\.log/);
   assert.match(workflow, /token: \$\{\{ github\.token \}\}/);
   assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ github\.token \}\}/);
-  assert.doesNotMatch(workflow, /AGENT_RELAY_PUSH_TOKEN/);
+  assert.doesNotMatch(workflow, /AGENT_RELAY_TOKEN|AGENT_RELAY_URL|AGENT_RELAY_PUSH_TOKEN|runner\/client\.mjs/);
   assert.doesNotMatch(workflow, /\bmode:|AGENT_RELAY_MODE|AGENT_RELAY_OUTPUT_ARCHIVE_PATH|agent-relay-output\.log/);
   assert.ok(requestIndex >= 0);
   assert.ok(resolverIndex > requestIndex);
   assert.ok(checkoutIndex > resolverIndex);
   assert.ok(planIndex > checkoutIndex);
-  assert.ok(relayIndex > planIndex);
+  assert.ok(codexIndex > planIndex);
+  assert.ok(finalizerIndex > codexIndex);
   assert.doesNotMatch(workflow, /inputs\.branch/);
 }
 
@@ -115,7 +118,7 @@ test("ready open pull request is accepted and produces API-derived checkout outp
   assert.equal(result.output, `head_ref=agent/change\nhead_sha=${headSha}\n`);
 });
 
-test("draft pull request is rejected before checkout or Agent Relay invocation", async () => {
+test("draft pull request is rejected before checkout or Codex invocation", async () => {
   const result = await runResolver(200, pullRequest({ draft: true }));
   assert.equal(result.status, 1);
   assert.match(result.stderr, /not ready for review/);

@@ -150,7 +150,7 @@ test("codex-run rejects missing authentication before launching Codex", async ()
   }
 });
 
-test("toolchain smoke validates retained pins without rejecting unrelated tools", async () => {
+test("toolchain smoke validates retained pins and the Codex permission profile", async () => {
   const root = join(tmpdir(), `agent-relay-toolchain-${process.pid}-${Date.now()}`);
   const bin = join(root, "bin");
   const log = join(root, "commands.log");
@@ -182,6 +182,10 @@ test("toolchain smoke validates retained pins without rejecting unrelated tools"
     }
     assert.doesNotMatch(invocations, /^ssh |^dotnet /m);
     assert.match(invocations, /^codex --ask-for-approval never exec --help$/m);
+    assert.match(
+      invocations,
+      /^codex --ask-for-approval never -c features\.memories=false -c default_permissions="agent" -c permissions\.agent\.extends=":workspace" -c permissions\.agent\.filesystem=\{"\/tmp"="deny","\/tmp\/agent-relay-smoke"="write"\} -c permissions\.agent\.network\.enabled=true exec --cd \/tmp\/agent-relay-smoke --help$/m,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

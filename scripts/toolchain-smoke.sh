@@ -56,3 +56,11 @@ diff --version
 }
 
 codex --ask-for-approval never exec --help >/dev/null
+codex \
+  --ask-for-approval never \
+  -c 'features.memories=false' \
+  -c 'default_permissions="agent"' \
+  -c 'permissions.agent.extends=":workspace"' \
+  -c 'permissions.agent.filesystem={"/tmp"="deny","/tmp/agent-relay-smoke"="write"}' \
+  -c 'permissions.agent.network.enabled=true' \
+  exec --cd /tmp/agent-relay-smoke --help >/dev/null

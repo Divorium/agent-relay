@@ -18,10 +18,15 @@ Only trusted organization repositories and workflows may use this runner. A self
 
 ## Installation
 
+The repository checkout in WSL is:
+
+```text
+/srv/github-runner/storage/agent-relay
+```
+
 Prerequisites:
 
 - Debian x86-64;
-- systemd running as PID 1, including in WSL;
 - a normal non-root user with `sudo`;
 - outbound HTTPS;
 - a GitHub token that can create an organization runner registration token for `Divorium`.
@@ -29,14 +34,15 @@ Prerequisites:
 Run:
 
 ```bash
-git clone https://github.com/Divorium/agent-relay.git
-cd agent-relay
+cd /srv/github-runner/storage/agent-relay
 ./install.sh
 ```
 
-The installer performs package installation, source validation, trusted harness installation, Codex authentication, GitHub runner installation, organization registration, and service startup. It has no arguments and uses no `.env` file.
+The installer derives the source directory from its own location, so it requires no source-path argument. It performs package installation, source validation, trusted harness installation, Codex authentication, GitHub runner installation, organization registration, and service startup. It has no arguments and uses no `.env` file.
 
-On a fresh registration it asks once, without echo, for a GitHub token. A classic personal access token needs `admin:org`; a fine-grained token needs organization `Self-hosted runners` write permission. The token is used only to request GitHub's short-lived registration token and is not written to disk or retained by the runner service.
+When WSL does not yet run systemd as PID 1, the installer updates `/etc/wsl.conf` and exits. Run `wsl --shutdown` from Windows, start Debian again, and rerun the same command. No manual configuration-file edit is required.
+
+On a fresh registration the installer asks once, without echo, for a GitHub token. A classic personal access token needs `admin:org`; a fine-grained token needs organization `Self-hosted runners` write permission. The token is used only to request GitHub's short-lived registration token and is not written to disk or retained by the runner service.
 
 When Codex is not authenticated, the installer invokes:
 
@@ -44,7 +50,7 @@ When Codex is not authenticated, the installer invokes:
 codex login
 ```
 
-Rerunning `./install.sh` preserves the current Codex login, runner registration, runner work directory, diagnostics, and any newer runner version installed by GitHub's updater. The installer does not inspect, stop, unregister, copy from, or clean any previous Docker or runner environment.
+Rerunning `./install.sh` preserves the current Codex login, runner registration, runner work directory, diagnostics, and any newer runner version installed by GitHub's updater. The installer does not inspect, stop, unregister, copy from, or clean any previous environment.
 
 ## Workflow inputs
 
@@ -95,6 +101,7 @@ The commit message is derived before Codex starts from the first non-empty level
 Repository validation is:
 
 ```bash
+cd /srv/github-runner/storage/agent-relay
 npm ci
 npm run check
 ```

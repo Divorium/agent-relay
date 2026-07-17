@@ -85,7 +85,7 @@ The direct CLI preserves the useful execution controls from the previous impleme
 
 The commit message is derived before Codex starts from the first non-empty level-one heading in the active ExecPlan, normalized to one line, and limited to 120 Unicode characters. It is written to `GITHUB_OUTPUT` only after Codex succeeds. A clean worktree is a successful no-op. A changed worktree is checked, committed, and pushed by `/opt/agent-relay/runner/finalize.sh`.
 
-## Credential boundaries
+## Credential and filesystem boundaries
 
 - Pull-request resolution receives `${{ github.token }}` only for the API lookup.
 - Checkout uses `${{ github.token }}` with `persist-credentials: false`.
@@ -93,8 +93,11 @@ The commit message is derived before Codex starts from the first non-empty level
 - The Codex step receives no GitHub token or runner registration token.
 - Finalization receives `${{ github.token }}` only through `GITHUB_PUSH_TOKEN` and uses a temporary askpass helper.
 - No Relay bearer secret exists.
-- The native launcher replaces the environment through `env -i`, preserves the real `HOME` only for Codex authentication, and uses a private per-execution temp directory.
-- Model-controlled filesystem access denies the real home, `/opt/agent-relay`, `/opt/rust`, the complete runner workspace root, and general temp roots before re-allowing only the selected repository, its `.git` directory as read-only, and the private runtime directory.
+- The native launcher replaces the environment through `env -i`, preserves the real `HOME` only for Codex authentication, and creates one private per-execution runtime directory.
+- Model-controlled filesystem access denies the real home, `/opt/agent-relay`, the complete runner workspace root, and general temp roots.
+- The root-owned Rust installation under `/opt/rust` is read-only so `cargo` and `rustc` can use the installed toolchain without modifying it.
+- Writes are re-allowed only for the selected repository and the private runtime directory; the selected repository's `.git` directory remains read-only.
+- npm, pip, Go, Gradle, XDG, Cargo, and temporary caches are redirected into the private runtime directory. Codex-controlled Git uses `/dev/null` as its global config instead of reading `$HOME/.gitconfig`.
 
 ## Validation
 

@@ -152,7 +152,7 @@ test("toolchain smoke validates retained pins without rejecting unrelated tools"
   const commands = [
     "node", "npm", "tsc", "python3", "java", "rustc", "cargo", "go", "git", "gcc", "g++", "clang",
     "make", "cmake", "pkg-config", "bash", "curl", "wget", "jq", "zip", "unzip", "tar", "gzip",
-    "xz", "zstd", "rsync", "file", "find", "diff", "codex", "head", "ssh", "dotnet",
+    "xz", "zstd", "rsync", "file", "find", "diff", "codex", "ssh", "dotnet",
   ];
   await createFakeCommands(bin, commands);
   await writeFile(log, "");

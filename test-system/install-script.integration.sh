@@ -46,12 +46,12 @@ exit 0
 EOF_RUNSVC
 cat > "${RUNNER_PAYLOAD}/bin/installdependencies.sh" <<EOF_DEPS
 #!/usr/bin/env bash
-printf 'runner dependencies\n' >> "${COMMAND_LOG}"
+printf 'runner dependencies\\n' >> "${COMMAND_LOG}"
 EOF_DEPS
 cat > "${RUNNER_PAYLOAD}/config.sh" <<EOF_CONFIG
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "\$*" > "${CONFIG_LOG}"
+printf '%s\\n' "\$*" > "${CONFIG_LOG}"
 touch .runner
 EOF_CONFIG
 chmod 0755 "${RUNNER_PAYLOAD}/bin/Runner.Listener" "${RUNNER_PAYLOAD}/bin/runsvc.sh" \
@@ -88,7 +88,7 @@ EOF_GETENT
 cat > "${FAKE_BIN}/sudo" <<EOF_SUDO
 #!/usr/bin/env bash
 set -euo pipefail
-printf 'sudo %s\n' "\$*" >> "${COMMAND_LOG}"
+printf 'sudo %s\\n' "\$*" >> "${COMMAND_LOG}"
 if [[ "\${1:-}" == '-v' || "\${1:-}" == '-k' ]]; then exit 0; fi
 if [[ "\${1:-}" == '-E' ]]; then shift; fi
 while [[ "\${1:-}" == '-u' || "\${1:-}" == '-H' ]]; do
@@ -99,7 +99,7 @@ case "\${1:-}" in
   apt-get) exit 0 ;;
   useradd)
     user="\${@: -1}"
-    printf '%s\n' "\$user" >> "${USERS_STATE}"
+    printf '%s\\n' "\$user" >> "${USERS_STATE}"
     home=''
     args=("\$@")
     for ((i=0; i<\${#args[@]}; i++)); do
@@ -109,7 +109,7 @@ case "\${1:-}" in
     ;;
   passwd|gpasswd|chown) exit 0 ;;
   find)
-    if printf '%s\n' "\$*" | grep -q -- '-exec chown'; then exit 0; fi
+    if printf '%s\\n' "\$*" | grep -q -- '-exec chown'; then exit 0; fi
     shift
     exec /usr/bin/find "\$@"
     ;;
@@ -140,13 +140,13 @@ exec /usr/bin/uname "$@"
 EOF_UNAME
 cat > "${FAKE_BIN}/systemctl" <<EOF_SYSTEMCTL
 #!/usr/bin/env bash
-printf 'systemctl %s\n' "\$*" >> "${COMMAND_LOG}"
+printf 'systemctl %s\\n' "\$*" >> "${COMMAND_LOG}"
 [[ "\${1:-}" == 'daemon-reload' ]]
 EOF_SYSTEMCTL
 cat > "${FAKE_BIN}/curl" <<EOF_CURL
 #!/usr/bin/env bash
 set -euo pipefail
-printf 'curl %s\n' "\$*" >> "${COMMAND_LOG}"
+printf 'curl %s\\n' "\$*" >> "${COMMAND_LOG}"
 out=''
 url=''
 while (( \$# > 0 )); do
@@ -165,14 +165,14 @@ while (( \$# > 0 )); do
 done
 case "\$url" in
   https://api.github.com/meta) exit 0 ;;
-  *'/actions/runners/registration-token') printf '%s\n' '{"token":"runner-registration-token"}' ;;
+  *'/actions/runners/registration-token') printf '%s\\n' '{"token":"runner-registration-token"}' ;;
   *'actions-runner-linux-x64-'*) cp "${RUNNER_ARCHIVE}" "\$out" ;;
   *) echo "unexpected curl URL: \$url" >&2; exit 1 ;;
 esac
 EOF_CURL
 cat > "${FAKE_BIN}/git" <<EOF_GIT
 #!/usr/bin/env bash
-if [[ "\${1:-}" == lfs ]]; then printf 'git-lfs mock\n' >> "${COMMAND_LOG}"; exit 0; fi
+if [[ "\${1:-}" == lfs ]]; then printf 'git-lfs mock\\n' >> "${COMMAND_LOG}"; exit 0; fi
 exec /usr/bin/git "\$@"
 EOF_GIT
 
@@ -183,7 +183,7 @@ exec /opt/nvm/versions/node/v22.16.0/bin/node "$@"
 EOF_NODE
 cat > "${FAKE_BIN}/npm" <<EOF_NPM
 #!/usr/bin/env bash
-printf 'npm %s\n' "\$*" >> "${COMMAND_LOG}"
+printf 'npm %s\\n' "\$*" >> "${COMMAND_LOG}"
 exit 0
 EOF_NPM
 cat > "${FAKE_BIN}/java" <<'EOF_JAVA'

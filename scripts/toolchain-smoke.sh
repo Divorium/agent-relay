@@ -43,7 +43,7 @@ diff --version
   exit 1
 }
 [[ "${codex_version}" == *"${EXPECTED_CODEX_VERSION:?EXPECTED_CODEX_VERSION is required}"* ]] || {
-  echo "Unexpected Codex CLI version: ${codex_version}" >&2
+  echo "Unexpected Codex version: ${codex_version}" >&2
   exit 1
 }
 [[ "${go_version}" == *"go${EXPECTED_GO_VERSION:?EXPECTED_GO_VERSION is required}"* ]] || {
@@ -69,4 +69,10 @@ codex \
   -c 'permissions.agent.extends=":workspace"' \
   -c "permissions.agent.filesystem={\"/tmp\"=\"deny\",\"${smoke_root}\"=\"write\"}" \
   -c 'permissions.agent.network.enabled=true' \
+  exec --cd "${smoke_root}" --help >/dev/null
+
+
+codex \
+  --ask-for-approval never \
+  -c "projects={\"${smoke_root}\"={trust_level=\"trusted\"}}" \
   exec --cd "${smoke_root}" --help >/dev/null

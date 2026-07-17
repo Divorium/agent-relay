@@ -12,6 +12,10 @@ function permission(path: string, access: "deny" | "read" | "write"): string {
   return `${JSON.stringify(path)}=${JSON.stringify(access)}`;
 }
 
+function trustedProject(path: string): string {
+  return `projects={${JSON.stringify(path)}={trust_level="trusted"}}`;
+}
+
 export function createCodexEnvironment(home: string, runtimeRoot: string): Record<string, string> {
   return { HOME: home, CODEX_RUNTIME_ROOT: runtimeRoot, LANG: "C.UTF-8", LC_ALL: "C.UTF-8" };
 }
@@ -40,6 +44,7 @@ export function createCodexArgs(
   return [
     "--ask-for-approval", "never",
     "-c", "features.memories=false",
+    "-c", trustedProject(resolvedWorkspace),
     "-c", "default_permissions=\"agent\"",
     "-c", "permissions.agent.extends=\":workspace\"",
     "-c", `permissions.agent.filesystem={${entries.join(",")}}`,

@@ -30,6 +30,7 @@ Every later release uses only `./update.sh`.
 
 - one administrator-owned source/runtime tree;
 - dedicated `/srv/github-runner/storage/work` runner workspace;
+- every canonical workflow checkout selected below `/srv/github-runner/storage/work` is passed to Codex with an exact per-project `trust_level="trusted"` override before the first `exec`;
 - locked `github-runner` and `agent-relay-builder` accounts without sudo;
 - root-owned systemd unit running the official runner as `github-runner`;
 - installer-only package setup, account creation, runner registration, and Codex login;
@@ -42,6 +43,8 @@ Every later release uses only `./update.sh`.
 ## End-to-end deterministic test
 
 The full-flow integration test constructs a local bare GitHub-like remote and a pull-request branch with one active ExecPlan. A mock HTTP endpoint returns the ready PR metadata. The test then executes the production request resolver, PR resolver, exact checkout, plan resolver, direct runtime with a mock Codex executable, finalizer, commit, and push. The final remote clone must contain the mock Codex change and derived commit message.
+
+The trust tests verify that the exact canonical checkout receives `trust_level="trusted"` before `exec`, that paths requiring quoting are encoded safely, and that the mock Codex launcher receives the trust override on its first invocation. The toolchain smoke test also passes the same inline project configuration through the installed Codex CLI parser.
 
 The system installer harness executes a transformed copy of the real `install.sh` against an isolated filesystem and mock system commands. It verifies service-account creation, no-sudo checks, runner archive checksum, PAT-to-registration-token exchange, runner configuration, workspace symlink, root-owned service unit, Codex login, and the absence of service activation before update.
 
@@ -65,6 +68,8 @@ The system updater harness executes a transformed copy of the real `update.sh` a
 - [x] Added isolated system integration harnesses for installation and update.
 - [x] Made CI execute checkout, `npm ci`, and `npm run check` instead of an empty job.
 - [x] Restricted self-hosted CI pull requests to branches in the same repository.
+- [x] Forced every selected workspace below `/srv/github-runner/storage/work` to be trusted by Codex on its first invocation.
+- [x] Added unit, process integration, quoting, and installed-parser smoke coverage for the project trust configuration.
 
 ## Decisions
 
@@ -80,6 +85,9 @@ The system updater harness executes a transformed copy of the real `update.sh` a
 - Decision: retain the previous runtime until the new service is active.
   Rationale: successful compilation alone is insufficient; activation is committed only after systemd confirms the runner service.
 
+- Decision: trust each canonical workflow checkout through an exact Codex project override on every invocation.
+  Rationale: Codex trust is keyed by absolute project path and has no supported wildcard for all descendants. Reapplying the exact trusted path avoids the first-run prompt for every checkout and does not depend on a previously persisted entry.
+
 ## Acceptance
 
 Repository acceptance requires a clean non-root execution of:
@@ -89,6 +97,6 @@ npm ci
 npm run check
 ```
 
-with all functional tests passing, the full mock GitHub/Codex flow passing, both system harnesses passing, and runtime coverage reporting exactly 100% for lines, branches, and functions.
+with all functional tests passing, the full mock GitHub/Codex flow passing, both system harnesses passing, exact workspace trust verified before `exec`, and runtime coverage reporting exactly 100% for lines, branches, and functions.
 
 Target-host acceptance remains separate and must not be claimed before live WSL evidence exists.

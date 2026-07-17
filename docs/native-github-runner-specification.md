@@ -19,6 +19,8 @@ There is no Relay HTTP service, queue, polling loop, persisted job state, Docker
 
 The runner is configured with work name `_work`. `/srv/github-runner/runner/_work` is a symlink to `../storage/work`, so GitHub's official runner resolves its normal relative work path to `/srv/github-runner/storage/work`.
 
+Every workflow checkout selected below `/srv/github-runner/storage/work` is treated as a trusted Codex project. The runtime uses the canonical exact checkout path rather than a wildcard, so the first invocation in each new workspace is non-interactive and project-local Codex configuration, hooks, and execution policies are enabled for that checkout.
+
 ## Accounts and privilege boundary
 
 Three identities are used:
@@ -115,25 +117,27 @@ The workflow processes one request as follows:
 3. `actions/checkout` checks out that exact SHA with `persist-credentials: false`.
 4. `resolve-plan.mjs` requires exactly one added or modified active ExecPlan for a pull request, or validates the explicit dispatch path.
 5. `run-codex.mjs` calls the compiled direct runtime.
-6. `CodexExecutor` invokes `scripts/codex-run` with timeout, process-group termination, output limits, streaming redaction, and filesystem/network permissions.
+6. `CodexExecutor` canonicalizes the selected workspace, applies `projects={"<workspace>"={trust_level="trusted"}}`, and invokes `scripts/codex-run` with timeout, process-group termination, output limits, streaming redaction, and filesystem/network permissions.
 7. `finalize.sh` validates the branch and commit message, checks the diff, commits, and pushes through a temporary askpass helper. Codex receives no GitHub token.
 
 The workflow runs only same-repository pull requests and uses `runs-on: [self-hosted]` without custom labels.
 
 ## Codex boundary
 
-The launcher:
+The launcher and runtime:
 
-- refuses root;
-- requires the `github-runner` Codex authentication file;
-- builds a private per-run cache/config/temp hierarchy;
-- starts Codex through `env -i` with deterministic toolchain paths;
-- denies the runner home, trusted source checkout, entire runner workspace root, `/tmp`, and `/var/tmp` to model-controlled tools;
-- exposes `/opt/rust` read-only;
-- grants writes only to the selected repository and private runtime directory;
-- keeps the selected repository's `.git` directory read-only;
-- enables network access and disables memories;
-- removes only its own private runtime directory.
+- refuse root execution;
+- require the `github-runner` Codex authentication file;
+- build a private per-run cache/config/temp hierarchy;
+- start Codex through `env -i` with deterministic toolchain paths;
+- trust the exact canonical selected workspace before `exec`, including its first invocation;
+- do not trust paths merely because they share a textual prefix; the existing realpath workspace validation must first prove that the checkout is below the configured runner workspace root;
+- deny the runner home, trusted source checkout, entire runner workspace root, `/tmp`, and `/var/tmp` to model-controlled tools;
+- expose `/opt/rust` read-only;
+- grant writes only to the selected repository and private runtime directory;
+- keep the selected repository's `.git` directory read-only;
+- enable network access and disable memories;
+- remove only their own private runtime directory.
 
 ## Validation contract
 
@@ -142,12 +146,14 @@ The launcher:
 - strict TypeScript typechecking and compilation;
 - all Node unit and integration tests;
 - mandatory 100% line, branch, and function coverage for `src/**/*.ts` runtime code;
+- exact canonical project trust verification before `exec`, including quoted paths and a mock launcher process;
+- installed Codex CLI parsing of the inline trusted-project profile in the toolchain smoke test;
 - shell and Node-script syntax validation;
 - a system-level mocked `install.sh` execution;
 - a system-level mocked `update.sh` execution covering successful activation, pre-swap build failure rollback, and post-swap service-start failure rollback.
 
 The full-flow integration test creates a real local Git remote and pull-request branch, serves a mock GitHub pull-request API, resolves the request and active plan, checks out the exact revision, invokes a mock Codex executable through the real runtime, finalizes the change, pushes it, and verifies the resulting remote commit.
 
-The current deterministic suite contains 63 passing Node tests. The 100% line, branch, and function gates apply to the TypeScript runtime. Bash installers and launchers plus the standalone Node runner scripts are validated through syntax checks and dedicated integration harnesses rather than being included in the TypeScript coverage denominator.
+The current deterministic suite contains 66 passing Node tests. The 100% line, branch, and function gates apply to the TypeScript runtime. Bash installers and launchers plus the standalone Node runner scripts are validated through syntax checks and dedicated integration harnesses rather than being included in the TypeScript coverage denominator.
 
 These deterministic tests do not replace target-host acceptance. Live WSL package installation, systemd activation, organization registration, Codex authentication, runner-group access, and a real GitHub-hosted request require the actual target machine and credentials.

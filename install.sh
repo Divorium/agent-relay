@@ -12,19 +12,41 @@ CODEX_VERSION=0.144.4
 INSTALL_ROOT=/opt/agent-relay
 RUNNER_DIR="${HOME:?HOME is required}/.local/share/actions-runner"
 SOURCE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+
 node_setup=""
 java_key=""
 go_archive=""
 rustup_script=""
 runner_archive=""
-cleanup_temporary_files() {
-  rm -f -- "${node_setup:-}" "${java_key:-}" "${go_archive:-}" "${rustup_script:-}" "${runner_archive:-}"
+wsl_config_temp=""
+stage=""
+backup=""
+install_swap_pending=0
+
+cleanup() {
+  rm -f -- \
+    "${node_setup:-}" \
+    "${java_key:-}" \
+    "${go_archive:-}" \
+    "${rustup_script:-}" \
+    "${runner_archive:-}" \
+    "${wsl_config_temp:-}"
+
+  if [[ -n "${stage:-}" ]]; then
+    sudo rm -rf -- "${stage}" >/dev/null 2>&1 || true
+  fi
+
+  if (( install_swap_pending == 1 )); then
+    sudo rm -rf -- "${INSTALL_ROOT}" >/dev/null 2>&1 || true
+    if [[ -n "${backup:-}" && -e "${backup}" ]]; then
+      sudo mv -- "${backup}" "${INSTALL_ROOT}" >/dev/null 2>&1 || true
+    fi
+  fi
 }
-trap cleanup_temporary_files EXIT
+trap cleanup EXIT
 
 configure_wsl_systemd() {
-  local temporary
-  temporary="$(mktemp)"
+  wsl_config_temp="$(mktemp)"
   if [[ -f /etc/wsl.conf ]]; then
     awk '
       BEGIN { in_boot = 0; saw_boot = 0; wrote_systemd = 0 }
@@ -58,12 +80,13 @@ configure_wsl_systemd() {
           print "systemd=true"
         }
       }
-    ' /etc/wsl.conf > "${temporary}"
+    ' /etc/wsl.conf > "${wsl_config_temp}"
   else
-    printf '[boot]\nsystemd=true\n' > "${temporary}"
+    printf '[boot]\nsystemd=true\n' > "${wsl_config_temp}"
   fi
-  sudo install -o root -g root -m 0644 "${temporary}" /etc/wsl.conf
-  rm -f -- "${temporary}"
+  sudo install -o root -g root -m 0644 "${wsl_config_temp}" /etc/wsl.conf
+  rm -f -- "${wsl_config_temp}"
+  wsl_config_temp=""
 }
 
 if (( $# != 0 )); then
@@ -88,8 +111,11 @@ if [[ "${ID:-}" != "debian" ]]; then
   exit 1
 fi
 command -v sudo >/dev/null || { echo "sudo is required" >&2; exit 1; }
-command -v systemctl >/dev/null || { echo "systemd is required" >&2; exit 1; }
 [[ -d "${HOME}" && -w "${HOME}" ]] || { echo "HOME must be writable" >&2; exit 1; }
+[[ -d "${SOURCE_ROOT}" && -r "${SOURCE_ROOT}/package.json" && -w "${SOURCE_ROOT}" ]] || {
+  echo "The source checkout must be readable and writable by the current user: ${SOURCE_ROOT}" >&2
+  exit 1
+}
 sudo -v
 
 if [[ "$(ps -p 1 -o comm= | tr -d '[:space:]')" != "systemd" ]]; then
@@ -104,6 +130,7 @@ MESSAGE
   echo "systemd must run as PID 1" >&2
   exit 1
 fi
+command -v systemctl >/dev/null || { echo "systemctl is required" >&2; exit 1; }
 
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
@@ -159,11 +186,16 @@ sudo git lfs install --system
 cd "${SOURCE_ROOT}"
 npm ci
 npm run check
-npm run build
+
+export PATH="/opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin"
+export EXPECTED_TYPESCRIPT_VERSION="${TYPESCRIPT_VERSION}"
+export EXPECTED_CODEX_VERSION="${CODEX_VERSION}"
+export EXPECTED_GO_VERSION="${GO_VERSION}"
+"${SOURCE_ROOT}/scripts/toolchain-smoke.sh"
 
 stage="/opt/.agent-relay.stage.$$"
 backup="/opt/.agent-relay.previous.$$"
-sudo rm -rf "${stage}" "${backup}"
+sudo rm -rf -- "${stage}" "${backup}"
 sudo install -d -m 0755 "${stage}"
 sudo rsync -a \
   package.json package-lock.json tsconfig.json dist runner scripts types \
@@ -173,28 +205,31 @@ sudo find "${stage}" -type d -exec chmod 0755 {} +
 sudo find "${stage}" -type f -exec chmod 0644 {} +
 sudo chmod 0755 "${stage}/runner/resolve-pr.mjs" "${stage}/runner/finalize.sh" \
   "${stage}/scripts/codex-run" "${stage}/scripts/toolchain-smoke.sh"
+
+install_swap_pending=1
 if [[ -e "${INSTALL_ROOT}" ]]; then
-  sudo mv "${INSTALL_ROOT}" "${backup}"
+  sudo mv -- "${INSTALL_ROOT}" "${backup}"
 fi
-if ! sudo mv "${stage}" "${INSTALL_ROOT}"; then
-  if [[ -e "${backup}" && ! -e "${INSTALL_ROOT}" ]]; then
-    sudo mv "${backup}" "${INSTALL_ROOT}"
-  fi
+if ! sudo mv -- "${stage}" "${INSTALL_ROOT}"; then
   exit 1
 fi
-sudo rm -rf "${backup}"
-sudo install -o root -g root -m 0755 "${INSTALL_ROOT}/scripts/codex-run" /usr/local/bin/codex-run
-
-export PATH="/opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin"
-export EXPECTED_TYPESCRIPT_VERSION="${TYPESCRIPT_VERSION}"
-export EXPECTED_CODEX_VERSION="${CODEX_VERSION}"
-export EXPECTED_GO_VERSION="${GO_VERSION}"
-"${INSTALL_ROOT}/scripts/toolchain-smoke.sh"
+stage=""
+if ! sudo install -o root -g root -m 0755 "${INSTALL_ROOT}/scripts/codex-run" /usr/local/bin/codex-run; then
+  exit 1
+fi
+install_swap_pending=0
+sudo rm -rf -- "${backup}"
+backup=""
 
 if ! codex login status >/dev/null 2>&1; then
   codex login
 fi
 codex login status >/dev/null
+
+if [[ -f "${RUNNER_DIR}/.runner" && ! -x "${RUNNER_DIR}/bin/Runner.Listener" ]]; then
+  echo "The existing runner registration is incomplete: ${RUNNER_DIR}" >&2
+  exit 1
+fi
 
 if [[ ! -x "${RUNNER_DIR}/bin/Runner.Listener" ]]; then
   mkdir -p "${RUNNER_DIR}"
@@ -204,25 +239,38 @@ if [[ ! -x "${RUNNER_DIR}/bin/Runner.Listener" ]]; then
     -o "${runner_archive}"
   printf '%s  %s\n' "${RUNNER_SHA256}" "${runner_archive}" | sha256sum -c -
   tar -C "${RUNNER_DIR}" -xzf "${runner_archive}"
-  sudo "${RUNNER_DIR}/bin/installdependencies.sh"
 fi
+sudo "${RUNNER_DIR}/bin/installdependencies.sh"
 
 if [[ ! -f "${RUNNER_DIR}/.runner" ]]; then
+  set +x
   printf 'GitHub token for organization runner registration: ' >&2
   IFS= read -r -s github_token
   printf '\n' >&2
   [[ -n "${github_token}" ]] || { echo "GitHub token is required" >&2; exit 1; }
-  registration_response="$(
+
+  if ! registration_response="$(
     printf 'Authorization: Bearer %s\n' "${github_token}" \
       | curl -fsSL -X POST \
           -H 'Accept: application/vnd.github+json' \
           -H @- \
           -H 'X-GitHub-Api-Version: 2026-03-10' \
           "https://api.github.com/orgs/${ORGANIZATION}/actions/runners/registration-token"
-  )"
+  )"; then
+    unset github_token
+    echo "Could not obtain a GitHub runner registration token" >&2
+    exit 1
+  fi
   unset github_token
-  registration_token="$(jq -er '.token' <<< "${registration_response}")"
+
+  if ! registration_token="$(jq -er '.token' <<< "${registration_response}")"; then
+    unset registration_response
+    echo "GitHub returned an invalid runner registration response" >&2
+    exit 1
+  fi
   unset registration_response
+
+  set +e
   (
     cd "${RUNNER_DIR}"
     ./config.sh --unattended --replace \
@@ -231,7 +279,13 @@ if [[ ! -f "${RUNNER_DIR}/.runner" ]]; then
       --name gh-runner \
       --work _work
   )
+  registration_status=$?
+  set -e
   unset registration_token
+  if (( registration_status != 0 )); then
+    echo "GitHub runner registration failed" >&2
+    exit "${registration_status}"
+  fi
 fi
 
 sudo install -d -m 0755 /etc/needrestart/conf.d

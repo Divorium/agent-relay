@@ -297,7 +297,7 @@ if [[ ! -x "${RUNNER_DIR}/bin/Runner.Listener" ]]; then
     "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
     -o "${runner_archive}"
   printf '%s  %s\n' "${RUNNER_SHA256}" "${runner_archive}" | sha256sum -c -
-  sudo -u "${RUNNER_USER}" tar -C "${RUNNER_DIR}" -xzf "${runner_archive}"
+  sudo -u "${RUNNER_USER}" tar -C "${RUNNER_DIR}" -xzf - < "${runner_archive}"
   sudo "${RUNNER_DIR}/bin/installdependencies.sh"
 fi
 if [[ -L "${RUNNER_DIR}/_work" ]]; then

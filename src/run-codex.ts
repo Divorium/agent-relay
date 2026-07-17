@@ -36,7 +36,7 @@ export function deriveCommitMessage(plan: string): string {
   return Array.from(normalized || "Apply active ExecPlan").slice(0, 120).join("").trim();
 }
 
-export async function main(): Promise<void> {
+export async function main(command = "/usr/local/bin/codex-run"): Promise<void> {
   const workspaceInput = requiredEnvironment("GITHUB_WORKSPACE");
   const githubOutput = requiredEnvironment("GITHUB_OUTPUT");
   const planPath = requiredEnvironment("CODEX_PLAN_PATH");
@@ -56,7 +56,7 @@ export async function main(): Promise<void> {
   await chmod(runtimeRoot, 0o700);
 
   const executor = new CodexExecutor(
-    "/usr/local/bin/codex-run",
+    command,
     timeoutMs,
     maxOutputBytes,
     workspaceRoot,

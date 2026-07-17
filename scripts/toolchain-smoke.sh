@@ -83,6 +83,7 @@ make --version
 cmake --version
 pkg-config --version
 bash --version
+head --version >/dev/null
 curl --version
 wget --version
 jq --version

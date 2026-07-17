@@ -4,9 +4,35 @@ This ExecPlan follows `.agent/PLANS.md` and implements `docs/native-github-runne
 
 ## Purpose
 
-Replace the former container and Relay service with one native Debian WSL installation. Keep one trusted source checkout at `/srv/github-runner/storage/agent-relay`, place runner workspaces at `/srv/github-runner/storage/work`, and separate one-time host installation from recurring application updates.
+Replace the former container and Relay service with one native Debian WSL installation. Keep one trusted source checkout, isolate GitHub workflow workspaces, and separate one-time host installation from recurring application updates.
 
 The administrator performs privileged host operations. `agent-relay-builder` validates untrusted releases without sudo. `github-runner` executes workflows and Codex without sudo. No `/opt/agent-relay` deployment copy exists.
+
+## Fixed filesystem layout
+
+All Agent Relay and GitHub Runner data is grouped below one administrator-controlled root: `/srv/github-runner/storage`.
+
+```text
+/srv/github-runner/storage/agent-relay  administrator-owned source and trusted runtime
+/srv/github-runner/storage/work         github-runner-owned workflow workspaces
+/srv/github-runner/storage/runner       official GitHub Actions runner
+/srv/github-runner/storage/home         github-runner home and Codex authentication
+/srv/github-runner/storage/build        isolated temporary build area
+/srv/github-runner/storage/build-home   builder home and tool caches
+```
+
+The directories have distinct responsibilities and ownership:
+
+- `agent-relay` is the only source checkout and contains the activated, root-owned `dist` runtime;
+- `work` contains repositories checked out by GitHub Actions and is writable by `github-runner`;
+- `runner` contains the official GitHub Actions Runner binaries and registration state;
+- `home` is the persistent home of `github-runner` and stores Codex authentication and runtime cache roots;
+- `build` contains disposable per-update staging directories used by `agent-relay-builder`;
+- `build-home` is the persistent home and package-cache location of `agent-relay-builder`.
+
+The runner is configured with work name `_work`. `/srv/github-runner/storage/runner/_work` is a managed symlink to `../work`, so the official runner resolves its normal relative work path to `/srv/github-runner/storage/work`.
+
+This layout is part of the architecture contract. README files may summarize it but must not introduce additional filesystem decisions that are absent from this plan and `docs/native-github-runner-specification.md`.
 
 ## User-visible result
 
@@ -29,6 +55,7 @@ Every later release uses only `./update.sh`.
 ## Implemented architecture
 
 - one administrator-owned source/runtime tree;
+- one filesystem root, `/srv/github-runner/storage`, containing the six fixed runtime directories defined above;
 - dedicated `/srv/github-runner/storage/work` runner workspace;
 - every canonical workflow checkout selected below `/srv/github-runner/storage/work` is passed to Codex with an exact per-project `trust_level="trusted"` override before the first `exec`;
 - locked `github-runner` and `agent-relay-builder` accounts without sudo;
@@ -46,9 +73,9 @@ The full-flow integration test constructs a local bare GitHub-like remote and a 
 
 The trust tests verify that the exact canonical checkout receives `trust_level="trusted"` before `exec`, that paths requiring quoting are encoded safely, and that the mock Codex launcher receives the trust override on its first invocation. The toolchain smoke test also passes the same inline project configuration through the installed Codex CLI parser.
 
-The system installer harness executes a transformed copy of the real `install.sh` against an isolated filesystem and mock system commands. It verifies service-account creation, no-sudo checks, runner archive checksum, PAT-to-registration-token exchange, runner configuration, workspace symlink, root-owned service unit, Codex login, and the absence of service activation before update.
+The system installer harness executes a transformed copy of the real `install.sh` against an isolated filesystem and mock system commands. It verifies the complete storage layout, service-account creation, no-sudo checks, runner archive checksum, PAT-to-registration-token exchange, runner configuration, workspace symlink, root-owned service unit, Codex login, and the absence of service activation before update.
 
-The system updater harness executes a transformed copy of the real `update.sh` against isolated Git repositories. It verifies a full successful update with all tests and 100% coverage, rollback after a simulated build failure before activation, and rollback to the previous runtime after a simulated service-start failure following the runtime swap.
+The system updater harness executes a transformed copy of the real `update.sh` against isolated Git repositories. It verifies storage-root build paths, a full successful update with all tests and 100% coverage, rollback after a simulated build failure before activation, and rollback to the previous runtime after a simulated service-start failure following the runtime swap.
 
 ## Progress
 
@@ -56,7 +83,9 @@ The system updater harness executes a transformed copy of the real `update.sh` a
 - [x] Implemented direct Codex runtime, output redaction, limits, timeout, process-group termination, and filesystem boundary.
 - [x] Added request and active-plan resolvers and retained exact PR resolution and finalization.
 - [x] Replaced the `/opt/agent-relay` copy with the protected source checkout.
+- [x] Defined all six fixed directories under `/srv/github-runner/storage` in the plan, specification, README, installer, updater, and tests.
 - [x] Moved runner workspaces to `/srv/github-runner/storage/work`.
+- [x] Moved runner binaries, runner home, builder staging, and builder home below `/srv/github-runner/storage`.
 - [x] Split one-time `install.sh` from recurring `update.sh`.
 - [x] Added locked no-sudo builder and runner accounts.
 - [x] Made service activation conditional on a validated update.
@@ -72,6 +101,12 @@ The system updater harness executes a transformed copy of the real `update.sh` a
 - [x] Added unit, process integration, quoting, and installed-parser smoke coverage for the project trust configuration.
 
 ## Decisions
+
+- Decision: place every application-owned persistent and temporary directory under `/srv/github-runner/storage`.
+  Rationale: one explicit root makes installation, ownership, backup, inspection, cleanup, and path-policy review deterministic. The six child directories remain separated by responsibility and ownership.
+
+- Decision: keep runner binaries and workflow workspaces in sibling directories, with `runner/_work` pointing to `../work`.
+  Rationale: the official runner retains its expected relative `_work` path without mixing runner registration state with mutable repository checkouts.
 
 - Decision: use separate administrator, builder, and runner identities.
   Rationale: lack of a password is not a security boundary when the same account remains sudo-capable; different accounts without sudo provide an enforced OS boundary.
@@ -97,6 +132,6 @@ npm ci
 npm run check
 ```
 
-with all functional tests passing, the full mock GitHub/Codex flow passing, both system harnesses passing, exact workspace trust verified before `exec`, and runtime coverage reporting exactly 100% for lines, branches, and functions.
+with all functional tests passing, the full mock GitHub/Codex flow passing, both system harnesses passing, all six fixed paths verified below `/srv/github-runner/storage`, exact workspace trust verified before `exec`, and runtime coverage reporting exactly 100% for lines, branches, and functions.
 
 Target-host acceptance remains separate and must not be claimed before live WSL evidence exists.

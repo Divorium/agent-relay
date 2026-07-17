@@ -47,7 +47,7 @@ The installer has only two conditional interactions:
 - it invokes `codex login` when the current Debian user is not authenticated;
 - when no runner registration exists, it reads one GitHub token without echo.
 
-For initial organization registration, a classic personal access token needs `admin:org`. A fine-grained token needs the `Self-hosted runners` organization permission with write access. The installer exchanges it for GitHub's short-lived registration token, then removes both values from its shell state. Neither token is written to the repository, installed harness, service configuration, profile, or runner environment.
+For initial organization registration, a classic personal access token needs `admin:org` and also `repo` when private repositories are involved. A fine-grained token needs the `Self-hosted runners` organization permission with write access. The installer exchanges the PAT for GitHub's short-lived registration token, removes the PAT immediately after the API call, and removes the registration token after `config.sh` finishes. Neither token is written to the repository, installed harness, service configuration, profile, or runner environment. The short-lived registration token is necessarily passed to the official `config.sh --token` argument.
 
 ## Installed layout
 

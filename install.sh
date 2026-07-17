@@ -23,6 +23,7 @@ stage=""
 backup=""
 install_swap_pending=0
 runner_fresh=0
+registration_fresh=0
 
 cleanup() {
   rm -f -- \
@@ -294,6 +295,7 @@ if [[ ! -f "${RUNNER_DIR}/.runner" ]]; then
     echo "GitHub runner registration failed" >&2
     exit "${registration_status}"
   fi
+  registration_fresh=1
 fi
 
 sudo install -d -m 0755 /etc/needrestart/conf.d
@@ -301,7 +303,7 @@ printf '%s\n' '$nrconf{override_rc}{qr(^actions\.runner\..+\.service$)} = 0;' \
   | sudo tee /etc/needrestart/conf.d/actions_runner_services.conf >/dev/null
 cd "${RUNNER_DIR}"
 if [[ ! -f .service ]]; then
-  if (( runner_fresh != 1 )); then
+  if (( runner_fresh != 1 && registration_fresh != 1 )); then
     echo "The existing runner installation has no service registration: ${RUNNER_DIR}" >&2
     exit 1
   fi

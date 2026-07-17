@@ -2,15 +2,20 @@
 
 ## Filesystem layout
 
+All application-owned paths are grouped under `/srv/github-runner/storage`:
+
 ```text
 /srv/github-runner/storage/agent-relay  administrator-owned source and trusted runtime
 /srv/github-runner/storage/work         github-runner-owned workflow workspaces
-/srv/github-runner/runner               official GitHub Actions runner
-/srv/github-runner/home                 github-runner home and Codex authentication
-/srv/github-runner/build                isolated temporary build area
+/srv/github-runner/storage/runner       official GitHub Actions runner
+/srv/github-runner/storage/home         github-runner home and Codex authentication
+/srv/github-runner/storage/build        isolated temporary build area
+/srv/github-runner/storage/build-home   builder home and tool caches
 ```
 
-`github-runner` and `agent-relay-builder` have locked passwords and no sudo access. The runner cannot modify the trusted source checkout or compiled runtime.
+`/srv/github-runner/storage/runner/_work` is a managed symlink to `../work`.
+
+The complete path decision and ownership model are recorded in `docs/exec-plans/completed/2026-07-16-install-native-github-runner.md`. `github-runner` and `agent-relay-builder` have locked passwords and no sudo access. The runner cannot modify the trusted source checkout or compiled runtime.
 
 ## Initial setup
 

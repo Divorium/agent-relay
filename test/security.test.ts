@@ -23,8 +23,7 @@ test("streaming redaction preserves split UTF-8 and redacts split secrets", () =
   const output = [
     redactor.write(text.subarray(0, splitInsideUnicode)),
     redactor.write(text.subarray(splitInsideUnicode, splitInsideSecret)),
-    redactor.write(text.subarray(splitInsideSecret)),
-    redactor.end(),
+    redactor.write(text.subarray(splitInsideSecret)), redactor.end(),
   ].join("");
   assert.match(output, /zażółć authorization: Bearer \[REDACTED\]/);
   assert.doesNotMatch(output, /abcdefghijklmnopqrstuvwxyz/);
@@ -39,22 +38,14 @@ test("resolves only a directory below the real workspace root", async () => {
   await mkdir(external, { recursive: true });
   try {
     assert.equal(await resolveWorkspace(workspaceRoot, workspace), workspace);
-    await assert.rejects(
-      () => resolveWorkspace(workspaceRoot, workspaceRoot),
-      (error: unknown) => error instanceof CodexExecutionError && error.code === "WORKSPACE_OUTSIDE_ROOT",
-    );
-    await assert.rejects(
-      () => resolveWorkspace(workspaceRoot, external),
-      (error: unknown) => error instanceof CodexExecutionError && error.code === "WORKSPACE_OUTSIDE_ROOT",
-    );
+    await assert.rejects(() => resolveWorkspace(workspaceRoot, workspaceRoot),
+      (error: unknown) => error instanceof CodexExecutionError && error.code === "WORKSPACE_OUTSIDE_ROOT");
+    await assert.rejects(() => resolveWorkspace(workspaceRoot, external),
+      (error: unknown) => error instanceof CodexExecutionError && error.code === "WORKSPACE_OUTSIDE_ROOT");
     await symlink(external, join(workspaceRoot, "linked"));
-    await assert.rejects(
-      () => resolveWorkspace(workspaceRoot, join(workspaceRoot, "linked")),
-      (error: unknown) => error instanceof CodexExecutionError && error.code === "WORKSPACE_OUTSIDE_ROOT",
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+    await assert.rejects(() => resolveWorkspace(workspaceRoot, join(workspaceRoot, "linked")),
+      (error: unknown) => error instanceof CodexExecutionError && error.code === "WORKSPACE_OUTSIDE_ROOT");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("accepts only a direct regular non-symlink active plan", async () => {
@@ -63,20 +54,55 @@ test("accepts only a direct regular non-symlink active plan", async () => {
   await mkdir(activeDir, { recursive: true });
   await writeFile(join(activeDir, "plan.md"), "# Plan\n");
   try {
-    assert.equal(
-      await assertActivePlanFile(workspace, "docs/exec-plans/active/plan.md"),
-      join(activeDir, "plan.md"),
-    );
+    assert.equal(await assertActivePlanFile(workspace, "docs/exec-plans/active/plan.md"), join(activeDir, "plan.md"));
     await symlink("plan.md", join(activeDir, "link.md"));
-    await assert.rejects(
-      () => assertActivePlanFile(workspace, "docs/exec-plans/active/link.md"),
-      (error: unknown) => error instanceof CodexExecutionError && error.code === "INVALID_PLAN",
-    );
+    await assert.rejects(() => assertActivePlanFile(workspace, "docs/exec-plans/active/link.md"),
+      (error: unknown) => error instanceof CodexExecutionError && error.code === "INVALID_PLAN");
     await mkdir(join(activeDir, "directory.md"));
+    await assert.rejects(() => assertActivePlanFile(workspace, "docs/exec-plans/active/directory.md"),
+      (error: unknown) => error instanceof CodexExecutionError && error.code === "INVALID_PLAN");
+  } finally { await rm(workspace, { recursive: true, force: true }); }
+});
+
+test("workspace validation reports missing and non-directory paths", async () => {
+  const root = join(tmpdir(), `agent-relay-invalid-workspace-${process.pid}-${Date.now()}`);
+  const workspaceRoot = join(root, "root");
+  const workspaceFile = join(workspaceRoot, "workspace.txt");
+  await mkdir(workspaceRoot, { recursive: true });
+  await writeFile(workspaceFile, "not a directory");
+  try {
     await assert.rejects(
-      () => assertActivePlanFile(workspace, "docs/exec-plans/active/directory.md"),
-      (error: unknown) => error instanceof CodexExecutionError && error.code === "INVALID_PLAN",
+      () => resolveWorkspace(join(root, "missing-root"), workspaceFile),
+      (error: unknown) => error instanceof CodexExecutionError && error.code === "WORKSPACE_NOT_FOUND",
     );
+    await assert.rejects(
+      () => resolveWorkspace(workspaceRoot, workspaceFile),
+      (error: unknown) => error instanceof CodexExecutionError && error.code === "WORKSPACE_NOT_FOUND",
+    );
+    assert.equal(await resolveWorkspace("/", workspaceRoot), workspaceRoot);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("active plan validation rejects every invalid path shape and missing files", async () => {
+  const workspace = join(tmpdir(), `agent-relay-invalid-plan-${process.pid}-${Date.now()}`);
+  const activeDir = join(workspace, "docs", "exec-plans", "active");
+  await mkdir(join(activeDir, "nested"), { recursive: true });
+  await writeFile(join(activeDir, "plan.txt"), "not Markdown");
+  await writeFile(join(activeDir, "nested", "plan.md"), "# Nested\n");
+  try {
+    for (const invalidPath of [
+      "docs/exec-plans/active",
+      "docs/exec-plans/active/nested/plan.md",
+      "docs/exec-plans/active/plan.txt",
+      "docs/exec-plans/active/missing.md",
+    ]) {
+      await assert.rejects(
+        () => assertActivePlanFile(workspace, invalidPath),
+        (error: unknown) => error instanceof CodexExecutionError && error.code === "INVALID_PLAN",
+      );
+    }
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

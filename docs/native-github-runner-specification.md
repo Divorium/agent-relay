@@ -15,13 +15,13 @@ All Agent Relay and GitHub Runner data is grouped below the single administrator
 /srv/github-runner/storage/work         github-runner-owned workflow workspaces
 /srv/github-runner/storage/runner       official GitHub Actions runner
 /srv/github-runner/storage/home         github-runner home and Codex authentication
-/srv/github-runner/storage/build        temporary isolated builds
-/srv/github-runner/storage/build-home   builder cache and home
+/srv/github-runner/storage/build        temporary isolated builds and per-update tool state
+/srv/github-runner/storage/build-home   builder home
 ```
 
 The runner is configured with work name `_work`. `/srv/github-runner/storage/runner/_work` is a symlink to `../work`, so GitHub's official runner resolves its normal relative work path to `/srv/github-runner/storage/work`.
 
-The six child directories are separated by responsibility and ownership: source/runtime, workflow workspaces, runner binaries and registration state, runner home and Codex authentication, disposable build staging, and builder home/caches.
+The six child directories are separated by responsibility and ownership: source/runtime, workflow workspaces, runner binaries and registration state, runner home and Codex authentication, disposable build staging and state, and builder home.
 
 Every workflow checkout selected below `/srv/github-runner/storage/work` is treated as a trusted Codex project. The runtime uses the canonical exact checkout path rather than a wildcard, so the first invocation in each new workspace is non-interactive and project-local Codex configuration, hooks, and execution policies are enabled for that checkout.
 
@@ -73,11 +73,12 @@ No runner re-registration, PAT prompt, Codex re-login, or WSL shutdown is expect
 - accept no arguments and refuse root execution;
 - require Debian x86-64 and the exact source location `/srv/github-runner/storage/agent-relay`;
 - configure only the `[boot] systemd=true` setting when WSL does not yet run systemd;
-- install the pinned system toolchains and build dependencies;
+- validate and source the trusted `scripts/toolchain-environment.sh` profile before installing or checking host toolchains;
+- install the pinned system toolchains and build dependencies at the immutable roots defined by that profile;
 - create the locked `github-runner` and `agent-relay-builder` accounts and remove them from the `sudo` group if necessary;
 - verify that neither service account can run `sudo -n true`;
 - prepare all six fixed directories below `/srv/github-runner/storage` with the required ownership;
-- reject trusted entrypoints that are symlinks and update ownership without dereferencing repository symlinks;
+- reject trusted entrypoints and the toolchain profile when they are symlinks, and update ownership without dereferencing repository symlinks;
 - download and SHA-256 verify the official GitHub Actions runner archive;
 - request one hidden organization PAT only when registration is absent;
 - exchange that PAT for a short-lived organization runner registration token without placing the PAT in process arguments or files;
@@ -94,6 +95,24 @@ Pinned downloads and packages are:
 - Codex CLI `0.144.4`;
 - Node.js 22 and Java 21.
 
+## Toolchain environment contract
+
+`scripts/toolchain-environment.sh` is the sole source of the immutable host toolchain roots and canonical executable ordering:
+
+```text
+JAVA_HOME       /opt/java/openjdk
+Go root         /usr/local/go
+Rust Cargo root /opt/rust/cargo
+RUSTUP_HOME     /opt/rust/rustup
+PATH            /opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin
+```
+
+The profile has no side effects when sourced. It does not create directories or execute commands. Its environment constructor validates a target identity, home, and absolute writable state root, then returns an ordered Bash array suitable for `/usr/bin/env -i`.
+
+The common clean environment contains explicit identity and locale values, the immutable Java and rustup bindings, canonical `PATH`, and state paths for Cargo, Go, Gradle, npm, pip, XDG, and temporary files. Every writable path is below the caller-supplied state root. Shared installations remain root-managed and readable; build and Codex processes never write caches or configuration into `/opt/java`, `/usr/local/go`, `/opt/rust/cargo`, or `/opt/rust/rustup`.
+
+Caller-specific policy remains outside the profile. The updater adds expected-version inputs to the smoke command. The Codex launcher adds Git restrictions and its runtime permission configuration.
+
 ## Update transaction
 
 `update.sh` must:
@@ -102,17 +121,18 @@ Pinned downloads and packages are:
 2. require systemd, a clean Git checkout, and service accounts without passwordless sudo;
 3. stop the runner when it is active;
 4. record the current Git revision, run `git pull --ff-only` with repository hooks disabled, and re-execute `update.sh` from the pulled revision;
-5. create an isolated build workspace below `/srv/github-runner/storage/build` owned by `agent-relay-builder` and use `/srv/github-runner/storage/build-home` as its persistent home/cache root;
-6. supply every build and validation command executed as `agent-relay-builder` with `HOME=/srv/github-runner/storage/build-home` and the deterministic toolchain path `/opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin`, then run `npm ci`, TypeScript compilation, the full Node test suite, the 100% line/branch/function coverage gates, shell syntax checks, Node script syntax checks, and the Codex/toolchain smoke test;
-7. leave the active `dist` untouched until all validation succeeds;
-8. atomically move the staged `dist` into the source checkout while retaining the previous runtime;
-9. reject symlinked trusted entrypoints, verify source ownership, and harden source and runtime permissions without following repository symlinks;
-10. daemon-reload, enable, start, and verify the runner service;
-11. delete the previous runtime only after the service is confirmed active.
+5. reject a missing or symlinked shared toolchain profile, source it from the selected revision, and create an isolated build workspace plus a private writable state root below `/srv/github-runner/storage/build`, owned by `agent-relay-builder`;
+6. construct the builder environment once from the shared profile and execute every builder-owned copy, dependency, compilation, test, syntax, and smoke command through `sudo -u agent-relay-builder -H /usr/bin/env -i` with that environment;
+7. run `npm ci`, TypeScript compilation, the full Node test suite, the 100% line/branch/function coverage gates, shell syntax checks, Node script syntax checks, and the Codex/toolchain smoke test;
+8. leave the active `dist` untouched until all validation succeeds;
+9. atomically move the staged `dist` into the source checkout while retaining the previous runtime;
+10. reject symlinked trusted entrypoints, verify source ownership, and harden source and runtime permissions without following repository symlinks;
+11. daemon-reload, enable, start, and verify the runner service;
+12. delete the previous runtime only after the service is confirmed active.
 
-The builder environment must not depend on the administrator's shell profile or the distribution-specific `sudo` secure path. Go remains installed at `/usr/local/go`; an ordinary update must discover it through the updater-supplied path without reinstalling the host toolchains, creating `/usr/local/bin/go` symlinks, rerunning `install.sh`, or re-registering the runner.
+The builder environment must not depend on the administrator's shell profile, inherited environment, or the distribution-specific `sudo` secure path. It receives the same immutable Java, Go, and Rust configuration as the Codex runtime, but uses a separate per-update writable state root. An ordinary update must consume the existing host installations without reinstalling toolchains, creating repair symlinks, running `rustup default`, rerunning `install.sh`, or re-registering the runner.
 
-Any failure before commit restores the original Git revision, removes staged build data, restores the previous `dist` when a swap occurred, and restarts a service that had been active before the update.
+Any failure before commit restores the original Git revision, removes staged build and state data, restores the previous `dist` when a swap occurred, and restarts a service that had been active before the update.
 
 ## GitHub request flow
 
@@ -134,8 +154,9 @@ The launcher and runtime:
 
 - refuse root execution;
 - require the `github-runner` Codex authentication file;
-- build a private per-run cache/config/temp hierarchy;
-- start Codex through `env -i` with deterministic toolchain paths;
+- validate and source the same trusted toolchain profile used by installation and updates;
+- build a private per-run state hierarchy and construct the common environment from that root;
+- start Codex through `env -i` with explicit identity, locale, immutable toolchain configuration, and writable state paths;
 - trust the exact canonical selected workspace before `exec`, including its first invocation;
 - do not trust paths merely because they share a textual prefix; the existing realpath workspace validation must first prove that the checkout is below the configured runner workspace root;
 - deny the runner home, trusted source checkout, entire runner workspace root, `/tmp`, and `/var/tmp` to model-controlled tools;
@@ -154,13 +175,13 @@ The launcher and runtime:
 - mandatory 100% line, branch, and function coverage for `src/**/*.ts` runtime code;
 - exact canonical project trust verification before `exec`, including quoted paths and a mock launcher process;
 - installed Codex CLI parsing of the inline trusted-project profile in the toolchain smoke test;
-- shell and Node-script syntax validation;
-- fixed-layout consistency checks across the ExecPlan, README files, installer, updater, and tests;
-- a system-level mocked `install.sh` execution that verifies all six storage directories and the `runner/_work -> ../work` symlink;
-- a system-level mocked `update.sh` execution that proves Go is unavailable through the ambient path but available through the updater-supplied builder path, while covering successful activation, pre-swap build failure rollback, and post-swap service-start failure rollback.
+- shell and Node-script syntax validation, including the shared toolchain profile;
+- fixed-layout and toolchain-profile consistency checks across the ExecPlans, README files, installer, updater, launcher, and tests;
+- a system-level mocked `install.sh` execution that verifies all six storage directories, the `runner/_work -> ../work` symlink, and that installation roots come from the trusted profile;
+- a system-level mocked `update.sh` execution with Java, Go, and Rust fixtures that are executable only when the clean environment provides their required configuration and writable state, while covering successful activation, pre-swap build failure rollback, and post-swap service-start failure rollback.
 
 The full-flow integration test creates a real local Git remote and pull-request branch, serves a mock GitHub pull-request API, resolves the request and active plan, checks out the exact revision, invokes a mock Codex executable through the real runtime, finalizes the change, pushes it, and verifies the resulting remote commit.
 
-The deterministic suite contains 67 Node tests. The 100% line, branch, and function gates apply to the TypeScript runtime. Bash installers and launchers plus the standalone Node runner scripts are validated through syntax checks and dedicated integration harnesses rather than being included in the TypeScript coverage denominator.
+The deterministic suite applies the 100% line, branch, and function gates to the TypeScript runtime. Bash installers and launchers plus the standalone Node runner scripts are validated through syntax checks and dedicated integration harnesses rather than being included in the TypeScript coverage denominator.
 
 These deterministic tests do not replace target-host acceptance. Live WSL package installation, systemd activation, organization registration, Codex authentication, runner-group access, and a real GitHub-hosted request require the actual target machine and credentials.

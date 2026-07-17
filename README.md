@@ -42,7 +42,7 @@ The installer derives the source directory from its own location, so it requires
 
 When WSL does not yet run systemd as PID 1, the installer updates `/etc/wsl.conf` and exits. Run `wsl --shutdown` from Windows, start Debian again, and rerun the same command. No manual configuration-file edit is required.
 
-On a fresh registration the installer asks once, without echo, for a GitHub token. A classic personal access token needs `admin:org`; a fine-grained token needs organization `Self-hosted runners` write permission. The token is used only to request GitHub's short-lived registration token and is not written to disk or retained by the runner service.
+On a fresh registration the installer asks once, without echo, for a GitHub token. A classic personal access token needs `admin:org` and also `repo` when private repositories are involved. A fine-grained token needs organization `Self-hosted runners` write permission. The PAT is used only to request GitHub's short-lived registration token and is not written to disk or retained by the runner service.
 
 When Codex is not authenticated, the installer invokes:
 

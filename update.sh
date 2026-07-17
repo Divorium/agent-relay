@@ -2,9 +2,10 @@
 set -euo pipefail
 
 BASE_ROOT=/srv/github-runner
-SOURCE_ROOT=${BASE_ROOT}/storage/agent-relay
-BUILD_ROOT=${BASE_ROOT}/build
-BUILD_HOME=${BASE_ROOT}/build-home
+STORAGE_ROOT=${BASE_ROOT}/storage
+SOURCE_ROOT=${STORAGE_ROOT}/agent-relay
+BUILD_ROOT=${STORAGE_ROOT}/build
+BUILD_HOME=${STORAGE_ROOT}/build-home
 BUILD_USER=agent-relay-builder
 RUNNER_USER=github-runner
 SERVICE_NAME=actions.runner.Divorium.gh-runner.service

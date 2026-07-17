@@ -14,10 +14,10 @@ BASE_ROOT=/srv/github-runner
 STORAGE_ROOT=${BASE_ROOT}/storage
 EXPECTED_SOURCE_ROOT=${STORAGE_ROOT}/agent-relay
 WORK_ROOT=${STORAGE_ROOT}/work
-RUNNER_DIR=${BASE_ROOT}/runner
-RUNNER_HOME=${BASE_ROOT}/home
-BUILD_ROOT=${BASE_ROOT}/build
-BUILD_HOME=${BASE_ROOT}/build-home
+RUNNER_DIR=${STORAGE_ROOT}/runner
+RUNNER_HOME=${STORAGE_ROOT}/home
+BUILD_ROOT=${STORAGE_ROOT}/build
+BUILD_HOME=${STORAGE_ROOT}/build-home
 RUNNER_USER=github-runner
 BUILD_USER=agent-relay-builder
 SERVICE_NAME=actions.runner.Divorium.gh-runner.service
@@ -301,7 +301,7 @@ if [[ ! -x "${RUNNER_DIR}/bin/Runner.Listener" ]]; then
   sudo "${RUNNER_DIR}/bin/installdependencies.sh"
 fi
 if [[ -L "${RUNNER_DIR}/_work" ]]; then
-  [[ "$(readlink "${RUNNER_DIR}/_work")" == ../storage/work ]] || {
+  [[ "$(readlink "${RUNNER_DIR}/_work")" == ../work ]] || {
     echo "The runner work link points to an unexpected location" >&2
     exit 1
   }
@@ -309,7 +309,7 @@ elif [[ -e "${RUNNER_DIR}/_work" ]]; then
   echo "The runner work path must be the managed symlink: ${RUNNER_DIR}/_work" >&2
   exit 1
 else
-  sudo -u "${RUNNER_USER}" ln -s ../storage/work "${RUNNER_DIR}/_work"
+  sudo -u "${RUNNER_USER}" ln -s ../work "${RUNNER_DIR}/_work"
 fi
 
 if [[ ! -f "${RUNNER_DIR}/.runner" ]]; then

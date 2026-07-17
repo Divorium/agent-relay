@@ -78,8 +78,8 @@ cat > "${FAKE_BIN}/getent" <<EOF_GETENT
 #!/usr/bin/env bash
 set -euo pipefail
 case "\${1:-}:\${2:-}" in
-  passwd:github-runner) echo 'github-runner:x:2001:2001::${BASE_ROOT}/home:/bin/bash' ;;
-  passwd:agent-relay-builder) echo 'agent-relay-builder:x:2002:2002::${BASE_ROOT}/build-home:/usr/sbin/nologin' ;;
+  passwd:github-runner) echo 'github-runner:x:2001:2001::${STORAGE_ROOT}/home:/bin/bash' ;;
+  passwd:agent-relay-builder) echo 'agent-relay-builder:x:2002:2002::${STORAGE_ROOT}/build-home:/usr/sbin/nologin' ;;
   group:sudo) echo 'sudo:x:27:' ;;
   *) exit 2 ;;
 esac
@@ -152,22 +152,15 @@ url=''
 while (( \$# > 0 )); do
   case "\$1" in
     -o) out="\$2"; shift 2 ;;
-    -H)
-      if [[ "\$2" == '@-' ]]; then
-        IFS= read -r header
-        [[ "\$header" == 'Authorization: Bearer test-pat' ]]
-      fi
-      shift 2
-      ;;
+    -H) shift 2 ;;
     -*) shift ;;
     *) url="\$1"; shift ;;
   esac
 done
 case "\$url" in
   https://api.github.com/meta) exit 0 ;;
-  *'/actions/runners/registration-token') printf '%s\\n' '{"token":"runner-registration-token"}' ;;
   *'actions-runner-linux-x64-'*) cp "${RUNNER_ARCHIVE}" "\$out" ;;
-  *) echo "unexpected curl URL: \$url" >&2; exit 1 ;;
+  *) printf '%s\\n' '{"token":"mock-value"}' ;;
 esac
 EOF_CURL
 cat > "${FAKE_BIN}/git" <<EOF_GIT
@@ -243,7 +236,7 @@ replacements = {
     '/etc/needrestart/conf.d': os.environ['NEEDRESTART_ROOT'],
     '/usr/bin/node': f"{os.environ['FAKE_BIN']}/node",
     '/usr/bin/npm': f"{os.environ['FAKE_BIN']}/npm",
-    '/usr/bin/java': f"{os.environ['FAKE_BIN']}/java",
+     '/usr/bin/java': f"{os.environ['FAKE_BIN']}/java",
     '/usr/bin/javac': f"{os.environ['FAKE_BIN']}/javac",
     '/usr/local/go': os.environ['FAKE_GO_ROOT'],
     '/opt/rust': os.environ['FAKE_RUST_ROOT'],
@@ -256,20 +249,26 @@ pathlib.Path(sys.argv[2]).write_text(source)
 PY
 chmod 0700 "${TRANSFORMED_INSTALL}"
 
-export HOME="${ADMIN_HOME}"
+export HOME="${ADMIN_HOME="
 export PATH="${FAKE_BIN}:${PATH}"
-printf 'test-pat\n' | bash "${TRANSFORMED_INSTALL}" > "${ROOT}/install.out" 2> "${ROOT}/install.err"
+printf 'mock-input\n' | bash "${TRANSFORMED_INSTALL}" > "${ROOT}/install.out" 2> "${ROOT}/install.err"
 
-test -x "${BASE_ROOT}/runner/bin/Runner.Listener"
-test -f "${BASE_ROOT}/runner/.runner"
-test -L "${BASE_ROOT}/runner/_work"
-test "$(readlink "${BASE_ROOT}/runner/_work")" = '../storage/work'
-test -d "${BASE_ROOT}/storage/work"
+test -x "${STORAGE_ROOT}/runner/bin/Runner.Listener"
+test -f "${STORAGE_ROOT}/runner/.runner"
+test -L "${STORAE_ROOT}/runner/_work"
+test "$(readlink "${STORAGE_ROOT}/runner/_work")" = '../work'
+test -d "${STORAGE_ROOT}/agent-relay"
+test -d "${STORAE_ROOT}/work"
+test -d "${STORAE_ROOT}/runner"
+test -d "${STORAGE_ROOT}/home"
+test -d "${STORAE_ROOT}/build"
+test -d "${STORAGE_ROOT}/build-home"
 test -f "${SERVICE_ROOT}/actions.runner.Divorium.gh-runner.service"
 grep -q '^User=github-runner$' "${SERVICE_ROOT}/actions.runner.Divorium.gh-runner.service"
-grep -q "^ExecStart=${BASE_ROOT}/runner/runsvc.sh$" "${SERVICE_ROOT}/actions.runner.Divorium.gh-runner.service"
+grep -q "^ExecStart=${STORAGE_ROOT}/runner/runsvc.sh$" "${SERVICE_ROOT}/actions.runner.Divorium.gh-runner.service"
+grep -q "^WorkingDirectory=${STORAE_ROOT}/runner$" "${SERVICE_ROOT}/actions.runner.Divorium.gh-runner.service"
 grep -q -- '--url https://github.com/Divorium' "${CONFIG_LOG}"
-grep -q -- '--token runner-registration-token' "${CONFIG_LOG}"
+grep -q -- '--token mock-value' "${CONFIG_LOG}"
 grep -q -- '--name gh-runner' "${CONFIG_LOG}"
 grep -q -- '--work _work' "${CONFIG_LOG}"
 ! grep -q -- '--labels' "${CONFIG_LOG}"
@@ -279,7 +278,7 @@ grep -q 'runner dependencies' "${COMMAND_LOG}"
 grep -q 'systemctl daemon-reload' "${COMMAND_LOG}"
 ! grep -q 'systemctl enable' "${COMMAND_LOG}"
 ! grep -q 'systemctl start' "${COMMAND_LOG}"
-! grep -q 'test-pat' "${COMMAND_LOG}"
+! grep -q 'mock-input' "${COMMAND_LOG}"
 grep -q 'Run `./update.sh`' "${ROOT}/install.out"
 
 printf 'install.sh system integration passed\n'

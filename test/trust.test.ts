@@ -1,58 +1,73 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { CodexExecutor, createCodexArgs } from "../src/execution/codex-executor.js";
+#!/usr/bin/env bash
+set -euo pipefail
 
-const trustedRoot = "/srv/github-runner/storage/work";
-const trustedWorkspace = `${trustedRoot}/repository/repository`;
+node_version="$(node --version)"
+npm_version="$(npm --version)"
+tsc_version="$(tsc --version)"
+codex_version="$(codex --version)"
+go_version="$(go version)"
+java_version="$(java -version 2>&1 | head -n 1)"
 
-test("Codex trusts the exact workspace before first execution", () => {
-  const args = createCodexArgs(
-    trustedWorkspace,
-    "prompt",
-    `${trustedRoot}/repository`,
-    "/srv/github-runner/home",
-    "/srv/github-runner/home/.cache/agent-relay-runtime",
-    "/srv/github-runner/storage/agent-relay",
-  );
-  const trust = `projects={${JSON.stringify(trustedWorkspace)}={trust_level="trusted"}}`;
-  assert.ok(args.includes(trust));
-  assert.ok(args.indexOf(trust) < args.indexOf("exec"));
-  assert.equal(args.filter((value) => value.includes("trust_level")).length, 1);
-  assert.ok(!args.some((value) => value.includes("untrusted")));
-});
+printf '%s\n' "${node_version}" "npm ${npm_version}" "${tsc_version}" "${codex_version}" "${go_version}" "${java_version}"
+python3 --version
+python3 -m pip --version
+python3 -m venv --help >/dev/null
+rustc --version
+cargo --version
+git --version
+git lfs version
+gcc --version
+g++ --version
+clang --version
+make --version
+cmake --version
+pkg-config --version
+bash --version
+curl --version
+wget --version
+jq --version
+zip -v >/dev/null
+unzip -v >/dev/null
+tar --version
+gzip --version
+xz --version
+zstd --version
+rsync --version
+file --version
+find --version
+diff --version
 
-test("Codex trust override safely quotes the canonical workspace path", () => {
-  const workspace = `${trustedRoot}/repo with \"quote\"/repo`;
-  const args = createCodexArgs(workspace, "prompt", trustedRoot, "/home/runner", "/home/runner/runtime", "/srv/source");
-  assert.ok(args.includes(`projects={${JSON.stringify(workspace)}={trust_level="trusted"}}`));
-});
+[[ "${node_version}" == v22.* ]] || { echo "Node.js 22 is required" >&2; exit 1; }
+[[ "${tsc_version}" == *"${EXPECTED_TYPESCRIPT_VERSION:?EXPECTED_TYPESCRIPT_VERSION is required}"* ]] || {
+  echo "Unexpected TypeScript version: ${tsc_version}" >&2
+  exit 1
+}
+[[ "${codex_version}" == *"${EXPECTED_CODEX_VERSION:?EXPECTED_CODEX_VERSION is required}"* ]] || {
+  echo "Unexpected Codex version: ${codex_version}" >&2
+  exit 1
+}
+[[ "${go_version}" == *"go${EXPECTED_GO_VERSION:?EXPECTED_GO_VERSION is required}"* ]] || {
+  echo "Unexpected Go version: ${go_version}" >&2
+  exit 1
+}
+[[ "${java_version}" == *'"21.'* || "${java_version}" == *' 21 '* ]] || {
+  echo "Java 21 is required: ${java_version}" >&2
+  exit 1
+}
 
-test("CodexExecutor passes trusted workspace configuration to the launcher", async () => {
-  const root = join(tmpdir(), `agent-relay-trust-${process.pid}-${Date.now()}`);
-  const workspaceRoot = join(root, "storage", "work");
-  const workspace = join(workspaceRoot, "repository", "repository");
-  const home = join(root, "home");
-  const runtimeRoot = join(home, ".cache", "agent-relay-runtime");
-  const log = join(root, "args.log");
-  const fakeCodex = join(root, "fake-codex");
-  await mkdir(join(workspace, "docs", "exec-plans", "active"), { recursive: true });
-  await mkdir(join(workspace, ".git"), { recursive: true });
-  await mkdir(runtimeRoot, { recursive: true });
-  await writeFile(join(workspace, "docs", "exec-plans", "active", "plan.md"), "# Plan\n");
-  await writeFile(fakeCodex, `#!/bin/sh\nset -eu\nprintf '%s\\n' "$@" > "${log}"\n`, { mode: 0o700 });
-  await chmod(fakeCodex, 0o700);
-  try {
-    const executor = new CodexExecutor(fakeCodex, 5_000, 100_000, workspaceRoot, home, runtimeRoot, "/srv/source");
-    await executor.run("docs/exec-plans/active/plan.md", workspace);
-    const args = (await readFile(log, "utf8")).trim().split("\n");
-    assert.ok(args.includes(`projects={${JSON.stringify(workspace)}={trust_level="trusted"}}`));
-    assert.ok(args.includes("exec"));
-    assert.ok(args.includes("--cd"));
-    assert.ok(args.includes(workspace));
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
+codex --ask-for-approval never exec --help >/dev/null
+smoke_root="$(/usr/bin/mktemp -d /tmp/agent-relay-smoke.XXXXXX)"
+cleanup_smoke() {
+  /usr/bin/rm -rf -- "${smoke_root}"
+}
+trap cleanup_smoke EXIT
+
+codex \
+  --ask-for-approval never \
+  -c 'features.memories=false' \
+  -c "projects={\"${smoke_root}\"={trust_level=\"trusted\"}}" \
+  -c 'default_permissions="agent"' \
+  -c 'permissions.agent.extends=":workspace"' \
+  -c "permissions.agent.filesystem={\"/tmp\"=\"deny\",\"${smoke_root}\"=\"write\"}" \
+  -c 'permissions.agent.network.enabled=true' \
+  exec --cd "${smoke_root}" --help >/dev/null

@@ -2,20 +2,37 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
+const storagePaths = [
+  "/srv/github-runner/storage/agent-relay",
+  "/srv/github-runner/storage/work",
+  "/srv/github-runner/storage/runner",
+  "/srv/github-runner/storage/home",
+  "/srv/github-runner/storage/build",
+  "/srv/github-runner/storage/build-home",
+] as const;
+
 async function scripts(): Promise<{ install: string; update: string }> {
   return { install: await readFile("install.sh", "utf8"), update: await readFile("update.sh", "utf8") };
 }
 
-test("installation uses one source checkout and the dedicated work directory", async () => {
-  const { install } = await scripts();
+test("installation groups source, runner, homes, workspaces and builds below storage", async () => {
+  const { install, update } = await scripts();
+  assert.match(install, /STORAGE_ROOT=\$\{BASE_ROOT\}\/storage/);
   assert.match(install, /EXPECTED_SOURCE_ROOT=\$\{STORAGE_ROOT\}\/agent-relay/);
   assert.match(install, /WORK_ROOT=\$\{STORAGE_ROOT\}\/work/);
-  assert.match(install, /RUNNER_DIR=\$\{BASE_ROOT\}\/runner/);
-  assert.match(install, /RUNNER_HOME=\$\{BASE_ROOT\}\/home/);
+  assert.match(install, /RUNNER_DIR=\$\{STORAGE_ROOT\}\/runner/);
+  assert.match(install, /RUNNER_HOME=\$\{STORAGE_ROOT\}\/home/);
+  assert.match(install, /BUILD_ROOT=\$\{STORAGE_ROOT\}\/build/);
+  assert.match(install, /BUILD_HOME=\$\{STORAGE_ROOT\}\/build-home/);
+  assert.match(update, /STORAGE_ROOT=\$\{BASE_ROOT\}\/storage/);
+  assert.match(update, /SOURCE_ROOT=\$\{STORAGE_ROOT\}\/agent-relay/);
+  assert.match(update, /BUILD_ROOT=\$\{STORAGE_ROOT\}\/build/);
+  assert.match(update, /BUILD_HOME=\$\{STORAGE_ROOT\}\/build-home/);
   assert.match(install, /--work _work/);
   assert.match(install, /readlink "\$\{RUNNER_DIR\}\/_work"/);
-  assert.match(install, /ln -s \.\.\/storage\/work "\$\{RUNNER_DIR\}\/_work"/);
+  assert.match(install, /ln -s \.\.\/work "\$\{RUNNER_DIR\}\/_work"/);
   assert.match(install, /runner work path must be the managed symlink/i);
+  assert.doesNotMatch(install, /RUNNER_DIR=\$\{BASE_ROOT\}\/runner|RUNNER_HOME=\$\{BASE_ROOT\}\/home/);
   assert.doesNotMatch(install, /INSTALL_ROOT=\/opt\/agent-relay|\/opt\/agent-relay/);
 });
 
@@ -119,13 +136,21 @@ test("install and update contain no legacy Docker or Relay deployment", async ()
   }
 });
 
-test("documentation exposes the one-time install and recurring update commands", async () => {
+test("README files mirror the filesystem decision recorded in the completed plan", async () => {
+  const plan = await readFile("docs/exec-plans/completed/2026-07-16-install-native-github-runner.md", "utf8");
+  const specification = await readFile("docs/native-github-runner-specification.md", "utf8");
   for (const path of ["README.md", "docs/operations/README.md"]) {
     const document = await readFile(path, "utf8");
-    assert.match(document, /\/srv\/github-runner\/storage\/agent-relay/);
+    for (const storagePath of storagePaths) {
+      assert.ok(plan.includes(storagePath), `ExecPlan must define ${storagePath}`);
+      assert.ok(specification.includes(storagePath), `Specification must define ${storagePath}`);
+      assert.ok(document.includes(storagePath), `${path} must mirror ${storagePath}`);
+    }
     assert.match(document, /\.\/install\.sh/);
     assert.match(document, /\.\/update\.sh/);
-    assert.match(document, /\/srv\/github-runner\/storage\/work/);
+    assert.doesNotMatch(document, /\/srv\/github-runner\/(?:runner|home|build|build-home)(?:\/|\s|$)/u);
     assert.doesNotMatch(document, /\/opt\/agent-relay|docker compose|AGENT_RELAY_TOKEN/iu);
   }
+  assert.match(plan, /README files may summarize it but must not introduce additional filesystem decisions/);
+  assert.match(plan, /runner\/_work` is a managed symlink to `\.\.\/work/);
 });

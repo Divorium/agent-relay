@@ -159,6 +159,6 @@ The launcher and runtime:
 
 The full-flow integration test creates a real local Git remote and pull-request branch, serves a mock GitHub pull-request API, resolves the request and active plan, checks out the exact revision, invokes a mock Codex executable through the real runtime, finalizes the change, pushes it, and verifies the resulting remote commit.
 
-The current deterministic suite contains 66 passing Node tests. The 100% line, branch, and function gates apply to the TypeScript runtime. Bash installers and launchers plus the standalone Node runner scripts are validated through syntax checks and dedicated integration harnesses rather than being included in the TypeScript coverage denominator.
+The deterministic suite contains 67 Node tests. The 100% line, branch, and function gates apply to the TypeScript runtime. Bash installers and launchers plus the standalone Node runner scripts are validated through syntax checks and dedicated integration harnesses rather than being included in the TypeScript coverage denominator.
 
 These deterministic tests do not replace target-host acceptance. Live WSL package installation, systemd activation, organization registration, Codex authentication, runner-group access, and a real GitHub-hosted request require the actual target machine and credentials.

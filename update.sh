@@ -10,6 +10,7 @@ BUILD_USER=agent-relay-builder
 RUNNER_USER=github-runner
 SERVICE_NAME=actions.runner.Divorium.gh-runner.service
 ADMIN_FILE=/etc/agent-relay/administrator
+BUILDER_PATH=/opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin
 SCRIPT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 stage=""
@@ -148,11 +149,11 @@ stage="${BUILD_ROOT}/dist.$$"
 sudo rm -rf -- "${build_workspace}" "${stage}"
 sudo install -d -o "${BUILD_USER}" -g "${BUILD_USER}" -m 0700 "${build_workspace}" "${stage}"
 sudo -u "${BUILD_USER}" cp "${SOURCE_ROOT}/package.json" "${SOURCE_ROOT}/package-lock.json" "${build_workspace}/"
-sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" npm ci --prefix "${build_workspace}"
-sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" \
+sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" PATH="${BUILDER_PATH}" npm ci --prefix "${build_workspace}"
+sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" PATH="${BUILDER_PATH}" \
   "${build_workspace}/node_modules/.bin/tsc" -p "${SOURCE_ROOT}/tsconfig.json" --outDir "${stage}"
 
-sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" \
+sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" PATH="${BUILDER_PATH}" \
   node --test \
     --test-concurrency=1 \
     --experimental-test-coverage \
@@ -162,7 +163,7 @@ sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" \
     --test-coverage-functions=100 \
     "${stage}/test/**/*.test.js"
 
-sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" bash -n \
+sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" PATH="${BUILDER_PATH}" bash -n \
   "${SOURCE_ROOT}/install.sh" \
   "${SOURCE_ROOT}/update.sh" \
   "${SOURCE_ROOT}/runner/finalize.sh" \
@@ -171,17 +172,18 @@ sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" bash -n \
   "${SOURCE_ROOT}/test-system/install-script.integration.sh" \
   "${SOURCE_ROOT}/test-system/update-script.integration.sh"
 
-sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" node --check \
+sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" PATH="${BUILDER_PATH}" node --check \
   "${SOURCE_ROOT}/runner/resolve-pr.mjs"
-sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" node --check \
+sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" PATH="${BUILDER_PATH}" node --check \
   "${SOURCE_ROOT}/runner/resolve-plan.mjs"
-sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" node --check \
+sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" PATH="${BUILDER_PATH}" node --check \
   "${SOURCE_ROOT}/runner/resolve-request.mjs"
-sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" node --check \
+sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" PATH="${BUILDER_PATH}" node --check \
   "${SOURCE_ROOT}/runner/run-codex.mjs"
 
 sudo -u "${BUILD_USER}" -H env \
   HOME="${BUILD_HOME}" \
+  PATH="${BUILDER_PATH}" \
   EXPECTED_TYPESCRIPT_VERSION=5.8.3 \
   EXPECTED_CODEX_VERSION=0.144.4 \
   EXPECTED_GO_VERSION=1.24.5 \

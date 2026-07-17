@@ -103,12 +103,14 @@ Pinned downloads and packages are:
 3. stop the runner when it is active;
 4. record the current Git revision, run `git pull --ff-only` with repository hooks disabled, and re-execute `update.sh` from the pulled revision;
 5. create an isolated build workspace below `/srv/github-runner/storage/build` owned by `agent-relay-builder` and use `/srv/github-runner/storage/build-home` as its persistent home/cache root;
-6. run `npm ci`, TypeScript compilation, the full Node test suite, the 100% line/branch/function coverage gates, shell syntax checks, Node script syntax checks, and the Codex/toolchain smoke test as `agent-relay-builder`;
+6. supply every build and validation command executed as `agent-relay-builder` with `HOME=/srv/github-runner/storage/build-home` and the deterministic toolchain path `/opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin`, then run `npm ci`, TypeScript compilation, the full Node test suite, the 100% line/branch/function coverage gates, shell syntax checks, Node script syntax checks, and the Codex/toolchain smoke test;
 7. leave the active `dist` untouched until all validation succeeds;
 8. atomically move the staged `dist` into the source checkout while retaining the previous runtime;
 9. reject symlinked trusted entrypoints, verify source ownership, and harden source and runtime permissions without following repository symlinks;
 10. daemon-reload, enable, start, and verify the runner service;
 11. delete the previous runtime only after the service is confirmed active.
+
+The builder environment must not depend on the administrator's shell profile or the distribution-specific `sudo` secure path. Go remains installed at `/usr/local/go`; an ordinary update must discover it through the updater-supplied path without reinstalling the host toolchains, creating `/usr/local/bin/go` symlinks, rerunning `install.sh`, or re-registering the runner.
 
 Any failure before commit restores the original Git revision, removes staged build data, restores the previous `dist` when a swap occurred, and restarts a service that had been active before the update.
 
@@ -155,7 +157,7 @@ The launcher and runtime:
 - shell and Node-script syntax validation;
 - fixed-layout consistency checks across the ExecPlan, README files, installer, updater, and tests;
 - a system-level mocked `install.sh` execution that verifies all six storage directories and the `runner/_work -> ../work` symlink;
-- a system-level mocked `update.sh` execution covering successful activation, pre-swap build failure rollback, and post-swap service-start failure rollback.
+- a system-level mocked `update.sh` execution that proves Go is unavailable through the ambient path but available through the updater-supplied builder path, while covering successful activation, pre-swap build failure rollback, and post-swap service-start failure rollback.
 
 The full-flow integration test creates a real local Git remote and pull-request branch, serves a mock GitHub pull-request API, resolves the request and active plan, checks out the exact revision, invokes a mock Codex executable through the real runtime, finalizes the change, pushes it, and verifies the resulting remote commit.
 

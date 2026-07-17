@@ -35,7 +35,13 @@ async function createFakeCommands(directory: string, names: string[]): Promise<v
     if (name === "codex") output = "codex-cli 0.144.4";
     if (name === "go") output = "go version go1.24.5 linux/amd64";
     if (name === "java") output = 'openjdk version "21.0.1"';
-    const source = `#!/bin/bash
+    const source = name === "head"
+      ? `#!/bin/bash
+set -euo pipefail
+printf '%s %s\n' "${name}" "$*" >> "\${FAKE_COMMAND_LOG:?}"
+exec /usr/bin/head "$@"
+`
+      : `#!/bin/bash
 set -euo pipefail
 printf '%s %s\n' "${name}" "$*" >> "\${FAKE_COMMAND_LOG:?}"
 printf '%s\n' '${output}'
@@ -152,7 +158,7 @@ test("toolchain smoke validates retained pins without rejecting unrelated tools"
   const commands = [
     "node", "npm", "tsc", "python3", "java", "rustc", "cargo", "go", "git", "gcc", "g++", "clang",
     "make", "cmake", "pkg-config", "bash", "curl", "wget", "jq", "zip", "unzip", "tar", "gzip",
-    "xz", "zstd", "rsync", "file", "find", "diff", "codex", "ssh", "dotnet",
+    "xz", "zstd", "rsync", "file", "find", "diff", "codex", "head", "ssh", "dotnet",
   ];
   await createFakeCommands(bin, commands);
   await writeFile(log, "");

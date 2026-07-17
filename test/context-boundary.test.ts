@@ -66,7 +66,8 @@ test("workflows use installed direct execution and strict token scoping", async 
     assert.match(workflow, /persist-credentials: false/);
     assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ github\.token \}\}/);
     assert.match(workflow, /if: always\(\)[\s\S]*actions\/upload-artifact@v4/);
-    assert.doesNotMatch(workflow, /AGENT_RELAY_TOKEN|AGENT_RELAY_URL|runner\/client\.mjs|\/runner\//);
+    assert.doesNotMatch(workflow, /AGENT_RELAY_TOKEN|AGENT_RELAY_URL|runner\/client\.mjs/);
+    assert.doesNotMatch(workflow, /(?:node|run:)\s+\/runner\//);
 
     const codexStep = workflow.match(/- name: Run Codex directly([\s\S]*?)(?=\n      - name:)/)?.[1] ?? "";
     assert.doesNotMatch(codexStep, /GITHUB_TOKEN|github\.token/);

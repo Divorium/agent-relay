@@ -8,10 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test --experimental-test-coverage dist/test/**/*.test.js",
-    "test:runner-entrypoint": "bash test/runner-entrypoint.test.sh",
-    "check:shell": "bash -n runner/entrypoint.sh runner/finalize.sh scripts/codex-run scripts/toolchain-smoke.sh test/runner-entrypoint.test.sh",
-    "start": "node dist/src/server.js",
-    "check": "npm run typecheck && npm test && npm run test:runner-entrypoint && npm run check:shell"
+    "check:shell": "bash -n install.sh runner/finalize.sh scripts/codex-run scripts/toolchain-smoke.sh",
+    "check": "npm run typecheck && npm test && npm run check:shell"
   },
   "devDependencies": {
     "typescript": "5.8.3"

@@ -140,14 +140,16 @@ sudo apt-get install -y --no-install-recommends \
   zip unzip xz-utils zstd rsync file findutils diffutils
 curl -fsS --max-time 20 https://api.github.com/meta >/dev/null
 
-if ! command -v node >/dev/null || [[ "$(node --version)" != v22.* ]]; then
+if [[ ! -x /usr/bin/node ]] || [[ "$(/usr/bin/node --version)" != v22.* ]]; then
   node_setup="$(mktemp)"
   curl -fsSL https://deb.nodesource.com/setup_22.x -o "${node_setup}"
   sudo -E bash "${node_setup}"
   sudo apt-get install -y nodejs
 fi
+[[ -x /usr/bin/npm ]] || { echo "System npm is required after Node.js installation" >&2; exit 1; }
 
-if ! java -version 2>&1 | head -n 1 | grep -Eq 'version "21\.|openjdk 21'; then
+if [[ ! -x /usr/bin/java || ! -x /usr/bin/javac ]] \
+  || ! /usr/bin/java -version 2>&1 | /usr/bin/head -n 1 | grep -Eq 'version "21\.|openjdk 21'; then
   java_key="$(mktemp)"
   curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public -o "${java_key}"
   sudo install -d -m 0755 /etc/apt/keyrings
@@ -157,11 +159,11 @@ if ! java -version 2>&1 | head -n 1 | grep -Eq 'version "21\.|openjdk 21'; then
   sudo apt-get update
   sudo apt-get install -y temurin-21-jdk
 fi
-java_home="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
+java_home="$(dirname "$(dirname "$(readlink -f /usr/bin/javac)")")"
 sudo install -d -m 0755 /opt/java
 sudo ln -sfn "${java_home}" /opt/java/openjdk
 
-if ! command -v go >/dev/null || [[ "$(go version)" != *"go${GO_VERSION}"* ]]; then
+if [[ ! -x /usr/local/go/bin/go ]] || [[ "$(/usr/local/go/bin/go version)" != *"go${GO_VERSION}"* ]]; then
   go_archive="$(mktemp)"
   curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o "${go_archive}"
   printf '%s  %s\n' "${GO_SHA256}" "${go_archive}" | sha256sum -c -
@@ -180,14 +182,18 @@ for tool in cargo rustc rustdoc rustup; do
   sudo ln -sfn "/opt/rust/cargo/bin/${tool}" "/usr/local/bin/${tool}"
 done
 
-sudo npm install --global "typescript@${TYPESCRIPT_VERSION}" "@openai/codex@${CODEX_VERSION}"
+sudo /usr/bin/npm install --global --prefix /usr/local \
+  "typescript@${TYPESCRIPT_VERSION}" \
+  "@openai/codex@${CODEX_VERSION}"
+[[ -x /usr/local/bin/codex ]] || { echo "Codex was not installed at /usr/local/bin/codex" >&2; exit 1; }
+[[ -x /usr/local/bin/tsc ]] || { echo "TypeScript was not installed at /usr/local/bin/tsc" >&2; exit 1; }
 sudo git lfs install --system
 
+export PATH="/opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin"
 cd "${SOURCE_ROOT}"
 npm ci
 npm run check
 
-export PATH="/opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin"
 export EXPECTED_TYPESCRIPT_VERSION="${TYPESCRIPT_VERSION}"
 export EXPECTED_CODEX_VERSION="${CODEX_VERSION}"
 export EXPECTED_GO_VERSION="${GO_VERSION}"

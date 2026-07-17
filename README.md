@@ -2,12 +2,20 @@
 
 Agent Relay runs directly on one native Debian WSL installation.
 
-## Paths
+## Filesystem layout
 
-- trusted source checkout: `/srv/github-runner/storage/agent-relay`
-- GitHub Actions work directory: `/srv/github-runner/storage/work`
-- runner application: `/srv/github-runner/runner`
-- runner home and Codex authentication: `/srv/github-runner/home`
+All Agent Relay and GitHub Runner data is grouped under `/srv/github-runner/storage`:
+
+```text
+/srv/github-runner/storage/agent-relay  administrator-owned source and trusted runtime
+/srv/github-runner/storage/work         github-runner-owned workflow workspaces
+/srv/github-runner/storage/runner       official GitHub Actions runner
+/srv/github-runner/storage/home         github-runner home and Codex authentication
+/srv/github-runner/storage/build        isolated temporary build area
+/srv/github-runner/storage/build-home   builder home and tool caches
+```
+
+This layout is an explicit architecture decision recorded in `docs/exec-plans/completed/2026-07-16-install-native-github-runner.md` and specified in `docs/native-github-runner-specification.md`.
 
 The source checkout is owned by the Debian administrator. The `github-runner` service account can read it but cannot modify it and has no sudo access. Builds run as the separate no-sudo `agent-relay-builder` account.
 

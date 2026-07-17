@@ -91,10 +91,27 @@ test("installer registers and services one unlabeled organization runner", async
   assert.match(script, /--work _work/);
   assert.doesNotMatch(script, /--labels/);
   assert.match(script, /svc\.sh install/);
-  assert.match(script, /svc\.sh start/);
-  assert.match(script, /svc\.sh status/);
+  assert.match(script, /systemctl start "\$\{service_name\}"/);
+  assert.match(script, /systemctl is-active --quiet "\$\{service_name\}"/);
+  assert.match(script, /systemctl --no-pager --full status "\$\{service_name\}"/);
   assert.match(script, /actions_runner_services\.conf/);
   assert.match(script, /existing runner registration is incomplete/);
+  assert.match(script, /existing runner installation has no service registration/);
+});
+
+test("installer executes runner-owned root scripts only after verified fresh extraction", async () => {
+  const script = await installer();
+  const extract = script.indexOf('tar -C "${RUNNER_DIR}" -xzf "${runner_archive}"');
+  const fresh = script.indexOf("runner_fresh=1", extract);
+  const dependencies = script.indexOf('sudo "${RUNNER_DIR}/bin/installdependencies.sh"', fresh);
+  const serviceGuard = script.indexOf("if (( runner_fresh != 1 )); then", dependencies);
+  const serviceInstall = script.indexOf('sudo ./svc.sh install "$(id -un)"', serviceGuard);
+  assert.ok(extract >= 0 && fresh > extract && dependencies > fresh && serviceGuard > dependencies && serviceInstall > serviceGuard);
+  assert.equal((script.match(/installdependencies\.sh/g) ?? []).length, 1);
+  assert.equal((script.match(/sudo \.\/svc\.sh/g) ?? []).length, 1);
+  assert.doesNotMatch(script, /sudo \.\/svc\.sh (?:start|status)/);
+  assert.match(script, /^service_name="\$\(tr -d/m);
+  assert.match(script, /\^actions\\\.runner\\\.[A-Za-z0-9_.@-]+\\\.service\$/);
 });
 
 test("native Codex launcher preserves the real home and cleans only private runtime", async () => {
@@ -106,6 +123,8 @@ test("native Codex launcher preserves the real home and cleans only private runt
   assert.match(launcher, /\/usr\/bin\/env -i/);
   assert.match(launcher, /HOME="\$\{HOME\}"/);
   assert.match(launcher, /RUSTUP_HOME=\/opt\/rust\/rustup/);
+  assert.match(launcher, /NPM_CONFIG_CACHE="\$\{runtime_dir\}\/npm"/);
+  assert.match(launcher, /GIT_CONFIG_GLOBAL=\/dev\/null/);
   assert.match(launcher, /GIT_OPTIONAL_LOCKS=0/);
   assert.doesNotMatch(launcher, /\/home\/agent|find "\$\{HOME\}"|rm -rf -- "\$\{HOME\}"/);
 });

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
@@ -182,10 +182,18 @@ test("toolchain smoke validates retained pins and the Codex permission profile",
     }
     assert.doesNotMatch(invocations, /^ssh |^dotnet /m);
     assert.match(invocations, /^codex --ask-for-approval never exec --help$/m);
+
+    const profileInvocation = invocations.split("\n").find((line) => line.includes("permissions.agent.filesystem="));
+    assert.ok(profileInvocation);
+    const smokeRoot = /exec --cd (\/tmp\/agent-relay-smoke\.[A-Za-z0-9]+) --help$/.exec(profileInvocation)?.[1];
+    assert.ok(smokeRoot);
     assert.match(
-      invocations,
-      /^codex --ask-for-approval never -c features\.memories=false -c default_permissions="agent" -c permissions\.agent\.extends=":workspace" -c permissions\.agent\.filesystem=\{"\/tmp"="deny","\/tmp\/agent-relay-smoke"="write"\} -c permissions\.agent\.network\.enabled=true exec --cd \/tmp\/agent-relay-smoke --help$/m,
+      profileInvocation,
+      new RegExp(
+        `^codex --ask-for-approval never -c features\\.memories=false -c default_permissions="agent" -c permissions\\.agent\\.extends=":workspace" -c permissions\\.agent\\.filesystem=\\{"/tmp"="deny","${escapeRegExp(smokeRoot)}"="write"\\} -c permissions\\.agent\\.network\\.enabled=true exec --cd ${escapeRegExp(smokeRoot)} --help$`,
+      ),
     );
+    await assert.rejects(stat(smokeRoot), /ENOENT/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

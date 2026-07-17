@@ -51,7 +51,7 @@ printf '%s\n' '${output}'
   }
 }
 
-test("codex-run preserves real home state and exposes only its explicit environment", async () => {
+test("codex-run preserves real state and routes tool state into one private runtime", async () => {
   const root = join(tmpdir(), `agent-relay-codex-run-${process.pid}-${Date.now()}`);
   const home = join(root, "home");
   const runtimeRoot = join(home, ".cache", "agent-relay-runtime");
@@ -77,6 +77,16 @@ set -euo pipefail
   printf 'HOME=%s\n' "\${HOME:-}"
   printf 'USER=%s\n' "\${USER:-}"
   printf 'CARGO_HOME=%s\n' "\${CARGO_HOME:-}"
+  printf 'RUSTUP_HOME=%s\n' "\${RUSTUP_HOME:-}"
+  printf 'GOPATH=%s\n' "\${GOPATH:-}"
+  printf 'GOCACHE=%s\n' "\${GOCACHE:-}"
+  printf 'NPM_CONFIG_CACHE=%s\n' "\${NPM_CONFIG_CACHE:-}"
+  printf 'PIP_CACHE_DIR=%s\n' "\${PIP_CACHE_DIR:-}"
+  printf 'GRADLE_USER_HOME=%s\n' "\${GRADLE_USER_HOME:-}"
+  printf 'XDG_CACHE_HOME=%s\n' "\${XDG_CACHE_HOME:-}"
+  printf 'XDG_CONFIG_HOME=%s\n' "\${XDG_CONFIG_HOME:-}"
+  printf 'XDG_DATA_HOME=%s\n' "\${XDG_DATA_HOME:-}"
+  printf 'GIT_CONFIG_GLOBAL=%s\n' "\${GIT_CONFIG_GLOBAL:-}"
   printf 'TMPDIR=%s\n' "\${TMPDIR:-}"
   printf 'GIT_OPTIONAL_LOCKS=%s\n' "\${GIT_OPTIONAL_LOCKS:-}"
   printf 'LEAK=%s\n' "\${LEAK_ME:-}"
@@ -111,6 +121,16 @@ set -euo pipefail
     const invocation = await readFile(invocationLog, "utf8");
     assert.match(invocation, new RegExp(`HOME=${escapeRegExp(home)}`));
     assert.match(invocation, /CARGO_HOME=.*\/cargo/);
+    assert.match(invocation, /RUSTUP_HOME=\/opt\/rust\/rustup/);
+    assert.match(invocation, /GOPATH=.*\/go/);
+    assert.match(invocation, /GOCACHE=.*\/go-cache/);
+    assert.match(invocation, /NPM_CONFIG_CACHE=.*\/npm/);
+    assert.match(invocation, /PIP_CACHE_DIR=.*\/pip/);
+    assert.match(invocation, /GRADLE_USER_HOME=.*\/gradle/);
+    assert.match(invocation, /XDG_CACHE_HOME=.*\/cache/);
+    assert.match(invocation, /XDG_CONFIG_HOME=.*\/config/);
+    assert.match(invocation, /XDG_DATA_HOME=.*\/data/);
+    assert.match(invocation, /GIT_CONFIG_GLOBAL=\/dev\/null/);
     assert.match(invocation, /TMPDIR=.*\/tmp/);
     assert.match(invocation, /GIT_OPTIONAL_LOCKS=0/);
     assert.match(invocation, /LEAK=\n/);

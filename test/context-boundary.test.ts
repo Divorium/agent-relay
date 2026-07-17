@@ -41,11 +41,12 @@ test("executor exposes only native launcher context", () => {
     "/runner/_work",
     "/home/user",
     "/home/user/.cache/runtime",
+    "/srv/github-runner/storage/agent-relay",
   );
   const filesystem = args.find((value) => value.startsWith("permissions.agent.filesystem="));
   assert.ok(filesystem);
   assert.match(filesystem, /"\/home\/user"="deny"/);
-  assert.match(filesystem, /"\/opt\/agent-relay"="deny"/);
+  assert.match(filesystem, /"\/srv\/github-runner\/storage\/agent-relay"="deny"/);
   assert.match(filesystem, /"\/opt\/rust"="read"/);
   assert.match(filesystem, /"\/runner\/_work"="deny"/);
   assert.match(filesystem, /"\/runner\/_work\/repository\/repository"="write"/);
@@ -59,9 +60,11 @@ test("workflows use installed direct execution and strict token scoping", async 
     const workflow = await readFile(path, "utf8");
     assert.match(workflow, /runs-on: \[self-hosted\]/);
     assert.doesNotMatch(workflow, /runs-on: \[self-hosted,\s*agent-relay\]/);
-    assert.match(workflow, /node \/opt\/agent-relay\/runner\/resolve-pr\.mjs/);
-    assert.match(workflow, /node \/opt\/agent-relay\/dist\/src\/run-codex\.js/);
-    assert.match(workflow, /run: \/opt\/agent-relay\/runner\/finalize\.sh/);
+    assert.match(workflow, /node \/srv\/github-runner\/storage\/agent-relay\/runner\/resolve-request\.mjs/);
+    assert.match(workflow, /node \/srv\/github-runner\/storage\/agent-relay\/runner\/resolve-pr\.mjs/);
+    assert.match(workflow, /node \/srv\/github-runner\/storage\/agent-relay\/runner\/resolve-plan\.mjs/);
+    assert.match(workflow, /node \/srv\/github-runner\/storage\/agent-relay\/runner\/run-codex\.mjs/);
+    assert.match(workflow, /run: \/srv\/github-runner\/storage\/agent-relay\/runner\/finalize\.sh/);
     assert.match(workflow, /CODEX_WORKSPACE_ROOT: \$\{\{ runner\.workspace \}\}/);
     assert.match(workflow, /persist-credentials: false/);
     assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ github\.token \}\}/);
@@ -74,10 +77,15 @@ test("workflows use installed direct execution and strict token scoping", async 
   }
 });
 
-test("CI uses only the organization self-hosted runner", async () => {
+test("CI uses the organization runner and executes the complete validation", async () => {
   const workflow = await readFile(".github/workflows/ci.yml", "utf8");
   assert.match(workflow, /runs-on: \[self-hosted\]/);
+  assert.match(workflow, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
   assert.doesNotMatch(workflow, /agent-relay\]/);
+  assert.match(workflow, /actions\/checkout@v4/);
+  assert.match(workflow, /persist-credentials: false/);
+  assert.match(workflow, /run: npm ci/);
+  assert.match(workflow, /run: npm run check/);
 });
 
 test("active packaging contains no Docker or Relay transport entrypoints", async () => {
@@ -99,5 +107,5 @@ test("active packaging contains no Docker or Relay transport entrypoints", async
 
   const packageJson = await readFile("package.json", "utf8");
   assert.doesNotMatch(packageJson, /dist\/src\/server\.js|runner-entrypoint/);
-  assert.match(packageJson, /bash -n install\.sh/);
+  assert.match(packageJson, /bash -n install\.sh update\.sh/);
 });

@@ -22,6 +22,7 @@ wsl_config_temp=""
 stage=""
 backup=""
 install_swap_pending=0
+runner_fresh=0
 
 cleanup() {
   rm -f -- \
@@ -245,8 +246,9 @@ if [[ ! -x "${RUNNER_DIR}/bin/Runner.Listener" ]]; then
     -o "${runner_archive}"
   printf '%s  %s\n' "${RUNNER_SHA256}" "${runner_archive}" | sha256sum -c -
   tar -C "${RUNNER_DIR}" -xzf "${runner_archive}"
+  runner_fresh=1
+  sudo "${RUNNER_DIR}/bin/installdependencies.sh"
 fi
-sudo "${RUNNER_DIR}/bin/installdependencies.sh"
 
 if [[ ! -f "${RUNNER_DIR}/.runner" ]]; then
   set +x
@@ -299,9 +301,19 @@ printf '%s\n' '$nrconf{override_rc}{qr(^actions\.runner\..+\.service$)} = 0;' \
   | sudo tee /etc/needrestart/conf.d/actions_runner_services.conf >/dev/null
 cd "${RUNNER_DIR}"
 if [[ ! -f .service ]]; then
+  if (( runner_fresh != 1 )); then
+    echo "The existing runner installation has no service registration: ${RUNNER_DIR}" >&2
+    exit 1
+  fi
   sudo ./svc.sh install "$(id -un)"
 fi
-sudo ./svc.sh start
-sudo ./svc.sh status
+service_name="$(tr -d '\r\n' < .service)"
+if [[ ! "${service_name}" =~ ^actions\.runner\.[A-Za-z0-9_.@-]+\.service$ ]]; then
+  echo "The runner service name is invalid" >&2
+  exit 1
+fi
+sudo systemctl start "${service_name}"
+sudo systemctl is-active --quiet "${service_name}"
+sudo systemctl --no-pager --full status "${service_name}"
 
 printf 'Native runner installation is ready: %s (%s)\n' gh-runner "${ORGANIZATION_URL}"

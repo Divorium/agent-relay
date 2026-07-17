@@ -10,6 +10,14 @@ umask 0077
 : "${HOME:?HOME is required}"
 : "${CODEX_RUNTIME_ROOT:?CODEX_RUNTIME_ROOT is required}"
 
+script_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+toolchain_profile="${script_root}/toolchain-environment.sh"
+if [[ ! -f "${toolchain_profile}" || -L "${toolchain_profile}" ]]; then
+  echo "Toolchain environment must be a regular non-symlink file" >&2
+  exit 1
+fi
+source "${toolchain_profile}"
+
 codex_auth="${HOME}/.codex/auth.json"
 if [[ ! -f "${codex_auth}" ]]; then
   echo "Codex authentication is missing; run codex login" >&2
@@ -19,17 +27,13 @@ fi
 mkdir -p "${CODEX_RUNTIME_ROOT}"
 chmod 0700 "${CODEX_RUNTIME_ROOT}"
 runtime_dir="$(mktemp -d "${CODEX_RUNTIME_ROOT}/run.XXXXXX")"
-mkdir -m 0700 \
-  "${runtime_dir}/cache" \
-  "${runtime_dir}/cargo" \
-  "${runtime_dir}/config" \
-  "${runtime_dir}/data" \
-  "${runtime_dir}/go" \
-  "${runtime_dir}/go-cache" \
-  "${runtime_dir}/gradle" \
-  "${runtime_dir}/npm" \
-  "${runtime_dir}/pip" \
-  "${runtime_dir}/tmp"
+for state_directory in "${TOOLCHAIN_STATE_SUBDIRECTORIES[@]}"; do
+  mkdir -m 0700 "${runtime_dir}/${state_directory}"
+done
+
+current_user="$(id -un)"
+declare -a toolchain_env
+toolchain_environment_build "${current_user}" "${HOME}" "${runtime_dir}" toolchain_env
 
 child_pid=""
 forward_signal() {
@@ -43,31 +47,10 @@ cleanup() {
 trap forward_signal TERM INT
 trap cleanup EXIT
 
-current_user="$(id -un)"
 /usr/bin/env -i \
-  HOME="${HOME}" \
-  USER="${current_user}" \
-  LOGNAME="${current_user}" \
-  SHELL=/bin/bash \
-  LANG=C.UTF-8 \
-  LC_ALL=C.UTF-8 \
-  JAVA_HOME=/opt/java/openjdk \
-  CARGO_HOME="${runtime_dir}/cargo" \
-  RUSTUP_HOME=/opt/rust/rustup \
-  GOPATH="${runtime_dir}/go" \
-  GOCACHE="${runtime_dir}/go-cache" \
-  NPM_CONFIG_CACHE="${runtime_dir}/npm" \
-  PIP_CACHE_DIR="${runtime_dir}/pip" \
-  GRADLE_USER_HOME="${runtime_dir}/gradle" \
-  XDG_CACHE_HOME="${runtime_dir}/cache" \
-  XDG_CONFIG_HOME="${runtime_dir}/config" \
-  XDG_DATA_HOME="${runtime_dir}/data" \
+  "${toolchain_env[@]}" \
   GIT_CONFIG_GLOBAL=/dev/null \
-  TMPDIR="${runtime_dir}/tmp" \
-  TMP="${runtime_dir}/tmp" \
-  TEMP="${runtime_dir}/tmp" \
   GIT_OPTIONAL_LOCKS=0 \
-  PATH=/opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin \
   /usr/local/bin/codex "$@" &
 child_pid=$!
 

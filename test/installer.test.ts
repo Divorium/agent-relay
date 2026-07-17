@@ -11,8 +11,20 @@ const storagePaths = [
   "/srv/github-runner/storage/build-home",
 ] as const;
 
-async function scripts(): Promise<{ install: string; update: string }> {
-  return { install: await readFile("install.sh", "utf8"), update: await readFile("update.sh", "utf8") };
+async function scripts(): Promise<{
+  install: string;
+  update: string;
+  codexRun: string;
+  smoke: string;
+  profile: string;
+}> {
+  return {
+    install: await readFile("install.sh", "utf8"),
+    update: await readFile("update.sh", "utf8"),
+    codexRun: await readFile("scripts/codex-run", "utf8"),
+    smoke: await readFile("scripts/toolchain-smoke.sh", "utf8"),
+    profile: await readFile("scripts/toolchain-environment.sh", "utf8"),
+  };
 }
 
 test("installation groups source, runner, homes, workspaces and builds below storage", async () => {
@@ -71,6 +83,8 @@ test("installation uses pinned verified runner and toolchain downloads", async (
   assert.match(install, /CODEX_VERSION=0\.144\.4/);
   assert.equal((install.match(/sha256sum -c -/gu) ?? []).length, 2);
   assert.equal((install.match(/installdependencies\.sh/gu) ?? []).length, 1);
+  assert.match(install, /"\$\{TOOLCHAIN_GO_ROOT\}\/bin\/go"/);
+  assert.match(install, /CARGO_HOME="\$\{TOOLCHAIN_RUST_CARGO_HOME\}" RUSTUP_HOME="\$\{TOOLCHAIN_RUSTUP_HOME\}"/);
 });
 
 test("installation prompts only for Codex login and initial runner registration", async () => {
@@ -84,12 +98,50 @@ test("installation prompts only for Codex login and initial runner registration"
   assert.match(install, /unset registration_token/);
 });
 
-test("normal update pulls once and runs all project code as the no-sudo builder", async () => {
+test("one trusted profile defines the complete host toolchain environment", async () => {
+  const { install, update, codexRun, smoke, profile } = await scripts();
+  assert.match(profile, /^TOOLCHAIN_JAVA_HOME=\/opt\/java\/openjdk$/mu);
+  assert.match(profile, /^TOOLCHAIN_GO_ROOT=\/usr\/local\/go$/mu);
+  assert.match(profile, /^TOOLCHAIN_RUST_CARGO_HOME=\/opt\/rust\/cargo$/mu);
+  assert.match(profile, /^TOOLCHAIN_RUSTUP_HOME=\/opt\/rust\/rustup$/mu);
+  assert.match(profile, /TOOLCHAIN_PATH=\$\{TOOLCHAIN_JAVA_HOME\}\/bin:\$\{TOOLCHAIN_GO_ROOT\}\/bin:\$\{TOOLCHAIN_RUST_BIN\}:\$\{TOOLCHAIN_SYSTEM_PATH\}/);
+  assert.match(profile, /toolchain_environment_build\(\)/);
+  for (const binding of [
+    "JAVA_HOME",
+    "RUSTUP_HOME",
+    "CARGO_HOME",
+    "GOPATH",
+    "GOCACHE",
+    "GRADLE_USER_HOME",
+    "NPM_CONFIG_CACHE",
+    "PIP_CACHE_DIR",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "TMPDIR",
+  ]) {
+    assert.ok(profile.includes(`"${binding}=`), `profile must define ${binding}`);
+  }
+  assert.doesNotMatch(profile, /mkdir|\/usr\/bin\/env -i/);
+  for (const consumer of [install, update, codexRun, smoke]) {
+    assert.match(consumer, /scripts\/toolchain-environment\.sh|toolchain-environment\.sh/);
+    assert.match(consumer, /source /);
+  }
+  for (const consumer of [install, update, codexRun]) {
+    assert.doesNotMatch(consumer, /TOOLCHAIN_JAVA_HOME=\/opt\/java\/openjdk|TOOLCHAIN_GO_ROOT=\/usr\/local\/go|TOOLCHAIN_RUSTUP_HOME=\/opt\/rust\/rustup/);
+  }
+  assert.match(install, /scripts\/toolchain-environment\.sh \\/);
+  assert.match(update, /scripts\/toolchain-environment\.sh \\/);
+  assert.match(codexRun, /toolchain_environment_build/);
+  assert.match(smoke, /toolchain_environment_build/);
+});
+
+test("normal update pulls once and runs all project code through one clean builder environment", async () => {
   const { update } = await scripts();
   const stop = update.indexOf('sudo systemctl stop "${SERVICE_NAME}"');
   const pull = update.indexOf("pull --ff-only", stop);
-  const npm = update.indexOf('sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" PATH="${BUILDER_PATH}" npm ci', pull);
-  const compile = update.indexOf('"${build_workspace}/node_modules/.bin/tsc"', npm);
+  const npm = update.indexOf('run_builder npm ci', pull);
+  const compile = update.indexOf('run_builder "${build_workspace}/node_modules/.bin/tsc"', npm);
   const tests = update.indexOf("--test-coverage-lines=100", compile);
   assert.ok(stop >= 0 && pull > stop && npm > pull && compile > npm && tests > compile);
   assert.match(update, /--test-coverage-branches=100/);
@@ -98,14 +150,17 @@ test("normal update pulls once and runs all project code as the no-sudo builder"
   assert.match(update, /exec \/bin\/bash "\$\{SOURCE_ROOT\}\/update\.sh"/);
   assert.match(update, /config core\.fileMode false/);
   assert.match(update, /systemctl enable "\$\{SERVICE_NAME\}"/);
-  assert.match(update, /sudo -u "\$\{BUILD_USER\}" -H env HOME="\$\{BUILD_HOME\}" PATH="\$\{BUILDER_PATH\}" bash -n/);
-  assert.doesNotMatch(update, /sudo npm|sudo node --test|sudo .*tsc/);
+  assert.match(update, /toolchain_environment_build "\$\{BUILD_USER\}" "\$\{BUILD_HOME\}" "\$\{builder_state\}" builder_env/);
+  assert.match(update, /sudo -u "\$\{BUILD_USER\}" -H \/usr\/bin\/env -i "\$\{builder_env\[@\]\}"/);
+  assert.match(update, /run_builder bash -n/);
+  assert.doesNotMatch(update, /sudo npm|sudo node --test|sudo .*tsc|BUILDER_PATH=/);
 });
 
 test("privileged permission updates do not follow repository symlinks", async () => {
   const { install, update } = await scripts();
   assert.match(install, /find -P "\$\{SOURCE_ROOT\}" -xdev -exec chown -h/);
   assert.match(install, /Required source file must be a regular non-symlink file/);
+  assert.match(install, /scripts\/toolchain-environment\.sh/);
   assert.doesNotMatch(install, /chown -R "\$\{owner\}:\$\{group\}" "\$\{SOURCE_ROOT\}"/);
   assert.match(update, /validate_source_entrypoints/);
   assert.match(update, /find -P "\$\{SOURCE_ROOT\}" -xdev/);
@@ -114,14 +169,15 @@ test("privileged permission updates do not follow repository symlinks", async ()
 
 test("update keeps the previous runtime until the staged build passes", async () => {
   const { update } = await scripts();
-  const build = update.indexOf('"${build_workspace}/node_modules/.bin/tsc"');
-  const testRun = update.indexOf("node --test", build);
+  const build = update.indexOf('run_builder "${build_workspace}/node_modules/.bin/tsc"');
+  const testRun = update.indexOf("run_builder node --test", build);
   const previous = update.indexOf('previous_dist="${SOURCE_ROOT}/.dist.previous.$$"', testRun);
   const swap = update.indexOf('sudo mv -- "${stage}" "${SOURCE_ROOT}/dist"', previous);
   assert.ok(build >= 0 && testRun > build && previous > testRun && swap > previous);
   assert.match(update, /git -C "\$\{SOURCE_ROOT\}" reset --hard "\$\{original_head\}"/);
   assert.match(update, /sudo mv -- "\$\{previous_dist\}" "\$\{SOURCE_ROOT\}\/dist"/);
   assert.match(update, /dist_swapped=1/);
+  assert.match(update, /sudo rm -rf -- "\$\{builder_state\}"/);
   const activate = update.indexOf("restart_service", swap);
   const removePrevious = update.indexOf('sudo rm -rf -- "${previous_dist}"', activate);
   assert.ok(activate > swap && removePrevious > activate);

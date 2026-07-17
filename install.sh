@@ -23,6 +23,7 @@ BUILD_USER=agent-relay-builder
 SERVICE_NAME=actions.runner.Divorium.gh-runner.service
 CONFIG_ROOT=/etc/agent-relay
 SOURCE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+TOOLCHAIN_PROFILE=${SOURCE_ROOT}/scripts/toolchain-environment.sh
 
 node_setup=""
 java_key=""
@@ -124,6 +125,7 @@ secure_source_checkout() {
     runner/resolve-request.mjs \
     runner/run-codex.mjs \
     scripts/codex-run \
+    scripts/toolchain-environment.sh \
     scripts/toolchain-smoke.sh; do
     if [[ ! -f "${SOURCE_ROOT}/${path}" || -L "${SOURCE_ROOT}/${path}" ]]; then
       echo "Required source file must be a regular non-symlink file: ${path}" >&2
@@ -198,6 +200,11 @@ if [[ "${SOURCE_ROOT}" != "${EXPECTED_SOURCE_ROOT}" ]]; then
   echo "The repository must be checked out at ${EXPECTED_SOURCE_ROOT}" >&2
   exit 1
 fi
+if [[ ! -f "${TOOLCHAIN_PROFILE}" || -L "${TOOLCHAIN_PROFILE}" ]]; then
+  echo "Toolchain environment must be a regular non-symlink file" >&2
+  exit 1
+fi
+source "${TOOLCHAIN_PROFILE}"
 command -v sudo >/dev/null || { echo "sudo is required" >&2; exit 1; }
 [[ -d "${HOME:?HOME is required}" && -w "${HOME}" ]] || { echo "HOME must be writable" >&2; exit 1; }
 [[ -r "${SOURCE_ROOT}/package.json" && -w "${SOURCE_ROOT}" ]] || {
@@ -248,26 +255,26 @@ if [[ ! -x /usr/bin/java || ! -x /usr/bin/javac ]] \
   sudo apt-get install -y temurin-21-jdk
 fi
 java_home="$(dirname "$(dirname "$(readlink -f /usr/bin/javac)")")"
-sudo install -d -m 0755 /opt/java
-sudo ln -sfn "${java_home}" /opt/java/openjdk
+sudo install -d -m 0755 "$(dirname "${TOOLCHAIN_JAVA_HOME}")"
+sudo ln -sfn "${java_home}" "${TOOLCHAIN_JAVA_HOME}"
 
-if [[ ! -x /usr/local/go/bin/go ]] || [[ "$(/usr/local/go/bin/go version)" != *"go${GO_VERSION}"* ]]; then
+if [[ ! -x "${TOOLCHAIN_GO_ROOT}/bin/go" ]] || [[ "$("${TOOLCHAIN_GO_ROOT}/bin/go" version)" != *"go${GO_VERSION}"* ]]; then
   go_archive="$(mktemp)"
   curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o "${go_archive}"
   printf '%s  %s\n' "${GO_SHA256}" "${go_archive}" | sha256sum -c -
-  sudo rm -rf /usr/local/go
-  sudo tar -C /usr/local -xzf "${go_archive}"
+  sudo rm -rf "${TOOLCHAIN_GO_ROOT}"
+  sudo tar -C "$(dirname "${TOOLCHAIN_GO_ROOT}")" -xzf "${go_archive}"
 fi
 
-if [[ ! -x /opt/rust/cargo/bin/rustc ]]; then
+if [[ ! -x "${TOOLCHAIN_RUST_BIN}/rustc" ]]; then
   rustup_script="$(mktemp)"
   curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o "${rustup_script}"
-  sudo install -d -m 0755 /opt/rust/cargo /opt/rust/rustup
-  sudo env CARGO_HOME=/opt/rust/cargo RUSTUP_HOME=/opt/rust/rustup \
+  sudo install -d -m 0755 "${TOOLCHAIN_RUST_CARGO_HOME}" "${TOOLCHAIN_RUSTUP_HOME}"
+  sudo env CARGO_HOME="${TOOLCHAIN_RUST_CARGO_HOME}" RUSTUP_HOME="${TOOLCHAIN_RUSTUP_HOME}" \
     sh "${rustup_script}" -y --default-toolchain stable --profile minimal --no-modify-path
 fi
 for tool in cargo rustc rustdoc rustup; do
-  sudo ln -sfn "/opt/rust/cargo/bin/${tool}" "/usr/local/bin/${tool}"
+  sudo ln -sfn "${TOOLCHAIN_RUST_BIN}/${tool}" "/usr/local/bin/${tool}"
 done
 
 sudo /usr/bin/npm install --global --prefix /usr/local \

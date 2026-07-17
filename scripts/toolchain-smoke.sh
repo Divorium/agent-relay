@@ -1,19 +1,79 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+toolchain_profile="${script_root}/toolchain-environment.sh"
+if [[ ! -f "${toolchain_profile}" || -L "${toolchain_profile}" ]]; then
+  echo "Toolchain environment must be a regular non-symlink file" >&2
+  exit 1
+fi
+source "${toolchain_profile}"
+
+: "${EXPECTED_TOOLCHAIN_STATE_ROOT:?EXPECTED_TOOLCHAIN_STATE_ROOT is required}"
+toolchain_validate_absolute_path 'expected toolchain state root' "${EXPECTED_TOOLCHAIN_STATE_ROOT}"
+
+declare -a expected_environment
+toolchain_environment_build \
+  "${USER:?USER is required}" \
+  "${HOME:?HOME is required}" \
+  "${EXPECTED_TOOLCHAIN_STATE_ROOT}" \
+  expected_environment
+for assignment in "${expected_environment[@]}"; do
+  key="${assignment%%=*}"
+  expected_value="${assignment#*=}"
+  actual_value="${!key-}"
+  [[ "${actual_value}" == "${expected_value}" ]] || {
+    echo "Unexpected ${key}: ${actual_value}" >&2
+    exit 1
+  }
+done
+for state_directory in "${TOOLCHAIN_STATE_SUBDIRECTORIES[@]}"; do
+  state_path="${EXPECTED_TOOLCHAIN_STATE_ROOT}/${state_directory}"
+  [[ -d "${state_path}" && -w "${state_path}" ]] || {
+    echo "Toolchain state directory must be writable: ${state_path}" >&2
+    exit 1
+  }
+done
+
+[[ "$(command -v java)" == "${TOOLCHAIN_JAVA_HOME}/bin/java" ]] || {
+  echo "Managed Java must be first on PATH" >&2
+  exit 1
+}
+[[ "$(command -v go)" == "${TOOLCHAIN_GO_ROOT}/bin/go" ]] || {
+  echo "Managed Go must be first on PATH" >&2
+  exit 1
+}
+[[ "$(command -v rustc)" == "${TOOLCHAIN_RUST_BIN}/rustc" ]] || {
+  echo "Managed Rust must be first on PATH" >&2
+  exit 1
+}
+[[ "$(readlink -f "${JAVA_HOME}/bin/java")" == "$(readlink -f "$(command -v java)")" ]] || {
+  echo "JAVA_HOME does not match the Java executable" >&2
+  exit 1
+}
+
 node_version="$(node --version)"
 npm_version="$(npm --version)"
 tsc_version="$(tsc --version)"
 codex_version="$(codex --version)"
 go_version="$(go version)"
 java_version="$(java -version 2>&1 | head -n 1)"
+rustc_version="$(rustc --version)"
+cargo_version="$(cargo --version)"
+rustup show active-toolchain >/dev/null
 
-printf '%s\n' "${node_version}" "npm ${npm_version}" "${tsc_version}" "${codex_version}" "${go_version}" "${java_version}"
+printf '%s\n' \
+  "${node_version}" \
+  "npm ${npm_version}" \
+  "${tsc_version}" \
+  "${codex_version}" \
+  "${go_version}" \
+  "${java_version}" \
+  "${rustc_version}" \
+  "${cargo_version}"
 python3 --version
 python3 -m pip --version
 python3 -m venv --help >/dev/null
-rustc --version
-cargo --version
 git --version
 git lfs version
 gcc --version
@@ -70,7 +130,6 @@ codex \
   -c "permissions.agent.filesystem={\"/tmp\"=\"deny\",\"${smoke_root}\"=\"write\"}" \
   -c 'permissions.agent.network.enabled=true' \
   exec --cd "${smoke_root}" --help >/dev/null
-
 
 codex \
   --ask-for-approval never \

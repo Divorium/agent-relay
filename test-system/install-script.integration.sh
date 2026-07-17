@@ -20,6 +20,11 @@ CONFIG_LOG="${ROOT}/config.log"
 AUTH_STATE="${ROOT}/codex-authenticated"
 TRANSFORMED_INSTALL="${ROOT}/install-under-test.sh"
 ADMIN_HOME="${ROOT}/admin-home"
+FAKE_JAVA_HOME="${ROOT}/opt-java-openjdk"
+FAKE_GO_ROOT="${ROOT}/usr-local-go"
+FAKE_RUST_CARGO_HOME="${ROOT}/opt-rust-cargo"
+FAKE_RUSTUP_HOME="${ROOT}/opt-rust-rustup"
+FAKE_SYSTEM_PATH="${FAKE_BIN}:/usr/local/bin:/usr/bin:/bin"
 
 mkdir -p "${SOURCE_ROOT}" "${FAKE_BIN}" "${SERVICE_ROOT}" "${NEEDRESTART_ROOT}" "${ADMIN_HOME}"
 rsync -a --exclude=.git --exclude=node_modules --exclude=dist ./ "${SOURCE_ROOT}/"
@@ -27,8 +32,34 @@ git init --initial-branch=main "${SOURCE_ROOT}" >/dev/null
 : > "${USERS_STATE}"
 : > "${COMMAND_LOG}"
 
+FAKE_JAVA_HOME="${FAKE_JAVA_HOME}" FAKE_GO_ROOT="${FAKE_GO_ROOT}" \
+FAKE_RUST_CARGO_HOME="${FAKE_RUST_CARGO_HOME}" FAKE_RUSTUP_HOME="${FAKE_RUSTUP_HOME}" \
+FAKE_SYSTEM_PATH="${FAKE_SYSTEM_PATH}" \
+python3 - "${SOURCE_ROOT}/scripts/toolchain-environment.sh" <<'PY'
+import json
+import os
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+replacements = {
+    "TOOLCHAIN_JAVA_HOME=/opt/java/openjdk": "TOOLCHAIN_JAVA_HOME=" + json.dumps(os.environ["FAKE_JAVA_HOME"]),
+    "TOOLCHAIN_GO_ROOT=/usr/local/go": "TOOLCHAIN_GO_ROOT=" + json.dumps(os.environ["FAKE_GO_ROOT"]),
+    "TOOLCHAIN_RUST_CARGO_HOME=/opt/rust/cargo": "TOOLCHAIN_RUST_CARGO_HOME=" + json.dumps(os.environ["FAKE_RUST_CARGO_HOME"]),
+    "TOOLCHAIN_RUSTUP_HOME=/opt/rust/rustup": "TOOLCHAIN_RUSTUP_HOME=" + json.dumps(os.environ["FAKE_RUSTUP_HOME"]),
+    "TOOLCHAIN_SYSTEM_PATH=/usr/local/bin:/usr/bin:/bin": "TOOLCHAIN_SYSTEM_PATH=" + json.dumps(os.environ["FAKE_SYSTEM_PATH"]),
+}
+for old, new in replacements.items():
+    if old not in source:
+        raise SystemExit(f"missing profile assignment: {old}")
+    source = source.replace(old, new)
+path.write_text(source)
+PY
+
 BASE_ROOT="${BASE_ROOT}" CONFIG_ROOT="${CONFIG_ROOT}" SOURCE_ROOT="${SOURCE_ROOT}" \
 SERVICE_ROOT="${SERVICE_ROOT}" NEEDRESTART_ROOT="${NEEDRESTART_ROOT}" FAKE_CODEX="${FAKE_CODEX}" \
+FAKE_JAVA_HOME="${FAKE_JAVA_HOME}" FAKE_GO_ROOT="${FAKE_GO_ROOT}" \
+FAKE_RUST_CARGO_HOME="${FAKE_RUST_CARGO_HOME}" FAKE_RUSTUP_HOME="${FAKE_RUSTUP_HOME}" \
 python3 - "${SOURCE_ROOT}/install.sh" "${TRANSFORMED_INSTALL}" <<'PY'
 import json
 import os
@@ -37,7 +68,14 @@ import sys
 source = pathlib.Path(sys.argv[1]).read_text()
 start = source.index("sudo apt-get update\n")
 end = source.index('ensure_locked_user "${RUNNER_USER}"', start)
-source = source[:start] + ":\n\n" + source[end:]
+profile_assertions = f'''[[ "${{TOOLCHAIN_JAVA_HOME}}" == {json.dumps(os.environ["FAKE_JAVA_HOME"])} ]]
+[[ "${{TOOLCHAIN_GO_ROOT}}" == {json.dumps(os.environ["FAKE_GO_ROOT"])} ]]
+[[ "${{TOOLCHAIN_RUST_CARGO_HOME}}" == {json.dumps(os.environ["FAKE_RUST_CARGO_HOME"])} ]]
+[[ "${{TOOLCHAIN_RUSTUP_HOME}}" == {json.dumps(os.environ["FAKE_RUSTUP_HOME"])} ]]
+:
+
+'''
+source = source[:start] + profile_assertions + source[end:]
 replacements = {
     'BASE_ROOT=/srv/github-runner': 'BASE_ROOT=' + json.dumps(os.environ['BASE_ROOT']),
     'CONFIG_ROOT=/etc/agent-relay': 'CONFIG_ROOT=' + json.dumps(os.environ['CONFIG_ROOT']),
@@ -174,6 +212,8 @@ printf 'mock-input\n' | bash "${TRANSFORMED_INSTALL}" > "${ROOT}/install.out" 2>
 for path in agent-relay work runner home build build-home; do
   test -d "${STORAGE_ROOT}/${path}"
 done
+test -f "${SOURCE_ROOT}/scripts/toolchain-environment.sh"
+test ! -L "${SOURCE_ROOT}/scripts/toolchain-environment.sh"
 test -L "${STORAGE_ROOT}/runner/_work"
 test "$(readlink "${STORAGE_ROOT}/runner/_work")" = '../work'
 test -f "${SERVICE_ROOT}/actions.runner.Divorium.gh-runner.service"

@@ -3,14 +3,25 @@ set -euo pipefail
 
 ORGANIZATION=Divorium
 ORGANIZATION_URL=https://github.com/Divorium
+RUNNER_NAME=gh-runner
 RUNNER_VERSION=2.335.1
 RUNNER_SHA256=4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf
 GO_VERSION=1.24.5
 GO_SHA256=10ad9e86233e74c0f6590fe5426895de6bf388964210eac34a6d83f38918ecdc
 TYPESCRIPT_VERSION=5.8.3
 CODEX_VERSION=0.144.4
-INSTALL_ROOT=/opt/agent-relay
-RUNNER_DIR="${HOME:?HOME is required}/.local/share/actions-runner"
+BASE_ROOT=/srv/github-runner
+STORAGE_ROOT=${BASE_ROOT}/storage
+EXPECTED_SOURCE_ROOT=${STORAGE_ROOT}/agent-relay
+WORK_ROOT=${STORAGE_ROOT}/work
+RUNNER_DIR=${BASE_ROOT}/runner
+RUNNER_HOME=${BASE_ROOT}/home
+BUILD_ROOT=${BASE_ROOT}/build
+BUILD_HOME=${BASE_ROOT}/build-home
+RUNNER_USER=github-runner
+BUILD_USER=agent-relay-builder
+SERVICE_NAME=actions.runner.Divorium.gh-runner.service
+CONFIG_ROOT=/etc/agent-relay
 SOURCE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 node_setup=""
@@ -19,11 +30,8 @@ go_archive=""
 rustup_script=""
 runner_archive=""
 wsl_config_temp=""
-stage=""
-backup=""
-install_swap_pending=0
-runner_fresh=0
-registration_fresh=0
+service_temp=""
+config_temp=""
 
 cleanup() {
   rm -f -- \
@@ -32,18 +40,9 @@ cleanup() {
     "${go_archive:-}" \
     "${rustup_script:-}" \
     "${runner_archive:-}" \
-    "${wsl_config_temp:-}"
-
-  if [[ -n "${stage:-}" ]]; then
-    sudo rm -rf -- "${stage}" >/dev/null 2>&1 || true
-  fi
-
-  if (( install_swap_pending == 1 )); then
-    sudo rm -rf -- "${INSTALL_ROOT}" >/dev/null 2>&1 || true
-    if [[ -n "${backup:-}" && -e "${backup}" ]]; then
-      sudo mv -- "${backup}" "${INSTALL_ROOT}" >/dev/null 2>&1 || true
-    fi
-  fi
+    "${wsl_config_temp:-}" \
+    "${service_temp:-}" \
+    "${config_temp:-}"
 }
 trap cleanup EXIT
 
@@ -91,12 +90,95 @@ configure_wsl_systemd() {
   wsl_config_temp=""
 }
 
+ensure_locked_user() {
+  local user="$1"
+  local home="$2"
+  local shell="$3"
+  if ! id -u "${user}" >/dev/null 2>&1; then
+    sudo useradd --system --create-home --home-dir "${home}" --shell "${shell}" "${user}"
+  fi
+  [[ "$(getent passwd "${user}" | cut -d: -f6)" == "${home}" ]] || {
+    echo "${user} has an unexpected home directory" >&2
+    exit 1
+  }
+  sudo passwd --lock "${user}" >/dev/null
+  if getent group sudo | awk -F: -v user="${user}" '$4 ~ "(^|,)" user "(,|$)" { found=1 } END { exit !found }'; then
+    sudo gpasswd --delete "${user}" sudo >/dev/null
+  fi
+  if sudo -u "${user}" -H sudo -n true >/dev/null 2>&1; then
+    echo "${user} must not have passwordless sudo access" >&2
+    exit 1
+  fi
+}
+
+secure_source_checkout() {
+  local owner="$1"
+  local group="$2"
+  local path
+  for path in \
+    install.sh \
+    update.sh \
+    runner/finalize.sh \
+    runner/resolve-pr.mjs \
+    runner/resolve-plan.mjs \
+    runner/resolve-request.mjs \
+    runner/run-codex.mjs \
+    scripts/codex-run \
+    scripts/toolchain-smoke.sh; do
+    if [[ ! -f "${SOURCE_ROOT}/${path}" || -L "${SOURCE_ROOT}/${path}" ]]; then
+      echo "Required source file must be a regular non-symlink file: ${path}" >&2
+      exit 1
+    fi
+  done
+  sudo find -P "${SOURCE_ROOT}" -xdev -exec chown -h "${owner}:${group}" {} +
+  sudo find -P "${SOURCE_ROOT}" -xdev -type d -exec chmod u+rwx,go+rx,go-w {} +
+  sudo find -P "${SOURCE_ROOT}" -xdev -type f -exec chmod a+r,go-w {} +
+  sudo chmod 0755 \
+    "${SOURCE_ROOT}/install.sh" \
+    "${SOURCE_ROOT}/update.sh" \
+    "${SOURCE_ROOT}/runner/finalize.sh" \
+    "${SOURCE_ROOT}/runner/resolve-pr.mjs" \
+    "${SOURCE_ROOT}/runner/resolve-plan.mjs" \
+    "${SOURCE_ROOT}/runner/resolve-request.mjs" \
+    "${SOURCE_ROOT}/runner/run-codex.mjs" \
+    "${SOURCE_ROOT}/scripts/codex-run" \
+    "${SOURCE_ROOT}/scripts/toolchain-smoke.sh"
+}
+
+install_runner_service() {
+  sudo -u "${RUNNER_USER}" cp "${RUNNER_DIR}/bin/runsvc.sh" "${RUNNER_DIR}/runsvc.sh"
+  sudo -u "${RUNNER_USER}" chmod 0755 "${RUNNER_DIR}/runsvc.sh"
+  service_temp="$(mktemp)"
+  cat > "${service_temp}" <<EOF_SERVICE
+[Unit]
+Description=GitHub Actions Runner (${ORGANIZATION}.${RUNNER_NAME})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=${RUNNER_DIR}/runsvc.sh
+User=${RUNNER_USER}
+WorkingDirectory=${RUNNER_DIR}
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=5min
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+EOF_SERVICE
+  sudo install -o root -g root -m 0644 "${service_temp}" "/etc/systemd/system/${SERVICE_NAME}"
+  rm -f -- "${service_temp}"
+  service_temp=""
+}
+
 if (( $# != 0 )); then
   echo "install.sh does not accept arguments" >&2
   exit 1
 fi
 if [[ "$(id -u)" == "0" ]]; then
-  echo "Run install.sh as the normal Debian user, not root" >&2
+  echo "Run install.sh as the normal Debian administrator, not root" >&2
   exit 1
 fi
 if [[ "$(uname -m)" != "x86_64" ]]; then
@@ -112,31 +194,35 @@ if [[ "${ID:-}" != "debian" ]]; then
   echo "This installer requires Debian" >&2
   exit 1
 fi
-command -v sudo >/dev/null || { echo "sudo is required" >&2; exit 1; }
-[[ -d "${HOME}" && -w "${HOME}" ]] || { echo "HOME must be writable" >&2; exit 1; }
-[[ -d "${SOURCE_ROOT}" && -r "${SOURCE_ROOT}/package.json" && -w "${SOURCE_ROOT}" ]] || {
-  echo "The source checkout must be readable and writable by the current user: ${SOURCE_ROOT}" >&2
-  exit 1
-}
-sudo -v
-
-if [[ "$(ps -p 1 -o comm= | tr -d '[:space:]')" != "systemd" ]]; then
-  if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
-    configure_wsl_systemd
-    cat >&2 <<'MESSAGE'
-Enabled systemd in /etc/wsl.conf.
-Run `wsl --shutdown` from Windows, start Debian again, and rerun ./install.sh.
-MESSAGE
-    exit 2
-  fi
-  echo "systemd must run as PID 1" >&2
+if [[ "${SOURCE_ROOT}" != "${EXPECTED_SOURCE_ROOT}" ]]; then
+  echo "The repository must be checked out at ${EXPECTED_SOURCE_ROOT}" >&2
   exit 1
 fi
-command -v systemctl >/dev/null || { echo "systemctl is required" >&2; exit 1; }
+command -v sudo >/dev/null || { echo "sudo is required" >&2; exit 1; }
+[[ -d "${HOME:?HOME is required}" && -w "${HOME}" ]] || { echo "HOME must be writable" >&2; exit 1; }
+[[ -r "${SOURCE_ROOT}/package.json" && -w "${SOURCE_ROOT}" ]] || {
+  echo "The source checkout must be readable and writable by the administrator: ${SOURCE_ROOT}" >&2
+  exit 1
+}
+
+admin_user="$(id -un)"
+admin_group="$(id -gn)"
+sudo -v
+
+systemd_active=1
+if [[ "$(ps -p 1 -o comm= | tr -d '[:space:]')" != "systemd" ]]; then
+  systemd_active=0
+  if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
+    configure_wsl_systemd
+  else
+    echo "systemd must run as PID 1" >&2
+    exit 1
+  fi
+fi
 
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
-  ca-certificates curl wget jq git git-lfs gnupg \
+  ca-certificates curl wget jq git git-lfs gnupg sudo \
   python3 python3-pip python3-venv \
   build-essential clang cmake pkg-config \
   zip unzip xz-utils zstd rsync file findutils diffutils
@@ -191,48 +277,14 @@ sudo /usr/bin/npm install --global --prefix /usr/local \
 [[ -x /usr/local/bin/tsc ]] || { echo "TypeScript was not installed at /usr/local/bin/tsc" >&2; exit 1; }
 sudo git lfs install --system
 
-export PATH="/opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin"
-cd "${SOURCE_ROOT}"
-npm ci
-npm run check
+ensure_locked_user "${RUNNER_USER}" "${RUNNER_HOME}" /bin/bash
+ensure_locked_user "${BUILD_USER}" "${BUILD_HOME}" /usr/sbin/nologin
 
-export EXPECTED_TYPESCRIPT_VERSION="${TYPESCRIPT_VERSION}"
-export EXPECTED_CODEX_VERSION="${CODEX_VERSION}"
-export EXPECTED_GO_VERSION="${GO_VERSION}"
-"${SOURCE_ROOT}/scripts/toolchain-smoke.sh"
-
-stage="/opt/.agent-relay.stage.$$"
-backup="/opt/.agent-relay.previous.$$"
-sudo rm -rf -- "${stage}" "${backup}"
-sudo install -d -m 0755 "${stage}"
-sudo rsync -a \
-  package.json package-lock.json tsconfig.json dist runner scripts types \
-  "${stage}/"
-sudo chown -R root:root "${stage}"
-sudo find "${stage}" -type d -exec chmod 0755 {} +
-sudo find "${stage}" -type f -exec chmod 0644 {} +
-sudo chmod 0755 "${stage}/runner/resolve-pr.mjs" "${stage}/runner/finalize.sh" \
-  "${stage}/scripts/codex-run" "${stage}/scripts/toolchain-smoke.sh"
-
-install_swap_pending=1
-if [[ -e "${INSTALL_ROOT}" ]]; then
-  sudo mv -- "${INSTALL_ROOT}" "${backup}"
-fi
-if ! sudo mv -- "${stage}" "${INSTALL_ROOT}"; then
-  exit 1
-fi
-stage=""
-if ! sudo install -o root -g root -m 0755 "${INSTALL_ROOT}/scripts/codex-run" /usr/local/bin/codex-run; then
-  exit 1
-fi
-install_swap_pending=0
-sudo rm -rf -- "${backup}"
-backup=""
-
-if ! codex login status >/dev/null 2>&1; then
-  codex login
-fi
-codex login status >/dev/null
+sudo install -d -o root -g root -m 0755 "${BASE_ROOT}" "${STORAGE_ROOT}"
+sudo install -d -o "${RUNNER_USER}" -g "${RUNNER_USER}" -m 0700 "${RUNNER_HOME}" "${RUNNER_DIR}" "${WORK_ROOT}"
+sudo install -d -o "${BUILD_USER}" -g "${BUILD_USER}" -m 0700 "${BUILD_ROOT}" "${BUILD_HOME}"
+git -C "${SOURCE_ROOT}" config core.fileMode false
+secure_source_checkout "${admin_user}" "${admin_group}"
 
 if [[ -f "${RUNNER_DIR}/.runner" && ! -x "${RUNNER_DIR}/bin/Runner.Listener" ]]; then
   echo "The existing runner registration is incomplete: ${RUNNER_DIR}" >&2
@@ -240,15 +292,24 @@ if [[ -f "${RUNNER_DIR}/.runner" && ! -x "${RUNNER_DIR}/bin/Runner.Listener" ]];
 fi
 
 if [[ ! -x "${RUNNER_DIR}/bin/Runner.Listener" ]]; then
-  mkdir -p "${RUNNER_DIR}"
   runner_archive="$(mktemp)"
   curl -fsSL \
     "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
     -o "${runner_archive}"
   printf '%s  %s\n' "${RUNNER_SHA256}" "${runner_archive}" | sha256sum -c -
-  tar -C "${RUNNER_DIR}" -xzf "${runner_archive}"
-  runner_fresh=1
+  sudo -u "${RUNNER_USER}" tar -C "${RUNNER_DIR}" -xzf "${runner_archive}"
   sudo "${RUNNER_DIR}/bin/installdependencies.sh"
+fi
+if [[ -L "${RUNNER_DIR}/_work" ]]; then
+  [[ "$(readlink "${RUNNER_DIR}/_work")" == ../storage/work ]] || {
+    echo "The runner work link points to an unexpected location" >&2
+    exit 1
+  }
+elif [[ -e "${RUNNER_DIR}/_work" ]]; then
+  echo "The runner work path must be the managed symlink: ${RUNNER_DIR}/_work" >&2
+  exit 1
+else
+  sudo -u "${RUNNER_USER}" ln -s ../storage/work "${RUNNER_DIR}/_work"
 fi
 
 if [[ ! -f "${RUNNER_DIR}/.runner" ]]; then
@@ -271,51 +332,39 @@ if [[ ! -f "${RUNNER_DIR}/.runner" ]]; then
     exit 1
   fi
   unset github_token
-
-  if ! registration_token="$(jq -er '.token' <<< "${registration_response}")"; then
-    unset registration_response
-    echo "GitHub returned an invalid runner registration response" >&2
-    exit 1
-  fi
+  registration_token="$(jq -er '.token' <<< "${registration_response}")"
   unset registration_response
-
-  set +e
-  (
-    cd "${RUNNER_DIR}"
-    ./config.sh --unattended --replace \
-      --url "${ORGANIZATION_URL}" \
-      --token "${registration_token}" \
-      --name gh-runner \
-      --work _work
-  )
-  registration_status=$?
-  set -e
+  sudo -u "${RUNNER_USER}" -H bash -c '
+    set -euo pipefail
+    cd "$1"
+    ./config.sh --unattended --replace --url "$2" --token "$3" --name "$4" --work _work
+  ' -- "${RUNNER_DIR}" "${ORGANIZATION_URL}" "${registration_token}" "${RUNNER_NAME}"
   unset registration_token
-  if (( registration_status != 0 )); then
-    echo "GitHub runner registration failed" >&2
-    exit "${registration_status}"
-  fi
-  registration_fresh=1
 fi
 
-sudo install -d -m 0755 /etc/needrestart/conf.d
+install_runner_service
+sudo install -d -m 0755 /etc/needrestart/conf.d "${CONFIG_ROOT}"
 printf '%s\n' '$nrconf{override_rc}{qr(^actions\.runner\..+\.service$)} = 0;' \
   | sudo tee /etc/needrestart/conf.d/actions_runner_services.conf >/dev/null
-cd "${RUNNER_DIR}"
-if [[ ! -f .service ]]; then
-  if (( runner_fresh != 1 && registration_fresh != 1 )); then
-    echo "The existing runner installation has no service registration: ${RUNNER_DIR}" >&2
-    exit 1
-  fi
-  sudo ./svc.sh install "$(id -un)"
-fi
-service_name="$(tr -d '\r\n' < .service)"
-if [[ ! "${service_name}" =~ ^actions\.runner\.[A-Za-z0-9_.@-]+\.service$ ]]; then
-  echo "The runner service name is invalid" >&2
-  exit 1
-fi
-sudo systemctl start "${service_name}"
-sudo systemctl is-active --quiet "${service_name}"
-sudo systemctl --no-pager --full status "${service_name}"
+config_temp="$(mktemp)"
+printf '%s\n' "${admin_user}" > "${config_temp}"
+sudo install -o root -g root -m 0644 "${config_temp}" "${CONFIG_ROOT}/administrator"
+rm -f -- "${config_temp}"
+config_temp=""
 
-printf 'Native runner installation is ready: %s (%s)\n' gh-runner "${ORGANIZATION_URL}"
+if ! sudo -u "${RUNNER_USER}" -H /usr/local/bin/codex login status >/dev/null 2>&1; then
+  sudo -u "${RUNNER_USER}" -H /usr/local/bin/codex login
+fi
+sudo -u "${RUNNER_USER}" -H /usr/local/bin/codex login status >/dev/null
+
+if (( systemd_active == 1 )); then
+  sudo systemctl daemon-reload
+  printf 'Installation completed. Run `./update.sh` to validate and activate the runner.\n'
+else
+  cat >&2 <<'MESSAGE'
+Installation completed and systemd was enabled in /etc/wsl.conf.
+Run `wsl --shutdown` from Windows, start Debian again, and then run `./update.sh`.
+MESSAGE
+fi
+sudo -k
+printf 'Native runner installation is prepared: %s (%s)\n' "${RUNNER_NAME}" "${ORGANIZATION_URL}"

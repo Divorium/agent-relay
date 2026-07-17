@@ -8,16 +8,20 @@ There is no Relay HTTP service, queue, polling loop, persisted job state, Docker
 
 ## Fixed paths
 
+All Agent Relay and GitHub Runner data is grouped below the single administrator-controlled root `/srv/github-runner/storage`. This is an explicit architecture decision shared by the ExecPlan, README files, installer, updater, and tests.
+
 ```text
 /srv/github-runner/storage/agent-relay  administrator-owned source and compiled runtime
 /srv/github-runner/storage/work         github-runner-owned workflow workspaces
-/srv/github-runner/runner               official GitHub Actions runner
-/srv/github-runner/home                 github-runner home and Codex authentication
-/srv/github-runner/build                temporary isolated builds
-/srv/github-runner/build-home           builder cache and home
+/srv/github-runner/storage/runner       official GitHub Actions runner
+/srv/github-runner/storage/home         github-runner home and Codex authentication
+/srv/github-runner/storage/build        temporary isolated builds
+/srv/github-runner/storage/build-home   builder cache and home
 ```
 
-The runner is configured with work name `_work`. `/srv/github-runner/runner/_work` is a symlink to `../storage/work`, so GitHub's official runner resolves its normal relative work path to `/srv/github-runner/storage/work`.
+The runner is configured with work name `_work`. `/srv/github-runner/storage/runner/_work` is a symlink to `../work`, so GitHub's official runner resolves its normal relative work path to `/srv/github-runner/storage/work`.
+
+The six child directories are separated by responsibility and ownership: source/runtime, workflow workspaces, runner binaries and registration state, runner home and Codex authentication, disposable build staging, and builder home/caches.
 
 Every workflow checkout selected below `/srv/github-runner/storage/work` is treated as a trusted Codex project. The runtime uses the canonical exact checkout path rather than a wildcard, so the first invocation in each new workspace is non-interactive and project-local Codex configuration, hooks, and execution policies are enabled for that checkout.
 
@@ -72,7 +76,7 @@ No runner re-registration, PAT prompt, Codex re-login, or WSL shutdown is expect
 - install the pinned system toolchains and build dependencies;
 - create the locked `github-runner` and `agent-relay-builder` accounts and remove them from the `sudo` group if necessary;
 - verify that neither service account can run `sudo -n true`;
-- prepare the fixed source, work, runner, home, and build directories with the required ownership;
+- prepare all six fixed directories below `/srv/github-runner/storage` with the required ownership;
 - reject trusted entrypoints that are symlinks and update ownership without dereferencing repository symlinks;
 - download and SHA-256 verify the official GitHub Actions runner archive;
 - request one hidden organization PAT only when registration is absent;
@@ -98,7 +102,7 @@ Pinned downloads and packages are:
 2. require systemd, a clean Git checkout, and service accounts without passwordless sudo;
 3. stop the runner when it is active;
 4. record the current Git revision, run `git pull --ff-only` with repository hooks disabled, and re-execute `update.sh` from the pulled revision;
-5. create an isolated build workspace owned by `agent-relay-builder`;
+5. create an isolated build workspace below `/srv/github-runner/storage/build` owned by `agent-relay-builder` and use `/srv/github-runner/storage/build-home` as its persistent home/cache root;
 6. run `npm ci`, TypeScript compilation, the full Node test suite, the 100% line/branch/function coverage gates, shell syntax checks, Node script syntax checks, and the Codex/toolchain smoke test as `agent-relay-builder`;
 7. leave the active `dist` untouched until all validation succeeds;
 8. atomically move the staged `dist` into the source checkout while retaining the previous runtime;
@@ -149,7 +153,8 @@ The launcher and runtime:
 - exact canonical project trust verification before `exec`, including quoted paths and a mock launcher process;
 - installed Codex CLI parsing of the inline trusted-project profile in the toolchain smoke test;
 - shell and Node-script syntax validation;
-- a system-level mocked `install.sh` execution;
+- fixed-layout consistency checks across the ExecPlan, README files, installer, updater, and tests;
+- a system-level mocked `install.sh` execution that verifies all six storage directories and the `runner/_work -> ../work` symlink;
 - a system-level mocked `update.sh` execution covering successful activation, pre-swap build failure rollback, and post-swap service-start failure rollback.
 
 The full-flow integration test creates a real local Git remote and pull-request branch, serves a mock GitHub pull-request API, resolves the request and active plan, checks out the exact revision, invokes a mock Codex executable through the real runtime, finalizes the change, pushes it, and verifies the resulting remote commit.

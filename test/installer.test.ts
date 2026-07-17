@@ -88,7 +88,7 @@ test("normal update pulls once and runs all project code as the no-sudo builder"
   const { update } = await scripts();
   const stop = update.indexOf('sudo systemctl stop "${SERVICE_NAME}"');
   const pull = update.indexOf("pull --ff-only", stop);
-  const npm = update.indexOf('sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" npm ci', pull);
+  const npm = update.indexOf('sudo -u "${BUILD_USER}" -H env HOME="${BUILD_HOME}" PATH="${BUILDER_PATH}" npm ci', pull);
   const compile = update.indexOf('"${build_workspace}/node_modules/.bin/tsc"', npm);
   const tests = update.indexOf("--test-coverage-lines=100", compile);
   assert.ok(stop >= 0 && pull > stop && npm > pull && compile > npm && tests > compile);
@@ -98,7 +98,7 @@ test("normal update pulls once and runs all project code as the no-sudo builder"
   assert.match(update, /exec \/bin\/bash "\$\{SOURCE_ROOT\}\/update\.sh"/);
   assert.match(update, /config core\.fileMode false/);
   assert.match(update, /systemctl enable "\$\{SERVICE_NAME\}"/);
-  assert.match(update, /sudo -u "\$\{BUILD_USER\}" -H env HOME="\$\{BUILD_HOME\}" bash -n/);
+  assert.match(update, /sudo -u "\$\{BUILD_USER\}" -H env HOME="\$\{BUILD_HOME\}" PATH="\$\{BUILDER_PATH\}" bash -n/);
   assert.doesNotMatch(update, /sudo npm|sudo node --test|sudo .*tsc/);
 });
 

@@ -46,7 +46,7 @@ test("executor exposes only native launcher context", () => {
   assert.ok(filesystem);
   assert.match(filesystem, /"\/home\/user"="deny"/);
   assert.match(filesystem, /"\/opt\/agent-relay"="deny"/);
-  assert.match(filesystem, /"\/opt\/rust"="deny"/);
+  assert.match(filesystem, /"\/opt\/rust"="read"/);
   assert.match(filesystem, /"\/runner\/_work"="deny"/);
   assert.match(filesystem, /"\/runner\/_work\/repository\/repository"="write"/);
   assert.match(filesystem, /"\/runner\/_work\/repository\/repository\/\.git"="read"/);

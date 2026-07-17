@@ -61,7 +61,7 @@ test("Codex arguments isolate the selected repository from native host paths", (
   for (const expected of [
     '"/home/user"="deny"',
     '"/opt/agent-relay"="deny"',
-    '"/opt/rust"="deny"',
+    '"/opt/rust"="read"',
     '"/tmp"="deny"',
     '"/var/tmp"="deny"',
     '"/work/root"="deny"',

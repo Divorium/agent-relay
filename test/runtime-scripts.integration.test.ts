@@ -25,30 +25,44 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function createFakeCommands(directory: string, names: string[]): Promise<void> {
-  await mkdir(directory, { recursive: true });
-  for (const name of names) {
-    const path = join(directory, name);
-    let output = `${name} test-version`;
-    if (name === "node") output = "v22.20.0";
-    if (name === "tsc") output = "Version 5.8.3";
-    if (name === "codex") output = "codex-cli 0.144.4";
-    if (name === "go") output = "go version go1.24.5 linux/amd64";
-    if (name === "java") output = 'openjdk version "21.0.1"';
-    const source = name === "head"
-      ? `#!/bin/bash
+function fakeCommandSource(name: string, output: string): string {
+  if (name === "head") {
+    return `#!/bin/bash
 set -euo pipefail
 printf '%s %s\n' "${name}" "$*" >> "\${FAKE_COMMAND_LOG:?}"
 exec /usr/bin/head "$@"
-`
-      : `#!/bin/bash
+`;
+  }
+  return `#!/bin/bash
 set -euo pipefail
 printf '%s %s\n' "${name}" "$*" >> "\${FAKE_COMMAND_LOG:?}"
 printf '%s\n' '${output}'
 `;
-    await writeFile(path, source, { mode: 0o700 });
-    await chmod(path, 0o700);
-  }
+}
+
+async function createFakeCommand(directory: string, name: string, output?: string): Promise<void> {
+  await mkdir(directory, { recursive: true });
+  const outputs: Record<string, string> = {
+    node: "v22.20.0",
+    tsc: "Version 5.8.3",
+    codex: "codex-cli 0.144.4",
+    go: "go version go1.24.5 linux/amd64",
+    java: 'openjdk version "21.0.1"',
+    rustc: "rustc 1.90.0 (mock)",
+    cargo: "cargo 1.90.0 (mock)",
+    rustup: "stable-x86_64-unknown-linux-gnu (default)",
+  };
+  const path = join(directory, name);
+  await writeFile(path, fakeCommandSource(name, output ?? outputs[name] ?? `${name} test-version`), { mode: 0o700 });
+  await chmod(path, 0o700);
+}
+
+async function copyToolchainProfile(targetDirectory: string): Promise<void> {
+  await writeFile(
+    join(targetDirectory, "toolchain-environment.sh"),
+    await readFile(join(process.cwd(), "scripts", "toolchain-environment.sh"), "utf8"),
+    { mode: 0o600 },
+  );
 }
 
 test("codex-run preserves real state and routes tool state into one private runtime", async () => {
@@ -76,6 +90,11 @@ set -euo pipefail
 {
   printf 'HOME=%s\n' "\${HOME:-}"
   printf 'USER=%s\n' "\${USER:-}"
+  printf 'LOGNAME=%s\n' "\${LOGNAME:-}"
+  printf 'SHELL=%s\n' "\${SHELL:-}"
+  printf 'LANG=%s\n' "\${LANG:-}"
+  printf 'LC_ALL=%s\n' "\${LC_ALL:-}"
+  printf 'JAVA_HOME=%s\n' "\${JAVA_HOME:-}"
   printf 'CARGO_HOME=%s\n' "\${CARGO_HOME:-}"
   printf 'RUSTUP_HOME=%s\n' "\${RUSTUP_HOME:-}"
   printf 'GOPATH=%s\n' "\${GOPATH:-}"
@@ -88,12 +107,16 @@ set -euo pipefail
   printf 'XDG_DATA_HOME=%s\n' "\${XDG_DATA_HOME:-}"
   printf 'GIT_CONFIG_GLOBAL=%s\n' "\${GIT_CONFIG_GLOBAL:-}"
   printf 'TMPDIR=%s\n' "\${TMPDIR:-}"
+  printf 'TMP=%s\n' "\${TMP:-}"
+  printf 'TEMP=%s\n' "\${TEMP:-}"
+  printf 'PATH=%s\n' "\${PATH:-}"
   printf 'GIT_OPTIONAL_LOCKS=%s\n' "\${GIT_OPTIONAL_LOCKS:-}"
   printf 'LEAK=%s\n' "\${LEAK_ME:-}"
   printf 'ARGS=%s\n' "$*"
 } > "${invocationLog}"
 `, { mode: 0o700 });
   await chmod(fakeCodex, 0o700);
+  await copyToolchainProfile(root);
 
   const launcherSource = (await readFile(join(process.cwd(), "scripts", "codex-run"), "utf8"))
     .replace("/usr/local/bin/codex", fakeCodex);
@@ -120,6 +143,12 @@ set -euo pipefail
 
     const invocation = await readFile(invocationLog, "utf8");
     assert.match(invocation, new RegExp(`HOME=${escapeRegExp(home)}`));
+    assert.match(invocation, new RegExp(`USER=${escapeRegExp(process.env.USER ?? "")}`));
+    assert.match(invocation, /LOGNAME=.+/);
+    assert.match(invocation, /SHELL=\/bin\/bash/);
+    assert.match(invocation, /LANG=C\.UTF-8/);
+    assert.match(invocation, /LC_ALL=C\.UTF-8/);
+    assert.match(invocation, /JAVA_HOME=\/opt\/java\/openjdk/);
     assert.match(invocation, /CARGO_HOME=.*\/cargo/);
     assert.match(invocation, /RUSTUP_HOME=\/opt\/rust\/rustup/);
     assert.match(invocation, /GOPATH=.*\/go/);
@@ -132,6 +161,9 @@ set -euo pipefail
     assert.match(invocation, /XDG_DATA_HOME=.*\/data/);
     assert.match(invocation, /GIT_CONFIG_GLOBAL=\/dev\/null/);
     assert.match(invocation, /TMPDIR=.*\/tmp/);
+    assert.match(invocation, /TMP=.*\/tmp/);
+    assert.match(invocation, /TEMP=.*\/tmp/);
+    assert.match(invocation, /PATH=\/opt\/java\/openjdk\/bin:\/usr\/local\/go\/bin:\/opt\/rust\/cargo\/bin:\/usr\/local\/bin:\/usr\/bin:\/bin/);
     assert.match(invocation, /GIT_OPTIONAL_LOCKS=0/);
     assert.match(invocation, /LEAK=\n/);
     assert.match(invocation, /ARGS=--model test-model/);
@@ -150,6 +182,7 @@ test("codex-run rejects missing authentication before launching Codex", async ()
   await mkdir(home, { recursive: true });
   await writeFile(fakeCodex, `#!/bin/bash\nprintf executed > "${marker}"\n`, { mode: 0o700 });
   await chmod(fakeCodex, 0o700);
+  await copyToolchainProfile(root);
   await writeFile(
     launcher,
     (await readFile(join(process.cwd(), "scripts", "codex-run"), "utf8")).replace("/usr/local/bin/codex", fakeCodex),
@@ -170,37 +203,93 @@ test("codex-run rejects missing authentication before launching Codex", async ()
   }
 });
 
-test("toolchain smoke validates retained pins and the Codex permission profile", async () => {
+test("toolchain smoke validates retained pins and the complete environment profile", async () => {
   const root = join(tmpdir(), `agent-relay-toolchain-${process.pid}-${Date.now()}`);
+  const scripts = join(root, "scripts");
   const bin = join(root, "bin");
+  const javaHome = join(root, "java");
+  const goRoot = join(root, "go-root");
+  const rustCargoHome = join(root, "rust-cargo");
+  const rustupHome = join(root, "rustup");
+  const stateRoot = join(root, "state");
+  const home = join(root, "home");
   const log = join(root, "commands.log");
-  const script = join(process.cwd(), "scripts", "toolchain-smoke.sh");
-  const commands = [
-    "node", "npm", "tsc", "python3", "java", "rustc", "cargo", "go", "git", "gcc", "g++", "clang",
-    "make", "cmake", "pkg-config", "bash", "curl", "wget", "jq", "zip", "unzip", "tar", "gzip",
-    "xz", "zstd", "rsync", "file", "find", "diff", "codex", "head", "ssh", "dotnet",
+  const stateDirectories = ["cargo", "go", "go-cache", "gradle", "npm", "pip", "cache", "config", "data", "tmp"];
+  const generalCommands = [
+    "node", "npm", "tsc", "python3", "git", "gcc", "g++", "clang", "make", "cmake", "pkg-config",
+    "bash", "curl", "wget", "jq", "zip", "unzip", "tar", "gzip", "xz", "zstd", "rsync", "file",
+    "find", "diff", "codex", "head", "ssh", "dotnet",
   ];
-  await createFakeCommands(bin, commands);
+
+  await mkdir(scripts, { recursive: true });
+  await mkdir(home, { recursive: true });
+  await mkdir(rustupHome, { recursive: true });
+  for (const stateDirectory of stateDirectories) await mkdir(join(stateRoot, stateDirectory), { recursive: true });
+  for (const command of generalCommands) await createFakeCommand(bin, command);
+  await createFakeCommand(join(javaHome, "bin"), "java");
+  await createFakeCommand(join(goRoot, "bin"), "go");
+  await createFakeCommand(join(rustCargoHome, "bin"), "rustc");
+  await createFakeCommand(join(rustCargoHome, "bin"), "cargo");
+  await createFakeCommand(join(rustCargoHome, "bin"), "rustup");
   await writeFile(log, "");
 
+  const profile = (await readFile(join(process.cwd(), "scripts", "toolchain-environment.sh"), "utf8"))
+    .replace("TOOLCHAIN_JAVA_HOME=/opt/java/openjdk", `TOOLCHAIN_JAVA_HOME=${javaHome}`)
+    .replace("TOOLCHAIN_GO_ROOT=/usr/local/go", `TOOLCHAIN_GO_ROOT=${goRoot}`)
+    .replace("TOOLCHAIN_RUST_CARGO_HOME=/opt/rust/cargo", `TOOLCHAIN_RUST_CARGO_HOME=${rustCargoHome}`)
+    .replace("TOOLCHAIN_RUSTUP_HOME=/opt/rust/rustup", `TOOLCHAIN_RUSTUP_HOME=${rustupHome}`)
+    .replace("TOOLCHAIN_SYSTEM_PATH=/usr/local/bin:/usr/bin:/bin", `TOOLCHAIN_SYSTEM_PATH=${bin}:/usr/bin:/bin`);
+  await writeFile(join(scripts, "toolchain-environment.sh"), profile, { mode: 0o600 });
+  await writeFile(
+    join(scripts, "toolchain-smoke.sh"),
+    await readFile(join(process.cwd(), "scripts", "toolchain-smoke.sh"), "utf8"),
+    { mode: 0o700 },
+  );
+
+  const environment = {
+    HOME: home,
+    USER: "test-user",
+    LOGNAME: "test-user",
+    SHELL: "/bin/bash",
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+    JAVA_HOME: javaHome,
+    RUSTUP_HOME: rustupHome,
+    CARGO_HOME: join(stateRoot, "cargo"),
+    GOPATH: join(stateRoot, "go"),
+    GOCACHE: join(stateRoot, "go-cache"),
+    GRADLE_USER_HOME: join(stateRoot, "gradle"),
+    NPM_CONFIG_CACHE: join(stateRoot, "npm"),
+    PIP_CACHE_DIR: join(stateRoot, "pip"),
+    XDG_CACHE_HOME: join(stateRoot, "cache"),
+    XDG_CONFIG_HOME: join(stateRoot, "config"),
+    XDG_DATA_HOME: join(stateRoot, "data"),
+    TMPDIR: join(stateRoot, "tmp"),
+    TMP: join(stateRoot, "tmp"),
+    TEMP: join(stateRoot, "tmp"),
+    PATH: `${javaHome}/bin:${goRoot}/bin:${rustCargoHome}/bin:${bin}:/usr/bin:/bin`,
+    EXPECTED_TYPESCRIPT_VERSION: "5.8.3",
+    EXPECTED_CODEX_VERSION: "0.144.4",
+    EXPECTED_GO_VERSION: "1.24.5",
+    EXPECTED_TOOLCHAIN_STATE_ROOT: stateRoot,
+    FAKE_COMMAND_LOG: log,
+  };
+
   try {
-    const result = await runProcess("/bin/bash", [script], {
+    const result = await runProcess("/bin/bash", [join(scripts, "toolchain-smoke.sh")], {
       cwd: root,
-      env: {
-        PATH: bin,
-        EXPECTED_TYPESCRIPT_VERSION: "5.8.3",
-        EXPECTED_CODEX_VERSION: "0.144.4",
-        EXPECTED_GO_VERSION: "1.24.5",
-        FAKE_COMMAND_LOG: log,
-      },
+      env: environment,
       stdio: ["ignore", "pipe", "pipe"],
     });
     assert.equal(result.status, 0, result.stderr);
     const invocations = await readFile(log, "utf8");
-    for (const command of commands.filter((name) => !["ssh", "dotnet"].includes(name))) {
+    const expectedCommands = [...generalCommands, "java", "go", "rustc", "cargo", "rustup"]
+      .filter((name) => !["ssh", "dotnet"].includes(name));
+    for (const command of expectedCommands) {
       assert.match(invocations, new RegExp(`^${escapeRegExp(command)} `, "m"));
     }
     assert.doesNotMatch(invocations, /^ssh |^dotnet /m);
+    assert.match(invocations, /^rustup show active-toolchain$/m);
     assert.match(invocations, /^codex --ask-for-approval never exec --help$/m);
 
     const profileInvocation = invocations.split("\n").find((line) => line.includes("permissions.agent.filesystem="));

@@ -14,10 +14,14 @@ SEED_ROOT="${ROOT}/seed"
 RELEASE_ROOT="${ROOT}/release"
 REMOTE_ROOT="${ROOT}/remote.git"
 FAKE_BIN="${ROOT}/bin"
-FAKE_GO_BIN="${ROOT}/usr-local-go-bin"
+FAKE_JAVA_HOME="${ROOT}/opt-java-openjdk"
+FAKE_GO_ROOT="${ROOT}/usr-local-go"
+FAKE_RUST_CARGO_HOME="${ROOT}/opt-rust-cargo"
+FAKE_RUST_BIN="${FAKE_RUST_CARGO_HOME}/bin"
+FAKE_RUSTUP_HOME="${ROOT}/opt-rust-rustup"
 ADMIN_FILE="${ROOT}/administrator"
 LOG_FILE="${ROOT}/commands.log"
-GO_LOG="${ROOT}/go.log"
+TOOLCHAIN_LOG="${ROOT}/toolchain.log"
 SERVICE_STATE="${ROOT}/service.state"
 FAIL_NEXT_START="${ROOT}/fail-next-start"
 FAIL_NEXT_BUILD="${ROOT}/fail-next-build"
@@ -25,12 +29,20 @@ FAST_VALIDATION="${ROOT}/fast-validation"
 REAL_NODE="$(command -v node)"
 ADMIN_HOME="${ROOT}/admin-home"
 AMBIENT_PATH="${FAKE_BIN}:/usr/bin:/bin"
-BUILDER_PATH_FIXTURE="${FAKE_GO_BIN}:${FAKE_BIN}:/usr/local/bin:/usr/bin:/bin"
+FIXTURE_SYSTEM_PATH="${FAKE_BIN}:/usr/local/bin:/usr/bin:/bin"
 
-mkdir -p "${SEED_ROOT}" "${FAKE_BIN}" "${FAKE_GO_BIN}" "${ADMIN_HOME}" "${STORAGE_ROOT}"
+mkdir -p \
+  "${SEED_ROOT}" \
+  "${FAKE_BIN}" \
+  "${FAKE_JAVA_HOME}/bin" \
+  "${FAKE_GO_ROOT}/bin" \
+  "${FAKE_RUST_BIN}" \
+  "${FAKE_RUSTUP_HOME}" \
+  "${ADMIN_HOME}" \
+  "${STORAGE_ROOT}"
 rsync -a --exclude=.git --exclude=node_modules --exclude=dist ./ "${SEED_ROOT}/"
+
 BASE_ROOT="${BASE_ROOT}" ADMIN_FILE="${ADMIN_FILE}" SOURCE_ROOT="${SOURCE_ROOT}" \
-BUILDER_PATH_FIXTURE="${BUILDER_PATH_FIXTURE}" \
 python3 - "${SEED_ROOT}/update.sh" <<'PY'
 import json
 import os
@@ -40,13 +52,34 @@ path = pathlib.Path(sys.argv[1])
 source = path.read_text()
 source = source.replace("BASE_ROOT=/srv/github-runner", f"BASE_ROOT={json.dumps(os.environ['BASE_ROOT'])}")
 source = source.replace("ADMIN_FILE=/etc/agent-relay/administrator", f"ADMIN_FILE={json.dumps(os.environ['ADMIN_FILE'])}")
-source = source.replace(
-    "BUILDER_PATH=/opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin",
-    f"BUILDER_PATH={json.dumps(os.environ['BUILDER_PATH_FIXTURE'])}",
-)
 source = source.replace('SCRIPT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"', f"SCRIPT_ROOT={json.dumps(os.environ['SOURCE_ROOT'])}")
 path.write_text(source)
 PY
+
+FAKE_JAVA_HOME="${FAKE_JAVA_HOME}" FAKE_GO_ROOT="${FAKE_GO_ROOT}" \
+FAKE_RUST_CARGO_HOME="${FAKE_RUST_CARGO_HOME}" FAKE_RUSTUP_HOME="${FAKE_RUSTUP_HOME}" \
+FIXTURE_SYSTEM_PATH="${FIXTURE_SYSTEM_PATH}" \
+python3 - "${SEED_ROOT}/scripts/toolchain-environment.sh" <<'PY'
+import json
+import os
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+replacements = {
+    "TOOLCHAIN_JAVA_HOME=/opt/java/openjdk": "TOOLCHAIN_JAVA_HOME=" + json.dumps(os.environ["FAKE_JAVA_HOME"]),
+    "TOOLCHAIN_GO_ROOT=/usr/local/go": "TOOLCHAIN_GO_ROOT=" + json.dumps(os.environ["FAKE_GO_ROOT"]),
+    "TOOLCHAIN_RUST_CARGO_HOME=/opt/rust/cargo": "TOOLCHAIN_RUST_CARGO_HOME=" + json.dumps(os.environ["FAKE_RUST_CARGO_HOME"]),
+    "TOOLCHAIN_RUSTUP_HOME=/opt/rust/rustup": "TOOLCHAIN_RUSTUP_HOME=" + json.dumps(os.environ["FAKE_RUSTUP_HOME"]),
+    "TOOLCHAIN_SYSTEM_PATH=/usr/local/bin:/usr/bin:/bin": "TOOLCHAIN_SYSTEM_PATH=" + json.dumps(os.environ["FIXTURE_SYSTEM_PATH"]),
+}
+for old, new in replacements.items():
+    if old not in source:
+        raise SystemExit(f"missing profile assignment: {old}")
+    source = source.replace(old, new)
+path.write_text(source)
+PY
+
 git init --initial-branch=main "${SEED_ROOT}" >/dev/null
 git -C "${SEED_ROOT}" add .
 git -C "${SEED_ROOT}" -c user.name='Agent Relay Test' -c user.email=test@example.invalid commit -m initial >/dev/null
@@ -76,7 +109,7 @@ mkdir -p "${SOURCE_ROOT}/dist" "${BUILD_ROOT}" "${BUILD_HOME}"
 printf 'old\n' > "${SOURCE_ROOT}/dist/old-runtime.js"
 printf '%s\n' "$(id -un)" > "${ADMIN_FILE}"
 : > "${LOG_FILE}"
-: > "${GO_LOG}"
+: > "${TOOLCHAIN_LOG}"
 printf 'active\n' > "${SERVICE_STATE}"
 
 cat > "${FAKE_BIN}/ps" <<'EOF_PS'
@@ -144,6 +177,37 @@ case "\${1:-}" in
 esac
 EOF_SUDO
 
+cat > "${FAKE_BIN}/check-toolchain-state" <<EOF_STATE
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "\${JAVA_HOME:-}" == "${FAKE_JAVA_HOME}" ]]
+[[ "\${RUSTUP_HOME:-}" == "${FAKE_RUSTUP_HOME}" ]]
+state_root="\${GOPATH%/go}"
+[[ "\${state_root}" == "${BUILD_ROOT}"/state.* ]]
+checks=(
+  "CARGO_HOME:cargo"
+  "GOPATH:go"
+  "GOCACHE:go-cache"
+  "GRADLE_USER_HOME:gradle"
+  "NPM_CONFIG_CACHE:npm"
+  "PIP_CACHE_DIR:pip"
+  "XDG_CACHE_HOME:cache"
+  "XDG_CONFIG_HOME:config"
+  "XDG_DATA_HOME:data"
+  "TMPDIR:tmp"
+  "TMP:tmp"
+  "TEMP:tmp"
+)
+for check in "\${checks[@]}"; do
+  variable="\${check%%:*}"
+  suffix="\${check#*:}"
+  value="\${!variable:-}"
+  [[ "\${value}" == "\${state_root}/\${suffix}" ]]
+  [[ -d "\${value}" && -w "\${value}" ]]
+done
+printf '%s\n' "\${state_root}" >> "${TOOLCHAIN_LOG}"
+EOF_STATE
+
 cat > "${FAKE_BIN}/node" <<EOF_NODE
 #!/usr/bin/env bash
 if [[ -f "${FAST_VALIDATION}" && "\${1:-}" == '--test' ]]; then exit 0; fi
@@ -154,28 +218,52 @@ cat > "${FAKE_BIN}/codex" <<'EOF_CODEX'
 if [[ "${1:-}" == "--version" ]]; then echo 'codex-cli 0.144.4'; fi
 exit 0
 EOF_CODEX
-cat > "${FAKE_GO_BIN}/go" <<EOF_GO
+cat > "${FAKE_JAVA_HOME}/bin/java" <<EOF_JAVA
 #!/usr/bin/env bash
-printf '%s\n' "\$0" >> "${GO_LOG}"
+"${FAKE_BIN}/check-toolchain-state"
+if [[ "\${1:-}" == '-version' ]]; then echo 'openjdk version "21.0.11" 2026-04-21 LTS' >&2; fi
+EOF_JAVA
+cat > "${FAKE_GO_ROOT}/bin/go" <<EOF_GO
+#!/usr/bin/env bash
+"${FAKE_BIN}/check-toolchain-state"
 echo 'go version go1.24.5 linux/amd64'
 EOF_GO
-cat > "${FAKE_BIN}/rustc" <<'EOF_RUSTC'
+cat > "${FAKE_RUST_BIN}/rustc" <<EOF_RUSTC
 #!/usr/bin/env bash
+"${FAKE_BIN}/check-toolchain-state"
 echo 'rustc 1.90.0 (mock)'
 EOF_RUSTC
-cat > "${FAKE_BIN}/cargo" <<'EOF_CARGO'
+cat > "${FAKE_RUST_BIN}/cargo" <<EOF_CARGO
 #!/usr/bin/env bash
+"${FAKE_BIN}/check-toolchain-state"
 echo 'cargo 1.90.0 (mock)'
 EOF_CARGO
+cat > "${FAKE_RUST_BIN}/rustup" <<EOF_RUSTUP
+#!/usr/bin/env bash
+"${FAKE_BIN}/check-toolchain-state"
+if [[ "\${1:-}" == 'show' && "\${2:-}" == 'active-toolchain' ]]; then
+  echo 'stable-x86_64-unknown-linux-gnu (default)'
+  exit 0
+fi
+exit 0
+EOF_RUSTUP
 cat > "${FAKE_BIN}/git" <<'EOF_GIT'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "lfs" ]]; then echo 'git-lfs/3.7.0 (mock)'; exit 0; fi
 exec /usr/bin/git "$@"
 EOF_GIT
-chmod 0700 "${FAKE_BIN}"/* "${FAKE_GO_BIN}/go"
+chmod 0700 \
+  "${FAKE_BIN}"/* \
+  "${FAKE_JAVA_HOME}/bin/java" \
+  "${FAKE_GO_ROOT}/bin/go" \
+  "${FAKE_RUST_BIN}"/*
 
 if PATH="${AMBIENT_PATH}" command -v go >/dev/null 2>&1; then
   echo 'Ambient update PATH unexpectedly resolves go' >&2
+  exit 1
+fi
+if PATH="${AMBIENT_PATH}" command -v rustc >/dev/null 2>&1; then
+  echo 'Ambient update PATH unexpectedly resolves rustc' >&2
   exit 1
 fi
 
@@ -203,13 +291,29 @@ grep -q 'systemctl enable' "${LOG_FILE}"
 grep -q 'systemctl start' "${LOG_FILE}"
 grep -q 'Agent Relay updated successfully' "${ROOT}/update-success.out"
 grep -q 'go version go1.24.5 linux/amd64' "${ROOT}/update-success.out"
-grep -qx "${FAKE_GO_BIN}/go" "${GO_LOG}"
-grep -Fq "sudo -u agent-relay-builder -H env HOME=${BUILD_HOME} PATH=${BUILDER_PATH_FIXTURE}" "${LOG_FILE}"
-if grep -F 'sudo -u agent-relay-builder -H env ' "${LOG_FILE}" \
-  | grep -v -F "PATH=${BUILDER_PATH_FIXTURE}" >/dev/null; then
-  echo 'A builder command did not receive the deterministic toolchain PATH' >&2
-  exit 1
-fi
+grep -q 'rustc 1.90.0 (mock)' "${ROOT}/update-success.out"
+grep -q 'cargo 1.90.0 (mock)' "${ROOT}/update-success.out"
+test -s "${TOOLCHAIN_LOG}"
+
+mapfile -t builder_lines < <(grep '^sudo -u agent-relay-builder ' "${LOG_FILE}" | grep -v ' sudo -n true$')
+(( ${#builder_lines[@]} > 0 ))
+for builder_line in "${builder_lines[@]}"; do
+  [[ "${builder_line}" == *' -H /usr/bin/env -i '* ]] || {
+    echo "Builder command bypassed the clean toolchain environment: ${builder_line}" >&2
+    exit 1
+  }
+  for binding in \
+    "USER=agent-relay-builder" \
+    "HOME=${BUILD_HOME}" \
+    "JAVA_HOME=${FAKE_JAVA_HOME}" \
+    "RUSTUP_HOME=${FAKE_RUSTUP_HOME}"; do
+    [[ "${builder_line}" == *" ${binding} "* ]] || {
+      echo "Builder command omitted ${binding}: ${builder_line}" >&2
+      exit 1
+    }
+  done
+done
+
 grep -qx reexec "${ROOT}/reexec.marker"
 
 SUCCESSFUL_HEAD="$(git -C "${SOURCE_ROOT}" rev-parse HEAD)"
@@ -228,7 +332,6 @@ test "$(sha256sum "${SOURCE_ROOT}/dist/src/run-codex.js" | cut -d' ' -f1)" = "${
 test ! -e "${SOURCE_ROOT}/release-broken.txt"
 grep -qx active "${SERVICE_STATE}"
 
-rm "${RELEASE_ROOT}/release-broken.txt"
 printf 'release three\n' > "${RELEASE_ROOT}/release-three.txt"
 git -C "${RELEASE_ROOT}" add -A
 git -C "${RELEASE_ROOT}" -c user.name='Agent Relay Test' -c user.email=test@example.invalid commit -m 'release three' >/dev/null

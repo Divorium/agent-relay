@@ -1,134 +1,146 @@
-# Agent Relay Operations
+# Native GitHub Runner Operations
 
-## Configure
+## Source checkout
 
-Copy `.env.example` to `.env` and provide:
+The repository checkout in WSL is:
 
-- a current repository-scoped `RUNNER_TOKEN` when registering the containerized self-hosted runner;
-- the target repository URL;
-- a unique runner name and the `agent-relay` label;
-- a strong Relay bearer token;
-- the absolute host path to Codex `auth.json`;
-- the host UID and GID that own the authentication file and runner workspace.
-
-Configure the same Relay bearer token as the repository Actions secret `AGENT_RELAY_TOKEN`. The Compose runner service does not receive this token; the workflow supplies it only to the client step.
-
-Only `auth.json` is mounted into the Codex home directory, read-only. Do not mount the complete host `~/.codex` directory. The launcher removes all generated agent-home content except `auth.json` before every execution.
-
-## Start
-
-```bash
-docker compose build
-docker compose up -d
-docker compose ps
-docker compose exec agent-relay /app/scripts/toolchain-smoke.sh
-docker compose exec agent-relay /usr/local/bin/codex --version
-docker compose exec agent-relay /usr/local/bin/codex login status
-docker compose exec agent-relay curl -fsS http://localhost:8080/health
+```text
+/srv/github-runner/storage/agent-relay
 ```
 
-Agent Relay and its Codex child use the same non-root `agent` kernel identity. The wrapper validates the effective UID against the UID assigned to `agent`; it does not depend on the display name returned by the base image's passwd database. The GitHub Actions runner remains a separate container and continues to own checkout and publication credentials.
+The installer resolves the source directory from its own location. It does not require the checkout to be under the user's home directory and does not store runtime state in the source checkout.
 
-### One-time volume recreation after the runtime-account migration
+## Install or update
 
-A named volume created by an older image may retain the numeric owner of the former Relay account. The volume mount hides ownership prepared in the current image and can cause `EACCES` under `/var/lib/agent-relay`.
-
-When the Compose volumes are disposable, recreate them once:
+Run the same entrypoint for the first installation and every update:
 
 ```bash
-docker compose down -v
-docker compose up --build -d
+cd /srv/github-runner/storage/agent-relay
+./install.sh
 ```
 
-`down -v` deletes both the Relay state and shared workspace volumes. This is upgrade recovery, not a recurring startup step. The deployment does not use an init container.
+The script installs and validates the toolchain, installs the trusted harness under `/opt/agent-relay`, authenticates Codex when required, installs the official GitHub Actions runner, registers it for the `Divorium` organization, and installs its systemd service.
+
+The installer accepts no arguments and uses no environment file.
+
+### WSL systemd restart
+
+When WSL is detected without systemd running as PID 1, the installer updates `/etc/wsl.conf` and exits without continuing the installation. Run this once from Windows:
+
+```powershell
+wsl --shutdown
+```
+
+Start Debian again and rerun:
+
+```bash
+cd /srv/github-runner/storage/agent-relay
+./install.sh
+```
+
+No manual edit of `/etc/wsl.conf` is required.
+
+### Interactive steps
+
+The installer has only two conditional interactions:
+
+- it invokes `codex login` when the current Debian user is not authenticated;
+- when no runner registration exists, it reads one GitHub token without echo.
+
+For initial organization registration, a classic personal access token needs `admin:org`. A fine-grained token needs the `Self-hosted runners` organization permission with write access. The installer exchanges it for GitHub's short-lived registration token, then removes both values from its shell state. Neither token is written to the repository, installed harness, service configuration, profile, or runner environment.
+
+## Installed layout
+
+```text
+/opt/agent-relay                              trusted root-owned harness
+/usr/local/bin/codex-run                      root-owned Codex launcher
+$HOME/.local/share/actions-runner             official GitHub Actions runner
+$HOME/.local/share/actions-runner/_work       runner workspaces
+$HOME/.codex/auth.json                        current user's Codex authentication
+/opt/rust                                     root-owned Rust toolchain
+/usr/local/go                                 Go toolchain
+```
+
+The source checkout at `/srv/github-runner/storage/agent-relay` is not used as a runner workspace and is not modified by workflow jobs.
+
+## Runner registration
+
+The installer registers one organization runner with:
+
+```text
+URL:  https://github.com/Divorium
+Name: gh-runner
+Work: _work
+```
+
+It does not add custom labels or manage runner groups. Repository access is controlled by the existing organization runner-group policy. Maintained workflows use:
+
+```yaml
+runs-on: [self-hosted]
+```
+
+## Workflow dispatch
+
+The production workflow is `.github/workflows/agent-relay.yml`.
+
+A ready-for-review pull request starts automatically only when its head repository is the same repository. Manual dispatch requires:
+
+- `pr_number`: an open, non-draft pull request number;
+- `plan_path`: a regular, non-symlink Markdown file directly under `docs/exec-plans/active/`.
+
+The installed resolver obtains the pull request head branch and exact SHA from the GitHub API before checkout. Checkout uses `persist-credentials: false`, and the workflow verifies that no checkout credential remains before Codex starts.
+
+## Codex execution
+
+The workflow invokes:
+
+```text
+/opt/agent-relay/dist/src/run-codex.js
+```
+
+The direct runner:
+
+- validates the runner workspace and active ExecPlan path;
+- constructs the minimal plan-based prompt;
+- invokes `/usr/local/bin/codex-run`;
+- limits model-controlled filesystem access to the selected repository and a private runtime directory;
+- keeps `.git` read-only for Codex;
+- enables required network access;
+- streams redacted stdout and stderr;
+- enforces the configured timeout and output cap;
+- returns non-zero on validation, spawn, timeout, or Codex failure.
+
+Codex does not receive a GitHub token and does not commit or push. After successful execution, the trusted finalizer commits and pushes only when Git reports changes.
+
+## Logs and results
+
+Codex output is visible directly in the `Run Codex directly` GitHub Actions step. The same redacted stream is uploaded as the `agent-relay-output` artifact even when Codex fails.
+
+There is no separate application log store or persisted job queue. GitHub Actions is the execution and log surface.
+
+A clean worktree is a successful no-op. A changed worktree is checked with `git diff --check`, committed with the normalized active-plan heading, and pushed to the API-resolved pull request branch. If push fails, the finalizer removes its local commit and restores the working-tree changes for a retry.
+
+## Recovery
+
+Rerun the installer after package, harness, authentication, registration, or service problems:
+
+```bash
+cd /srv/github-runner/storage/agent-relay
+./install.sh
+```
+
+A rerun preserves the existing Codex login, runner registration, `_work`, diagnostics, and a newer runner version installed by GitHub's updater.
+
+The installer operates only on the new native installation. It does not inspect, stop, unregister, copy from, clean, or modify the previous environment.
 
 ## Repository validation
 
-Run the repository-owned validation suite after code or contract changes:
+The repository-owned validation suite is:
 
 ```bash
+cd /srv/github-runner/storage/agent-relay
 npm ci
 npm run check
 ```
 
-The suite uses local fixtures and validates only code and definitions stored in this repository. It does not invoke or validate Docker, Compose, GitHub APIs, hosted runners, network services, or credentials.
-
-## Install and dispatch the workflow
-
-Use `.github/workflows/agent-relay.yml` in this repository or copy `examples/github-actions/agent-relay.yml` into another target repository.
-
-Manual dispatch requires:
-
-- `pr_number`: the selected pull request number;
-- `plan_path`: a regular, non-symlink Markdown file directly under `docs/exec-plans/active/`.
-
-There is no branch input, execution-mode input, environment-routing input, or model result contract. `.agent/PLANS.md` defines reusable plan behavior and the selected active plan is the sole task instruction.
-
-Before checkout, `/runner/resolve-pr.mjs` rejects the pull request unless it exists, is open, is not a draft, belongs to the target repository, and has valid head ref and SHA values. Checkout uses the API-derived head SHA. Commit and push target the API-derived head ref.
-
-The runner derives an idempotency key from repository, workflow-run, and run-attempt identifiers when available. It is not included in the Codex prompt.
-
-## Credentials
-
-Checkout uses the job's `github.token` with `persist-credentials: false`. The workflow verifies that no authorization header, credential helper, or credential-bearing remote remains before invoking Relay.
-
-Credential lifetime is step-scoped:
-
-- `github.token` is supplied to pull-request resolution and checkout;
-- the Relay bearer token is supplied only to the Relay client step;
-- finalization receives `github.token` through the local `GITHUB_PUSH_TOKEN` environment variable and consumes it through a temporary askpass helper.
-
-No additional publication secret is required or supported by the workflow.
-
-## Logs and outcomes
-
-Follow the live Agent Relay container stream:
-
-```bash
-docker compose logs -f agent-relay
-```
-
-Codex stdout and stderr are redacted incrementally and written to this stream while the child is running. The same values are appended to the job log under `/var/lib/agent-relay/logs`. A non-zero child exit does not discard its output: Relay drains queued writes, reports the process failure, and persists the terminal job state. Relay also emits one terminal line in this form:
-
-```text
-Agent Relay job <job-id> failed: CODEX_FAILED: Codex exited with code <code>
-```
-
-The `Run Codex through Agent Relay` workflow step pipes runner-client stdout and stderr through `tee`:
-
-- runner-client status and transport output are visible in the GitHub Actions step log;
-- the same runner-client output is uploaded as the `agent-relay-output` artifact;
-- `$GITHUB_OUTPUT` is reserved for the runner-derived commit message.
-
-The complete redacted Codex process log remains stored under the Agent Relay state volume. Direct live transport of the Codex byte stream into the GitHub Actions step is a separate contract and is not implemented by this runtime-restoration change.
-
-Codex does not write a result file. Relay sets the technical outcome from the process:
-
-- exit code `0` → `completed`;
-- non-zero exit or spawn failure → `failed`;
-- deadline exceeded → `timed_out`;
-- in-flight job recovered after restart → `interrupted`.
-
-A completed process with a clean worktree succeeds without creating a commit. A task-level blocker is recorded only in the active ExecPlan. The item remains unchecked and includes cause, impact, evidence, and unblock condition. Codex continues unaffected work. The plan remains active until every item is completed.
-
-## Recovery
-
-A Relay container restart interrupts an active Codex process. The job is not resumed in memory. Dispatch a new run against the current pull request and active plan.
-
-When publication fails after a local commit, the finalizer resets that commit and restores the working-tree changes before returning failure. Correct the publication problem and retry without discarding those changes.
-
-Inspect the latest persisted Codex log:
-
-```bash
-docker compose exec agent-relay sh -lc '
-latest=$(find /var/lib/agent-relay/logs -type f -name "*.log" -printf "%T@ %p\n" | sort -n | tail -1 | cut -d" " -f2-)
-echo "Latest log: $latest"
-test -n "$latest" && tail -n 200 "$latest"
-'
-```
-
-## Credential rotation
-
-- Replace `RUNNER_TOKEN` when re-registering the runner.
-- Rotate `AGENT_RELAY_TOKEN` in `.env` and the repository Actions secret, then recreate the Relay service.
-- Refresh host `auth.json` when `codex login status` reports that it is not logged in.
+The suite uses local fixtures. It does not perform live package installation, interactive login, organization registration, runner-group changes, or systemd service installation.

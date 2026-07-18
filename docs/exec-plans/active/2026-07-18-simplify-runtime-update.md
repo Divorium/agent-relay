@@ -18,13 +18,13 @@ git pull --ff-only
 ./update.sh
 ```
 
-`git pull` is deliberately outside `update.sh`. The updater does not fetch, pull, reset, switch, inspect cleanliness, or otherwise modify Git state. Local tracked or untracked changes do not block an update; the runtime is built from the files currently present in the checkout.
+`git pull` is deliberately outside `update.sh`. The updater performs no Git commands. It does not fetch, pull, reset, switch, inspect cleanliness, resolve a commit, or otherwise inspect or modify Git state. Local tracked or untracked changes do not block an update; the runtime is built from the files currently present in the checkout.
 
 The updater builds `dist`, but it does not run the repository validation suite. In particular it does not run `npm ci`, tests, coverage, shell syntax checks, Node syntax checks, or the toolchain smoke test. Those remain pipeline responsibilities. The only build operation in `update.sh` is the TypeScript compilation needed to create the runtime.
 
 ## Explicit Non-Goals
 
-- No Git operation other than an optional informational `rev-parse` for the success message.
+- No Git command in `update.sh`.
 - No clean-worktree requirement.
 - No update re-execution after a pull.
 - No dependency installation in `update.sh`.
@@ -46,21 +46,21 @@ The host already installs pinned TypeScript globally and verifies `/usr/local/bi
 1. Reject arguments and root execution.
 2. Require the repository at `/srv/github-runner/storage/agent-relay`, require the recorded administrator, systemd as PID 1, `/usr/local/bin/tsc`, `/usr/bin/pgrep`, and the runtime compiler configuration.
 3. Acquire sudo credentials.
-4. Stop `actions.runner.Divorium.gh-runner.service`. With the installed `KillMode=process`, this stops the listener so it cannot accept another job while an existing `Runner.Worker` may finish.
-5. Poll for `Runner.Worker` processes owned by `github-runner`. Exit status `0` means keep waiting, `1` means no worker remains, and any other `pgrep` status is an updater error. There is no timeout: the operator requested that update wait until the current runner job finishes.
-6. Remove all children below `/srv/github-runner/storage/build` using a sudo traversal. These are disposable leftovers from the previous updater and from any prior failed invocation.
+4. Stop `actions.runner.Divorium.gh-runner.service` whether it is active or already stopped. With the installed `KillMode=process`, this stops the listener so it cannot accept another job while an existing `Runner.Worker` may finish.
+5. Poll for `Runner.Worker` processes owned by `github-runner`. Exit status `0` means keep waiting, `1` means no worker remains, and any other `pgrep` status is an updater error. There is no timeout: update waits until the current runner job finishes.
+6. Remove all children below `/srv/github-runner/storage/build` using a sudo traversal. These are disposable leftovers from the previous updater and from any prior failed invocation. The administrator never traverses this private mode-`0700` directory directly.
 7. Remove `/srv/github-runner/storage/agent-relay/dist` completely.
-8. Create `dist` as `agent-relay-builder:agent-relay-builder` with mode `0700`.
+8. Create `dist` as `agent-relay-builder:agent-relay-builder` with mode `0700` through sudo.
 9. Run `/usr/local/bin/tsc -p tsconfig.runtime.json --outDir dist` as `agent-relay-builder` in a minimal environment containing only the required identity, locale, home, and path values.
 10. Require the compiled production entrypoint `dist/src/run-codex.js` to exist as a regular file.
 11. Change the complete `dist` tree to `root:root`; set directories to `0755` and regular files to `0644` using physical, filesystem-bounded `find` traversal.
-12. Start and enable the runner service, require it to become active, show status, release sudo credentials, and print the built commit when available.
+12. Enable the runner unit because installation prepares but does not enable it, start it, require it to become active, show status, release sudo credentials, and print a success message without invoking Git.
 
 ### Failure behavior
 
 There is no rollback. If stopping the service, deleting `dist`, compiling, permission changes, or service startup fails, the script exits nonzero at that point. The service may remain stopped and `dist` may be absent or partial. The next `./update.sh` repeats the same sequence, deletes all of `dist`, and builds it again from zero.
 
-The script must not install an EXIT trap that restores Git, runtime files, or service state. It may use ordinary process-local cleanup only if a future implementation introduces a process-local temporary file; the current design does not require one.
+The script must not install an EXIT trap that restores Git, runtime files, or service state. It may invalidate cached sudo credentials on exit; that is process cleanup, not recovery.
 
 ### Pipeline responsibility
 
@@ -83,7 +83,7 @@ The same pipeline must compile `tsconfig.runtime.json` into a disposable output 
 ## Progress
 
 - [x] Define the manual-pull and simple replacement contract.
-- [ ] Review this plan against the requested behavior and remove inconsistencies.
+- [x] Review this plan against the requested behavior and remove inconsistencies.
 - [ ] Add the production-only TypeScript compiler configuration.
 - [ ] Replace the current updater with the direct rebuild-and-restart sequence.
 - [ ] Move validation-only commands fully into the pipeline.
@@ -96,7 +96,7 @@ The same pipeline must compile `tsconfig.runtime.json` into a disposable output 
 ## Acceptance Criteria
 
 - The operator performs `git pull` manually before `./update.sh`.
-- `update.sh` contains no `git pull`, `git status`, `git reset`, re-execution phase, worktree-clean check, or Git rollback.
+- `update.sh` contains no Git command, re-execution phase, worktree-clean check, or Git rollback.
 - Dirty and untracked checkout content does not block the updater.
 - `update.sh` contains no `npm ci`, `node --test`, coverage flags, `bash -n`, `node --check`, or toolchain smoke invocation.
 - `update.sh` builds `dist` with the pinned global TypeScript compiler and a production-only compiler configuration.
@@ -110,11 +110,13 @@ The same pipeline must compile `tsconfig.runtime.json` into a disposable output 
 - The system harness proves successful replacement, waiting for a worker, acceptance of a dirty checkout, no rollback after build failure, and successful clean replacement on the following invocation.
 - Installation explicitly provides every binary used by the simplified updater.
 
+## Plan Review
+
+The first review removed the last proposed Git operation (`rev-parse`) and confirmed that the updater can print success without resolving a commit. It also confirmed that enabling the service remains necessary because `install.sh` installs the unit but deliberately leaves activation to the first update. No plan step accesses staged output below the private builder root, preserves an old runtime, or performs validation work assigned to the pipeline.
+
 ## Plan Review Checklist
 
-Before implementation, verify point by point:
-
-1. No planned step performs Git synchronization or clean-worktree enforcement.
+1. No planned step performs Git synchronization, inspection, or clean-worktree enforcement.
 2. No planned step stores, restores, or moves an old runtime.
 3. No planned step treats pipeline validation as updater work.
 4. Runtime compilation still occurs locally in `update.sh`.

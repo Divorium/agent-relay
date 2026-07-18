@@ -19,7 +19,7 @@ All Agent Relay and GitHub Runner data is grouped below the single root-controll
 /srv/github-runner/storage/build-home   builder home
 ```
 
-The storage root itself is a regular `root:root` directory and is not writable by group or other identities. Transaction paths placed directly below it therefore cannot be created or replaced by the administrator, builder, or runner without sudo.
+The storage root itself is a regular `root:root` directory and is not writable by group or other identities. Transaction paths placed directly below it therefore cannot be created or replaced by the administrator, builder, or runner without sudo. The `build` and `build-home` children are regular `agent-relay-builder:agent-relay-builder` directories with mode `0700`.
 
 The runner is configured with work name `_work`. `/srv/github-runner/storage/runner/_work` is a symlink to `../work`, so GitHub's official runner resolves its normal relative work path to `/srv/github-runner/storage/work`.
 
@@ -36,6 +36,8 @@ Three identities are used:
 - `github-runner` has a locked password and no sudo access; systemd runs the official runner and Codex as this account.
 
 The source checkout is readable and executable by the two service accounts but writable only by the administrator. The activated `dist` directory is a regular tree containing only directories and singly linked regular files; every entry is owned by root and is read-only to the service accounts. The workflow workspace is owned by `github-runner`.
+
+`/etc/agent-relay/administrator` is a regular, non-symlink `root:root` trust-anchor file that is not writable by group or other identities. Its content selects the only administrator account permitted to execute updates.
 
 Neither Codex nor code executed during a build can use the administrator's cached sudo authentication because they run as different accounts which are explicitly verified not to have passwordless sudo.
 
@@ -86,6 +88,7 @@ No runner re-registration, PAT prompt, Codex re-login, or WSL shutdown is expect
 - exchange that PAT for a short-lived organization runner registration token without placing the PAT in process arguments or files;
 - register `gh-runner` for `https://github.com/Divorium`, with `_work` and no custom labels;
 - create a root-owned systemd unit that runs as `github-runner`;
+- install the root-owned administrator trust file;
 - perform Codex login as `github-runner` only when authentication is absent;
 - prepare, but not enable or start, the service. Activation belongs to a successful `update.sh` transaction.
 
@@ -119,30 +122,32 @@ Caller-specific policy remains outside the profile. The updater adds expected-ve
 
 `update.sh` must:
 
-1. accept no arguments, refuse root execution, and verify the administrator recorded by `install.sh`;
-2. require systemd and service accounts without passwordless sudo;
-3. before any worktree-inspecting Git command or service stop, require a regular root-owned storage root that is not group/other-writable, require every source path except `dist` to belong to the recorded administrator, and require any existing active `dist` to be a safe, entirely root-owned runtime tree;
-4. inspect Git status with explicit command-failure handling and require a clean checkout;
-5. stop the runner when it is active;
-6. record the current Git revision, run `git pull --ff-only` with repository hooks disabled, and re-execute `update.sh` from the pulled revision;
-7. reject a missing or symlinked shared toolchain profile, source it from the selected revision, and create an isolated build workspace plus a private writable state root below `/srv/github-runner/storage/build`, owned by `agent-relay-builder`;
-8. construct the builder environment once from the shared profile and execute every builder-owned copy, dependency, compilation, test, syntax, and smoke command through `sudo -u agent-relay-builder -H /usr/bin/env -i` with that environment;
-9. run `npm ci`, TypeScript compilation, the full Node test suite, the 100% line/branch/function coverage gates, shell syntax checks, Node script syntax checks, and the Codex/toolchain smoke test;
-10. leave the active `dist` untouched until all validation succeeds, then repeat the fail-closed storage-root, source-ownership, and active-runtime checks immediately before activation;
-11. reject staged runtime symbolic links, special files, and regular files with multiple hard links;
-12. move the validated staged runtime into a transaction path directly below `/srv/github-runner/storage`, adopt root ownership with a physical, filesystem-bounded, non-dereferencing traversal, verify the resulting root ownership, and retain the previous runtime in a separate root-controlled rollback path outside the source checkout;
-13. atomically move the prepared runtime into the source checkout, while keeping the previous runtime available for rollback;
-14. reject symlinked trusted entrypoints and harden source permissions without following repository symlinks;
-15. daemon-reload, enable, start, and verify the runner service;
-16. delete the previous runtime only after the service is confirmed active.
+1. accept no arguments and refuse root execution;
+2. when re-executed after a pull, validate and load the original revision and prior service-active state before any later preflight can fail, so rollback can still restore both;
+3. require `/etc/agent-relay/administrator` to be a readable regular non-symlink `root:root` file not writable by group or others, then require the current account to match its validated content;
+4. require systemd and service accounts without passwordless sudo;
+5. before any worktree-inspecting Git command or service stop, require a regular root-owned storage root not writable by group or others, require `build` and `build-home` to be private `agent-relay-builder` directories, require every source path except `dist` to belong to the recorded administrator, and require any existing active `dist` to be a safe, entirely root-owned runtime tree;
+6. inspect Git status with explicit command-failure handling and require a clean checkout;
+7. stop the runner when it is active;
+8. record the current Git revision, run `git pull --ff-only` with repository hooks disabled, and re-execute `update.sh` from the pulled revision;
+9. reject a missing or symlinked shared toolchain profile, source it from the selected revision, and have `agent-relay-builder` create its own isolated build workspace, staged runtime, and private writable state hierarchy below `/srv/github-runner/storage/build`;
+10. construct the builder environment once from the shared profile and execute every builder-owned copy, dependency, compilation, test, syntax, and smoke command through `sudo -u agent-relay-builder -H /usr/bin/env -i` with that environment;
+11. run `npm ci`, TypeScript compilation, the full Node test suite, the 100% line/branch/function coverage gates, shell syntax checks, Node script syntax checks, and the Codex/toolchain smoke test;
+12. require that no process owned by `agent-relay-builder` remains after validation, then repeat the fail-closed storage-root, builder-root, source-ownership, and active-runtime checks immediately before activation;
+13. reject staged runtime symbolic links, special files, and regular files with multiple hard links;
+14. move the validated staged runtime into a transaction path directly below `/srv/github-runner/storage`, immediately change the transaction root to `root:root` mode `0700`, adopt the complete tree with a physical, filesystem-bounded, non-dereferencing traversal, verify resulting root ownership, and retain the previous runtime in a separate root-controlled rollback path outside the source checkout;
+15. atomically move the prepared runtime into the source checkout while keeping the previous runtime available for rollback;
+16. reject symlinked trusted entrypoints and harden source permissions without following repository symlinks;
+17. daemon-reload, enable, start, and verify the runner service;
+18. delete the previous runtime only after the service is confirmed active.
 
-Ownership and status checks are fail-closed. Failure of `git status`, `find`, or required ownership metadata inspection is not interpreted as a clean or correctly owned checkout. An ownership mismatch reports the first offending path together with owner, group, mode, type, and link count before rollback can remove or relocate transient state.
+Ownership and status checks are fail-closed. Failure of `git status`, `find`, `stat`, or another required ownership inspection is not interpreted as a clean or correctly owned state. An ownership mismatch reports the first offending path together with owner, group, mode, type, and link count before rollback can remove or relocate transient state.
 
-The active runtime and both transaction paths remain outside the builder-owned build root during privileged ownership adoption and activation. The rollback and activation names are private to the transaction and are created under the root-owned storage parent. Runtime ownership changes use `find -P -xdev` and `chown -h`; recursive dereferencing ownership changes are prohibited.
+The active runtime and both transaction paths remain outside the builder-owned build root during privileged ownership adoption and activation. The rollback and activation names are private to the transaction and are created under the verified root-owned storage parent. Runtime ownership changes use `find -P -xdev` and `chown -h`; recursive dereferencing ownership changes are prohibited.
 
 The builder environment must not depend on the administrator's shell profile, inherited environment, or the distribution-specific `sudo` secure path. It receives the same immutable Java, Go, and Rust configuration as the Codex runtime, but uses a separate per-update writable state root. An ordinary update must consume the existing host installations without reinstalling toolchains, creating repair symlinks, running `rustup default`, rerunning `install.sh`, or re-registering the runner.
 
-Any failure before commit restores the original Git revision, removes staged build, activation, and state data, restores the previous `dist` when a swap occurred, and restarts a service that had been active before the update.
+Any failure before commit restores the original Git revision, removes staged build, activation, and state data, restores the previous `dist` when a swap occurred, and restarts a service that had been active before the update. Because re-execution state is loaded before ownership preflight, this rollback remains available when a newly pulled updater rejects existing host ownership.
 
 ## GitHub request flow
 
@@ -186,9 +191,10 @@ The launcher and runtime:
 - exact canonical project trust verification before `exec`, including quoted paths and a mock launcher process;
 - installed Codex CLI parsing of the inline trusted-project profile in the toolchain smoke test;
 - shell and Node-script syntax validation, including the shared toolchain profile;
-- fixed-layout, ownership-transaction, and toolchain-profile consistency checks across the ExecPlans, README files, installer, updater, launcher, and tests;
+- fixed-layout, ownership-transaction, re-execution rollback, and toolchain-profile consistency checks across the ExecPlans, README files, installer, updater, launcher, and tests;
+- focused regression tests for the administrator trust file, storage and builder roots, active runtime, builder process quiescence, builder-created staging paths, early re-execution state loading, and root-locking of the activation stage;
 - a system-level mocked `install.sh` execution that verifies all six storage directories, the `runner/_work -> ../work` symlink, and that installation roots come from the trusted profile;
-- a system-level mocked `update.sh` execution that models the root-owned storage and runtime invariants, verifies transaction-path cleanup, and uses Java, Go, and Rust fixtures executable only when the clean environment provides their required configuration and writable state, while covering successful activation, pre-swap test and build failure rollback, and post-swap service-start failure rollback.
+- a system-level mocked `update.sh` execution that models the root-owned trust anchors and runtime invariants, verifies transaction-path cleanup, and uses Java, Go, and Rust fixtures executable only when the clean environment provides their required configuration and writable state, while covering successful activation, pre-swap test and build failure rollback, and post-swap service-start failure rollback.
 
 The full-flow integration test creates a real local Git remote and pull-request branch, serves a mock GitHub pull-request API, resolves the request and active plan, checks out the exact revision, invokes a mock Codex executable through the real runtime, finalizes the change, pushes it, and verifies the resulting remote commit.
 

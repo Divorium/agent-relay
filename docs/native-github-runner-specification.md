@@ -8,7 +8,7 @@ There is no Relay HTTP service, queue, polling loop, persisted job state, Docker
 
 ## Fixed paths
 
-All Agent Relay and GitHub Runner data is grouped below the single administrator-controlled root `/srv/github-runner/storage`. This is an explicit architecture decision shared by the ExecPlan, README files, installer, updater, and tests.
+All Agent Relay and GitHub Runner data is grouped below the single root-controlled root `/srv/github-runner/storage`. This is an explicit architecture decision shared by the ExecPlan, README files, installer, updater, and tests.
 
 ```text
 /srv/github-runner/storage/agent-relay  administrator-owned source and compiled runtime
@@ -18,6 +18,8 @@ All Agent Relay and GitHub Runner data is grouped below the single administrator
 /srv/github-runner/storage/build        temporary isolated builds and per-update tool state
 /srv/github-runner/storage/build-home   builder home
 ```
+
+The storage root itself is a regular `root:root` directory and is not writable by group or other identities. Transaction paths placed directly below it therefore cannot be created or replaced by the administrator, builder, or runner without sudo.
 
 The runner is configured with work name `_work`. `/srv/github-runner/storage/runner/_work` is a symlink to `../work`, so GitHub's official runner resolves its normal relative work path to `/srv/github-runner/storage/work`.
 
@@ -33,7 +35,7 @@ Three identities are used:
 - `agent-relay-builder` has a locked password, no interactive shell, and no sudo access; it performs dependency installation, compilation, tests, syntax validation, and toolchain smoke checks;
 - `github-runner` has a locked password and no sudo access; systemd runs the official runner and Codex as this account.
 
-The source checkout is readable and executable by the two service accounts but writable only by the administrator. The activated `dist` directory is owned by root and read-only to the service accounts. The workflow workspace is owned by `github-runner`.
+The source checkout is readable and executable by the two service accounts but writable only by the administrator. The activated `dist` directory is a regular tree containing only directories and singly linked regular files; every entry is owned by root and is read-only to the service accounts. The workflow workspace is owned by `github-runner`.
 
 Neither Codex nor code executed during a build can use the administrator's cached sudo authentication because they run as different accounts which are explicitly verified not to have passwordless sudo.
 
@@ -119,22 +121,22 @@ Caller-specific policy remains outside the profile. The updater adds expected-ve
 
 1. accept no arguments, refuse root execution, and verify the administrator recorded by `install.sh`;
 2. require systemd and service accounts without passwordless sudo;
-3. verify, before any worktree-inspecting Git command or service stop, that every source path except the intentionally root-owned `dist` tree belongs to the recorded administrator;
+3. before any worktree-inspecting Git command or service stop, require a regular root-owned storage root that is not group/other-writable, require every source path except `dist` to belong to the recorded administrator, and require any existing active `dist` to be a safe, entirely root-owned runtime tree;
 4. inspect Git status with explicit command-failure handling and require a clean checkout;
 5. stop the runner when it is active;
 6. record the current Git revision, run `git pull --ff-only` with repository hooks disabled, and re-execute `update.sh` from the pulled revision;
 7. reject a missing or symlinked shared toolchain profile, source it from the selected revision, and create an isolated build workspace plus a private writable state root below `/srv/github-runner/storage/build`, owned by `agent-relay-builder`;
 8. construct the builder environment once from the shared profile and execute every builder-owned copy, dependency, compilation, test, syntax, and smoke command through `sudo -u agent-relay-builder -H /usr/bin/env -i` with that environment;
 9. run `npm ci`, TypeScript compilation, the full Node test suite, the 100% line/branch/function coverage gates, shell syntax checks, Node script syntax checks, and the Codex/toolchain smoke test;
-10. leave the active `dist` untouched until all validation succeeds, then repeat the fail-closed source ownership check immediately before activation;
+10. leave the active `dist` untouched until all validation succeeds, then repeat the fail-closed storage-root, source-ownership, and active-runtime checks immediately before activation;
 11. reject staged runtime symbolic links, special files, and regular files with multiple hard links;
-12. move the validated staged runtime into a root-controlled activation path directly below `/srv/github-runner/storage`, adopt root ownership with a physical, filesystem-bounded, non-dereferencing traversal, and retain the previous runtime in a separate root-controlled rollback path outside the source checkout;
+12. move the validated staged runtime into a transaction path directly below `/srv/github-runner/storage`, adopt root ownership with a physical, filesystem-bounded, non-dereferencing traversal, verify the resulting root ownership, and retain the previous runtime in a separate root-controlled rollback path outside the source checkout;
 13. atomically move the prepared runtime into the source checkout, while keeping the previous runtime available for rollback;
 14. reject symlinked trusted entrypoints and harden source permissions without following repository symlinks;
 15. daemon-reload, enable, start, and verify the runner service;
 16. delete the previous runtime only after the service is confirmed active.
 
-Ownership and status checks are fail-closed. Failure of `git status`, `find`, or metadata inspection is not interpreted as a clean or correctly owned checkout. An ownership mismatch reports the first offending path together with owner, group, mode, type, and link count before rollback can remove or relocate transient state.
+Ownership and status checks are fail-closed. Failure of `git status`, `find`, or required ownership metadata inspection is not interpreted as a clean or correctly owned checkout. An ownership mismatch reports the first offending path together with owner, group, mode, type, and link count before rollback can remove or relocate transient state.
 
 The active runtime and both transaction paths remain outside the builder-owned build root during privileged ownership adoption and activation. The rollback and activation names are private to the transaction and are created under the root-owned storage parent. Runtime ownership changes use `find -P -xdev` and `chown -h`; recursive dereferencing ownership changes are prohibited.
 
@@ -186,7 +188,7 @@ The launcher and runtime:
 - shell and Node-script syntax validation, including the shared toolchain profile;
 - fixed-layout, ownership-transaction, and toolchain-profile consistency checks across the ExecPlans, README files, installer, updater, launcher, and tests;
 - a system-level mocked `install.sh` execution that verifies all six storage directories, the `runner/_work -> ../work` symlink, and that installation roots come from the trusted profile;
-- a system-level mocked `update.sh` execution with Java, Go, and Rust fixtures that are executable only when the clean environment provides their required configuration and writable state, while covering successful activation, pre-swap test and build failure rollback, and post-swap service-start failure rollback.
+- a system-level mocked `update.sh` execution that models the root-owned storage and runtime invariants, verifies transaction-path cleanup, and uses Java, Go, and Rust fixtures executable only when the clean environment provides their required configuration and writable state, while covering successful activation, pre-swap test and build failure rollback, and post-swap service-start failure rollback.
 
 The full-flow integration test creates a real local Git remote and pull-request branch, serves a mock GitHub pull-request API, resolves the request and active plan, checks out the exact revision, invokes a mock Codex executable through the real runtime, finalizes the change, pushes it, and verifies the resulting remote commit.
 

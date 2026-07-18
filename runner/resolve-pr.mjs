@@ -2,7 +2,8 @@
 import { appendFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/u;
+const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 
 function requiredEnvironment(name) {
   const value = process.env[name];
@@ -11,7 +12,7 @@ function requiredEnvironment(name) {
 }
 
 function parsePullRequestNumber(value) {
-  if (!/^[1-9][0-9]*$/.test(value)) throw new Error("PR_NUMBER must be a positive integer");
+  if (!/^[1-9][0-9]*$/u.test(value)) throw new Error("PR_NUMBER must be a positive integer");
   const number = Number(value);
   if (!Number.isSafeInteger(number)) throw new Error("PR_NUMBER is outside the supported range");
   return number;
@@ -24,14 +25,23 @@ function requiredString(value, name, maxLength) {
   return value;
 }
 
-async function main() {
+function optionalExpectedHeadSha() {
+  const value = process.env.EXPECTED_HEAD_SHA;
+  if (value === undefined || value === "") return undefined;
+  const expectedHeadSha = requiredString(value, "expected pull request head SHA", 40);
+  if (!COMMIT_SHA.test(expectedHeadSha)) throw new Error("Invalid expected pull request head SHA");
+  return expectedHeadSha;
+}
+
+export async function main() {
   const token = requiredEnvironment("GITHUB_TOKEN");
   const repository = requiredEnvironment("GITHUB_REPOSITORY");
   const outputPath = requiredEnvironment("GITHUB_OUTPUT");
   const pullRequestNumber = parsePullRequestNumber(requiredEnvironment("PR_NUMBER"));
-  const apiUrl = (process.env.GITHUB_API_URL ?? "https://api.github.com").replace(/\/$/, "");
+  const expectedHeadSha = optionalExpectedHeadSha();
+  const apiUrl = (process.env.GITHUB_API_URL ?? "https://api.github.com").replace(/\/$/u, "");
 
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error("Invalid GITHUB_REPOSITORY");
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) throw new Error("Invalid GITHUB_REPOSITORY");
 
   const response = await fetch(`${apiUrl}/repos/${repository}/pulls/${pullRequestNumber}`, {
     headers: {
@@ -53,7 +63,10 @@ async function main() {
 
   const headRef = requiredString(pullRequest.head?.ref, "pull request head ref", 255);
   const headSha = requiredString(pullRequest.head?.sha, "pull request head SHA", 40);
-  if (!/^[0-9a-f]{40}$/.test(headSha)) throw new Error("Invalid pull request head SHA");
+  if (!COMMIT_SHA.test(headSha)) throw new Error("Invalid pull request head SHA");
+  if (expectedHeadSha !== undefined && headSha !== expectedHeadSha) {
+    throw new Error(`Pull request head changed after validation: expected ${expectedHeadSha}, found ${headSha}`);
+  }
 
   const refCheck = spawnSync("git", ["check-ref-format", "--branch", headRef], { encoding: "utf8" });
   if (refCheck.status !== 0) throw new Error("Invalid pull request head ref");
@@ -62,7 +75,9 @@ async function main() {
   console.log(`Resolved ready pull request #${pullRequestNumber} at ${headRef} (${headSha})`);
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}

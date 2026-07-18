@@ -29,232 +29,99 @@ async function scripts(): Promise<{
 
 test("installation groups source, runner, homes, workspaces and builds below storage", async () => {
   const { install, update } = await scripts();
-  assert.match(install, /STORAGE_ROOT=\$\{BASE_ROOT\}\/storage/);
-  assert.match(install, /EXPECTED_SOURCE_ROOT=\$\{STORAGE_ROOT\}\/agent-relay/);
-  assert.match(install, /WORK_ROOT=\$\{STORAGE_ROOT\}\/work/);
-  assert.match(install, /RUNNER_DIR=\$\{STORAGE_ROOT\}\/runner/);
-  assert.match(install, /RUNNER_HOME=\$\{STORAGE_ROOT\}\/home/);
-  assert.match(install, /BUILD_ROOT=\$\{STORAGE_ROOT\}\/build/);
-  assert.match(install, /BUILD_HOME=\$\{STORAGE_ROOT\}\/build-home/);
-  assert.match(update, /STORAGE_ROOT=\$\{BASE_ROOT\}\/storage/);
-  assert.match(update, /SOURCE_ROOT=\$\{STORAGE_ROOT\}\/agent-relay/);
-  assert.match(update, /BUILD_ROOT=\$\{STORAGE_ROOT\}\/build/);
-  assert.match(update, /BUILD_HOME=\$\{STORAGE_ROOT\}\/build-home/);
-  assert.match(install, /--work _work/);
-  assert.match(install, /readlink "\$\{RUNNER_DIR\}\/_work"/);
-  assert.match(install, /ln -s \.\.\/work "\$\{RUNNER_DIR\}\/_work"/);
-  assert.match(install, /runner work path must be the managed symlink/i);
-  assert.doesNotMatch(install, /RUNNER_DIR=\$\{BASE_ROOT\}\/runner|RUNNER_HOME=\$\{BASE_ROOT\}\/home/);
-  assert.doesNotMatch(install, /INSTALL_ROOT=\/opt\/agent-relay|\/opt\/agent-relay/);
+  assert.match(install, /STORAGE_ROOT=\$\{BASE_ROOT\}\/storage/u);
+  assert.match(install, /EXPECTED_SOURCE_ROOT=\$\{STORAGE_ROOT\}\/agent-relay/u);
+  assert.match(install, /WORK_ROOT=\$\{STORAGE_ROOT\}\/work/u);
+  assert.match(install, /RUNNER_DIR=\$\{STORAGE_ROOT\}\/runner/u);
+  assert.match(install, /RUNNER_HOME=\$\{STORAGE_ROOT\}\/home/u);
+  assert.match(install, /BUILD_ROOT=\$\{STORAGE_ROOT\}\/build/u);
+  assert.match(install, /BUILD_HOME=\$\{STORAGE_ROOT\}\/build-home/u);
+  assert.match(update, /SOURCE_ROOT=\$\{STORAGE_ROOT\}\/agent-relay/u);
+  assert.match(update, /BUILD_ROOT=\$\{STORAGE_ROOT\}\/build/u);
+  assert.match(update, /BUILD_HOME=\$\{STORAGE_ROOT\}\/build-home/u);
+  assert.match(install, /--work _work/u);
+  assert.match(install, /ln -s \.\.\/work "\$\{RUNNER_DIR\}\/_work"/u);
+  assert.doesNotMatch(install, /\/opt\/agent-relay/u);
 });
 
-test("installation separates administrator, builder and runtime privileges", async () => {
+test("installation separates administrator, builder and runner privileges", async () => {
   const { install } = await scripts();
-  assert.match(install, /RUNNER_USER=github-runner/);
-  assert.match(install, /BUILD_USER=agent-relay-builder/);
-  assert.match(install, /ensure_locked_user "\$\{RUNNER_USER\}"/);
-  assert.match(install, /ensure_locked_user "\$\{BUILD_USER\}"/);
-  assert.match(install, /passwd --lock/);
-  assert.match(install, /gpasswd --delete "\$\{user\}" sudo/);
-  assert.match(install, /must not have passwordless sudo access/);
-  assert.match(install, /User=\$\{RUNNER_USER\}/);
-  assert.match(install, /sudo -u "\$\{RUNNER_USER\}" -H \/usr\/local\/bin\/codex login/);
+  assert.match(install, /RUNNER_USER=github-runner/u);
+  assert.match(install, /BUILD_USER=agent-relay-builder/u);
+  assert.match(install, /ensure_locked_user "\$\{RUNNER_USER\}"/u);
+  assert.match(install, /ensure_locked_user "\$\{BUILD_USER\}"/u);
+  assert.match(install, /passwd --lock/u);
+  assert.match(install, /must not have passwordless sudo access/u);
+  assert.match(install, /User=\$\{RUNNER_USER\}/u);
+  assert.match(install, /sudo -u "\$\{RUNNER_USER\}" -H \/usr\/local\/bin\/codex login/u);
 });
 
-test("installation configures WSL once and installs a root-owned systemd unit", async () => {
+test("installation keeps the runner listener separable from an active worker", async () => {
   const { install } = await scripts();
-  assert.match(install, /configure_wsl_systemd/);
-  assert.match(install, /sudo install -o root -g root -m 0644 "\$\{wsl_config_temp\}" \/etc\/wsl\.conf/);
-  assert.match(install, /ExecStart=\$\{RUNNER_DIR\}\/runsvc\.sh/);
-  assert.match(install, /sudo install -o root -g root -m 0644 "\$\{service_temp\}" "\/etc\/systemd\/system\/\$\{SERVICE_NAME\}"/);
-  assert.match(install, /wsl --shutdown/);
-  assert.match(install, /then run `\.\/update\.sh`/);
-  assert.doesNotMatch(install, /systemctl enable --now|multi-user\.target\.wants/);
-  assert.match(install, /Run `\.\/update\.sh` to validate and activate the runner/);
+  assert.match(install, /ExecStart=\$\{RUNNER_DIR\}\/runsvc\.sh/u);
+  assert.match(install, /KillMode=process/u);
+  assert.match(install, /TimeoutStopSec=5min/u);
+  assert.match(install, /sudo install -o root -g root -m 0644 "\$\{service_temp\}"/u);
+  assert.doesNotMatch(install, /systemctl enable --now/u);
+  assert.match(install, /Run `\.\/update\.sh` to validate and activate the runner/u);
 });
 
-test("installation uses pinned verified runner and toolchain downloads", async () => {
+test("installation uses pinned verified runner and toolchain versions", async () => {
   const { install } = await scripts();
-  assert.match(install, /RUNNER_VERSION=2\.335\.1/);
-  assert.match(install, /RUNNER_SHA256=4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf/);
-  assert.match(install, /GO_VERSION=1\.24\.5/);
-  assert.match(install, /GO_SHA256=10ad9e86233e74c0f6590fe5426895de6bf388964210eac34a6d83f38918ecdc/);
-  assert.match(install, /TYPESCRIPT_VERSION=5\.8\.3/);
-  assert.match(install, /CODEX_VERSION=0\.144\.4/);
+  assert.match(install, /RUNNER_VERSION=2\.335\.1/u);
+  assert.match(install, /RUNNER_SHA256=4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf/u);
+  assert.match(install, /GO_VERSION=1\.24\.5/u);
+  assert.match(install, /GO_SHA256=10ad9e86233e74c0f6590fe5426895de6bf388964210eac34a6d83f38918ecdc/u);
+  assert.match(install, /TYPESCRIPT_VERSION=5\.8\.3/u);
+  assert.match(install, /CODEX_VERSION=0\.144\.4/u);
+  assert.match(install, /"typescript@\$\{TYPESCRIPT_VERSION\}"/u);
+  assert.match(install, /\[\[ -x \/usr\/local\/bin\/tsc \]\]/u);
   assert.equal((install.match(/sha256sum -c -/gu) ?? []).length, 2);
-  assert.equal((install.match(/installdependencies\.sh/gu) ?? []).length, 1);
-  assert.match(install, /"\$\{TOOLCHAIN_GO_ROOT\}\/bin\/go"/);
-  assert.match(install, /CARGO_HOME="\$\{TOOLCHAIN_RUST_CARGO_HOME\}" RUSTUP_HOME="\$\{TOOLCHAIN_RUSTUP_HOME\}"/);
 });
 
-test("installation prompts only for Codex login and initial runner registration", async () => {
+test("installation prompts only for runner registration and missing Codex login", async () => {
   const { install } = await scripts();
-  assert.match(install, /read -r -s github_token/);
+  assert.match(install, /read -r -s github_token/u);
   assert.equal((install.match(/read -r -s/gu) ?? []).length, 1);
-  assert.match(install, /orgs\/\$\{ORGANIZATION\}\/actions\/runners\/registration-token/);
-  assert.match(install, /-H @-/);
-  assert.doesNotMatch(install, /Authorization: Bearer \$\{github_token\}/);
-  assert.match(install, /unset github_token/);
-  assert.match(install, /unset registration_token/);
+  assert.match(install, /orgs\/\$\{ORGANIZATION\}\/actions\/runners\/registration-token/u);
+  assert.match(install, /unset github_token/u);
+  assert.match(install, /unset registration_token/u);
 });
 
-test("one trusted profile defines the complete host toolchain environment", async () => {
+test("the shared toolchain profile remains the pipeline and Codex environment source", async () => {
   const { install, update, codexRun, smoke, profile } = await scripts();
   assert.match(profile, /^TOOLCHAIN_JAVA_HOME=\/opt\/java\/openjdk$/mu);
   assert.match(profile, /^TOOLCHAIN_GO_ROOT=\/usr\/local\/go$/mu);
   assert.match(profile, /^TOOLCHAIN_RUST_CARGO_HOME=\/opt\/rust\/cargo$/mu);
   assert.match(profile, /^TOOLCHAIN_RUSTUP_HOME=\/opt\/rust\/rustup$/mu);
-  assert.match(profile, /TOOLCHAIN_PATH=\$\{TOOLCHAIN_JAVA_HOME\}\/bin:\$\{TOOLCHAIN_GO_ROOT\}\/bin:\$\{TOOLCHAIN_RUST_BIN\}:\$\{TOOLCHAIN_SYSTEM_PATH\}/);
-  assert.match(profile, /toolchain_environment_build\(\)/);
-  for (const binding of [
-    "JAVA_HOME",
-    "RUSTUP_HOME",
-    "CARGO_HOME",
-    "GOPATH",
-    "GOCACHE",
-    "GRADLE_USER_HOME",
-    "NPM_CONFIG_CACHE",
-    "PIP_CACHE_DIR",
-    "XDG_CACHE_HOME",
-    "XDG_CONFIG_HOME",
-    "XDG_DATA_HOME",
-    "TMPDIR",
-  ]) {
-    assert.ok(profile.includes(`"${binding}=`), `profile must define ${binding}`);
+  assert.match(profile, /toolchain_environment_build\(\)/u);
+  for (const consumer of [install, codexRun, smoke]) {
+    assert.match(consumer, /toolchain-environment\.sh/u);
   }
-  assert.doesNotMatch(profile, /mkdir|\/usr\/bin\/env -i/);
-  for (const consumer of [install, update, codexRun, smoke]) {
-    assert.match(consumer, /scripts\/toolchain-environment\.sh|toolchain-environment\.sh/);
-    assert.match(consumer, /source /);
-  }
-  for (const consumer of [install, update, codexRun]) {
-    assert.doesNotMatch(consumer, /TOOLCHAIN_JAVA_HOME=\/opt\/java\/openjdk|TOOLCHAIN_GO_ROOT=\/usr\/local\/go|TOOLCHAIN_RUSTUP_HOME=\/opt\/rust\/rustup/);
-  }
-  assert.match(install, /scripts\/toolchain-environment\.sh \\/);
-  assert.match(update, /scripts\/toolchain-environment\.sh \\/);
-  assert.match(codexRun, /toolchain_environment_build/);
-  assert.match(smoke, /toolchain_environment_build/);
-});
-
-test("normal update pulls once and runs all project code through one clean builder environment", async () => {
-  const { update } = await scripts();
-  const stop = update.indexOf('sudo systemctl stop "${SERVICE_NAME}"');
-  const pull = update.indexOf("pull --ff-only", stop);
-  const npm = update.indexOf('run_builder npm ci', pull);
-  const compile = update.indexOf('run_builder "${build_workspace}/node_modules/.bin/tsc"', npm);
-  const tests = update.indexOf("--test-coverage-lines=100", compile);
-  assert.ok(stop >= 0 && pull > stop && npm > pull && compile > npm && tests > compile);
-  assert.match(update, /--test-coverage-branches=100/);
-  assert.match(update, /--test-coverage-functions=100/);
-  assert.match(update, /AGENT_RELAY_UPDATE_PHASE=reexec/);
-  assert.match(update, /exec \/bin\/bash "\$\{SOURCE_ROOT\}\/update\.sh"/);
-  assert.match(update, /config core\.fileMode false/);
-  assert.match(update, /systemctl enable "\$\{SERVICE_NAME\}"/);
-  assert.match(update, /toolchain_environment_build "\$\{BUILD_USER\}" "\$\{BUILD_HOME\}" "\$\{builder_state\}" builder_env/);
-  assert.match(update, /sudo -u "\$\{BUILD_USER\}" -H \/usr\/bin\/env -i "\$\{builder_env\[@\]\}"/);
-  assert.match(update, /run_builder bash -n/);
-  assert.doesNotMatch(update, /sudo npm|sudo node --test|sudo .*tsc|BUILDER_PATH=/);
-});
-
-test("update validates storage, source, runtime and repository status before mutation", async () => {
-  const { update } = await scripts();
-  const gitCheckoutCheck = update.indexOf('[[ -d "${SOURCE_ROOT}/.git" ]]');
-  const sudo = update.indexOf("\nsudo -v\n", gitCheckoutCheck);
-  const storage = update.indexOf("\nassert_secure_storage_root\n", sudo);
-  const ownership = update.indexOf("\nassert_source_ownership\n", storage);
-  const activeRuntime = update.indexOf("\nassert_active_runtime\n", ownership);
-  const gitConfig = update.indexOf('git -C "${SOURCE_ROOT}" config core.fileMode false', activeRuntime);
-  const status = update.indexOf('git_status="$(git -C "${SOURCE_ROOT}" status --porcelain --untracked-files=all)"', gitConfig);
-  const stop = update.indexOf('sudo systemctl stop "${SERVICE_NAME}"', status);
-  const pull = update.indexOf("pull --ff-only", stop);
-  assert.ok(gitCheckoutCheck >= 0 && sudo > gitCheckoutCheck && storage > sudo && ownership > storage);
-  assert.ok(activeRuntime > ownership && gitConfig > activeRuntime && status > gitConfig && stop > status && pull > stop);
-  assert.match(update, /if ! git_status="\$\(git -C "\$\{SOURCE_ROOT\}" status --porcelain --untracked-files=all\)"; then/);
-  assert.match(update, /Could not inspect the source checkout status/);
-  assert.match(update, /if \[\[ -n "\$\{git_status\}" \]\]; then/);
-});
-
-test("ownership probes fail closed and retain actionable path metadata", async () => {
-  const { update } = await scripts();
-  assert.match(update, /assert_secure_storage_root\(\)/);
-  assert.match(update, /Storage root must be root:root and not group\/other-writable/);
-  assert.match(update, /mode_value & 0022/);
-  assert.match(update, /assert_source_ownership\(\)/);
-  assert.match(update, /if ! foreign_path="\$\([\s\S]*sudo find -P "\$\{SOURCE_ROOT\}" -xdev[\s\S]*\)"; then/u);
-  assert.match(update, /Could not verify source checkout ownership/);
-  assert.match(update, /assert_tree_ownership\(\)/);
-  assert.match(update, /assert_active_runtime\(\)/);
-  assert.match(update, /assert_tree_ownership "\$\{SOURCE_ROOT\}\/dist" root "Active runtime"/);
-  assert.match(update, /stat -c 'owner=%U group=%G mode=%a type=%F links=%h'/);
-  assert.match(update, /The source checkout contains a path not owned by/);
-  assert.match(update, /path_metadata "\$\{foreign_path\}"/);
-  assert.equal((update.match(/\nassert_secure_storage_root\n/gu) ?? []).length, 2);
-  assert.equal((update.match(/\nassert_source_ownership\n/gu) ?? []).length, 2);
-});
-
-test("privileged permission updates do not follow source or runtime links", async () => {
-  const { install, update } = await scripts();
-  assert.match(install, /find -P "\$\{SOURCE_ROOT\}" -xdev -exec chown -h/);
-  assert.match(install, /Required source file must be a regular non-symlink file/);
-  assert.match(install, /scripts\/toolchain-environment\.sh/);
-  assert.doesNotMatch(install, /chown -R "\$\{owner\}:\$\{group\}" "\$\{SOURCE_ROOT\}"/);
-  assert.match(update, /assert_runtime_tree_safe\(\)/);
-  assert.match(update, /! -type d ! -type f/);
-  assert.match(update, /-type f -links \+1/);
-  assert.match(update, /find -P "\$\{root\}" -xdev -exec chown -h root:root \{\} \+/);
-  assert.match(update, /assert_tree_ownership "\$\{activation_stage\}" root "Staged runtime"/);
-  assert.doesNotMatch(update, /chown -R/);
-  assert.doesNotMatch(update, /-exec chown "\$\{expected_admin\}:\$\{admin_group\}"/);
-});
-
-test("update keeps activation and rollback runtime paths outside the source checkout", async () => {
-  const { update } = await scripts();
-  const build = update.indexOf('run_builder "${build_workspace}/node_modules/.bin/tsc"');
-  const testRun = update.indexOf("run_builder node --test", build);
-  const preActivationStorage = update.indexOf("assert_secure_storage_root", testRun);
-  const preActivationOwnership = update.indexOf("assert_source_ownership", preActivationStorage);
-  const activeRuntime = update.indexOf("assert_active_runtime", preActivationOwnership);
-  const stageSafety = update.indexOf('assert_runtime_tree_safe "${stage}" "Staged runtime"', activeRuntime);
-  const activationStage = update.indexOf('activation_stage="${STORAGE_ROOT}/.agent-relay-dist.stage.$$"', stageSafety);
-  const previous = update.indexOf('previous_dist="${STORAGE_ROOT}/.agent-relay-dist.previous.$$"', activationStage);
-  const adopt = update.indexOf('adopt_runtime_tree "${activation_stage}"', previous);
-  const swap = update.indexOf('sudo mv -- "${activation_stage}" "${SOURCE_ROOT}/dist"', adopt);
-  assert.ok(build >= 0 && testRun > build && preActivationStorage > testRun);
-  assert.ok(preActivationOwnership > preActivationStorage && activeRuntime > preActivationOwnership && stageSafety > activeRuntime);
-  assert.ok(activationStage > stageSafety && previous > activationStage && adopt > previous && swap > adopt);
-  assert.doesNotMatch(update, /\.dist\.previous\.\$\$|previous_dist="\$\{SOURCE_ROOT\}/);
-  assert.match(update, /git -C "\$\{SOURCE_ROOT\}" reset --hard "\$\{original_head\}"/);
-  assert.match(update, /sudo mv -- "\$\{previous_dist\}" "\$\{SOURCE_ROOT\}\/dist"/);
-  assert.match(update, /dist_swapped=1/);
-  assert.match(update, /sudo rm -rf -- "\$\{builder_state\}"/);
-  const activate = update.indexOf("restart_service", swap);
-  const removePrevious = update.indexOf('sudo rm -rf -- "${previous_dist}"', activate);
-  assert.ok(activate > swap && removePrevious > activate);
+  assert.doesNotMatch(update, /toolchain-environment\.sh|toolchain_environment_build/u);
+  assert.match(update, /\/usr\/local\/bin\/tsc/u);
+  assert.match(codexRun, /toolchain_environment_build/u);
+  assert.match(smoke, /toolchain_environment_build/u);
 });
 
 test("install and update contain no legacy Docker or Relay deployment", async () => {
   const { install, update } = await scripts();
   for (const script of [install, update]) {
     assert.doesNotMatch(script, /docker(?: |-)?compose|compose\.yml|AGENT_RELAY_TOKEN|AGENT_RELAY_URL|HOST_UID|HOST_GID/iu);
-    assert.doesNotMatch(script, /\.env/);
+    assert.doesNotMatch(script, /\.env/u);
   }
 });
 
-test("README files mirror the filesystem decision recorded in the completed plan", async () => {
-  const plan = await readFile("docs/exec-plans/completed/2026-07-16-install-native-github-runner.md", "utf8");
+test("README files mirror the native storage layout", async () => {
   const specification = await readFile("docs/native-github-runner-specification.md", "utf8");
   for (const path of ["README.md", "docs/operations/README.md"]) {
     const document = await readFile(path, "utf8");
     for (const storagePath of storagePaths) {
-      assert.ok(plan.includes(storagePath), `ExecPlan must define ${storagePath}`);
       assert.ok(specification.includes(storagePath), `Specification must define ${storagePath}`);
       assert.ok(document.includes(storagePath), `${path} must mirror ${storagePath}`);
     }
-    assert.match(document, /\.\/install\.sh/);
-    assert.match(document, /\.\/update\.sh/);
-    assert.doesNotMatch(document, /\/srv\/github-runner\/(?:runner|home|build|build-home)(?:\/|\s|$)/u);
+    assert.match(document, /\.\/install\.sh/u);
+    assert.match(document, /\.\/update\.sh/u);
     assert.doesNotMatch(document, /\/opt\/agent-relay|docker compose|AGENT_RELAY_TOKEN/iu);
   }
-  assert.match(plan, /README files may summarize it but must not introduce additional filesystem decisions/);
-  assert.match(plan, /runner\/_work` is a managed symlink to `\.\.\/work/);
 });

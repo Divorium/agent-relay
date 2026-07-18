@@ -122,10 +122,10 @@ export class CodexExecutor {
         terminateProcess(child, "SIGTERM");
         forceKillTimer = setTimeout(() => terminateProcess(child, "SIGKILL"), this.forceKillDelayMs);
       }, this.timeoutMs);
-      child.on("error", () => {
+      child.on("error", (error: Error) => {
         clearTimeout(timeoutTimer);
         clearTimeout(forceKillTimer);
-        reject(new CodexExecutionError("CODEX_FAILED", "Codex process could not be started"));
+        reject(new CodexExecutionError("CODEX_FAILED", `Codex process could not be started: ${error.message}`));
       });
       child.on("close", (code: number | null) => {
         clearTimeout(timeoutTimer);

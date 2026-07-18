@@ -16,7 +16,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: read
 
 concurrency:
@@ -24,9 +24,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  codex:
+  validate:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: [self-hosted]
+    outputs:
+      pr_number: ${{ steps.request.outputs.pr_number }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
     steps:
       - name: Resolve execution request
         id: request
@@ -51,11 +54,35 @@ jobs:
           token: ${{ github.token }}
           persist-credentials: false
 
-      - name: Verify resolved revision
-        shell: bash
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate repository
+        run: npm run check
+
+  codex:
+    needs: validate
+    if: ${{ needs.validate.result == 'success' }}
+    runs-on: [self-hosted]
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Re-resolve ready pull request
+        id: pr
         env:
-          EXPECTED_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
-        run: test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD_SHA}"
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.validate.outputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
+        run: node /srv/github-runner/storage/agent-relay/runner/resolve-pr.mjs
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+          fetch-depth: 0
+          token: ${{ github.token }}
+          persist-credentials: false
 
       - name: Verify credential-free checkout
         shell: bash

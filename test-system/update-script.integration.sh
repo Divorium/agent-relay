@@ -16,16 +16,17 @@ REMOTE_ROOT="${ROOT}/remote.git"
 FAKE_BIN="${ROOT}/bin"
 FAKE_JAVA_HOME="${ROOT}/opt-java-openjdk"
 FAKE_GO_ROOT="${ROOT}/usr-local-go"
-FAKE_RUST_CARGO_HOME="${ROOT}/opt-rust-cargo"
+FAKE_RUST_CARGO_HOME="${ROOT}/opt-rust/cargo"
 FAKE_RUST_BIN="${FAKE_RUST_CARGO_HOME}/bin"
-FAKE_RUSTUP_HOME="${ROOT}/opt-rust-rustup"
+FAKE_RUSTUP_HOME="${ROOT}/opt-rust/rustup"
 ADMIN_FILE="${ROOT}/administrator"
 LOG_FILE="${ROOT}/commands.log"
 TOOLCHAIN_LOG="${ROOT}/toolchain.log"
+NODE_TEST_LOG="${ROOT}/node-tests.log"
 SERVICE_STATE="${ROOT}/service.state"
 FAIL_NEXT_START="${ROOT}/fail-next-start"
 FAIL_NEXT_BUILD="${ROOT}/fail-next-build"
-FAST_VALIDATION="${ROOT}/fast-validation"
+FAIL_NEXT_TEST="${ROOT}/fail-next-test"
 REAL_NODE="$(command -v node)"
 ADMIN_HOME="${ROOT}/admin-home"
 AMBIENT_PATH="${FAKE_BIN}:/usr/bin:/bin"
@@ -110,6 +111,7 @@ printf 'old\n' > "${SOURCE_ROOT}/dist/old-runtime.js"
 printf '%s\n' "$(id -un)" > "${ADMIN_FILE}"
 : > "${LOG_FILE}"
 : > "${TOOLCHAIN_LOG}"
+: > "${NODE_TEST_LOG}"
 printf 'active\n' > "${SERVICE_STATE}"
 
 cat > "${FAKE_BIN}/ps" <<'EOF_PS'
@@ -210,7 +212,15 @@ EOF_STATE
 
 cat > "${FAKE_BIN}/node" <<EOF_NODE
 #!/usr/bin/env bash
-if [[ -f "${FAST_VALIDATION}" && "\${1:-}" == '--test' ]]; then exit 0; fi
+set -euo pipefail
+if [[ "\${1:-}" == '--test' ]]; then
+  printf 'node %s\n' "\$*" >> "${NODE_TEST_LOG}"
+  if [[ -f "${FAIL_NEXT_TEST}" ]]; then
+    rm -f "${FAIL_NEXT_TEST}"
+    exit 1
+  fi
+  exit 0
+fi
 exec "${REAL_NODE}" "\$@"
 EOF_NODE
 cat > "${FAKE_BIN}/codex" <<'EOF_CODEX'
@@ -293,6 +303,7 @@ grep -q 'Agent Relay updated successfully' "${ROOT}/update-success.out"
 grep -q 'go version go1.24.5 linux/amd64' "${ROOT}/update-success.out"
 grep -q 'rustc 1.90.0 (mock)' "${ROOT}/update-success.out"
 grep -q 'cargo 1.90.0 (mock)' "${ROOT}/update-success.out"
+grep -q '^node --test --test-concurrency=1 ' "${NODE_TEST_LOG}"
 test -s "${TOOLCHAIN_LOG}"
 
 mapfile -t builder_lines < <(grep '^sudo -u agent-relay-builder ' "${LOG_FILE}" | grep -v ' sudo -n true$')
@@ -318,6 +329,23 @@ grep -qx reexec "${ROOT}/reexec.marker"
 
 SUCCESSFUL_HEAD="$(git -C "${SOURCE_ROOT}" rev-parse HEAD)"
 SUCCESSFUL_RUNTIME_SHA="$(sha256sum "${SOURCE_ROOT}/dist/src/run-codex.js" | cut -d' ' -f1)"
+TEST_INVOCATIONS="$(wc -l < "${NODE_TEST_LOG}")"
+printf 'release with simulated test failure\n' > "${RELEASE_ROOT}/release-test-broken.txt"
+git -C "${RELEASE_ROOT}" add release-test-broken.txt
+git -C "${RELEASE_ROOT}" -c user.name='Agent Relay Test' -c user.email=test@example.invalid commit -m 'release with simulated test failure' >/dev/null
+git -C "${RELEASE_ROOT}" push origin main >/dev/null
+printf '1\n' > "${FAIL_NEXT_TEST}"
+if run_update > "${ROOT}/test-failure.out" 2> "${ROOT}/test-failure.err"; then
+  echo 'Test failure unexpectedly succeeded' >&2
+  exit 1
+fi
+test "$(git -C "${SOURCE_ROOT}" rev-parse HEAD)" = "${SUCCESSFUL_HEAD}"
+test "$(sha256sum "${SOURCE_ROOT}/dist/src/run-codex.js" | cut -d' ' -f1)" = "${SUCCESSFUL_RUNTIME_SHA}"
+test ! -e "${SOURCE_ROOT}/release-test-broken.txt"
+test ! -e "${FAIL_NEXT_TEST}"
+test "$(wc -l < "${NODE_TEST_LOG}")" -eq "$((TEST_INVOCATIONS + 1))"
+grep -qx active "${SERVICE_STATE}"
+
 printf 'release with simulated build failure\n' > "${RELEASE_ROOT}/release-broken.txt"
 git -C "${RELEASE_ROOT}" add release-broken.txt
 git -C "${RELEASE_ROOT}" -c user.name='Agent Relay Test' -c user.email=test@example.invalid commit -m 'release with simulated build failure' >/dev/null
@@ -336,7 +364,6 @@ printf 'release three\n' > "${RELEASE_ROOT}/release-three.txt"
 git -C "${RELEASE_ROOT}" add -A
 git -C "${RELEASE_ROOT}" -c user.name='Agent Relay Test' -c user.email=test@example.invalid commit -m 'release three' >/dev/null
 git -C "${RELEASE_ROOT}" push origin main >/dev/null
-printf '1\n' > "${FAST_VALIDATION}"
 printf '1\n' > "${FAIL_NEXT_START}"
 if run_update > "${ROOT}/service-failure.out" 2> "${ROOT}/service-failure.err"; then
   echo 'Service-start failure unexpectedly succeeded' >&2

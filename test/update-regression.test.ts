@@ -68,6 +68,17 @@ test("pipeline validates the production build and real host toolchain", async ()
   assert.match(toolchainCheck, /scripts?\/toolchain-smoke\.sh|toolchain-smoke\.sh/u);
 });
 
+test("workflow names and concurrency match their responsibilities", async () => {
+  const ci = await read(".github/workflows/ci.yml");
+  const codex = await read(".github/workflows/agent-relay.yml");
+
+  assert.match(ci, /^name: CI$/mu);
+  assert.match(ci, /concurrency:\n  group: \$\{\{ github\.ref \}\}\n  cancel-in-progress: true/u);
+  assert.match(codex, /^name: Codex$/mu);
+  assert.doesNotMatch(codex, /^name: Agent Relay$/mu);
+  assert.match(codex, /cancel-in-progress: false/u);
+});
+
 test("runtime compiler configuration excludes tests and preserves the runtime path", async () => {
   const runtimeConfig = JSON.parse(await read("tsconfig.runtime.json")) as {
     extends?: string;

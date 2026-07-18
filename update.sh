@@ -43,27 +43,28 @@ assert_admin_state_file() {
 }
 
 wait_for_runner_worker() {
-  local status
+  local process_name process_names worker_active
 
   while true; do
-    set +e
-    sudo /usr/bin/pgrep -u "${RUNNER_USER}" -f 'Runner\.Worker' >/dev/null 2>&1
-    status=$?
-    set -e
+    if ! process_names="$(sudo /usr/bin/ps -u "${RUNNER_USER}" -o comm=)"; then
+      echo "Could not inspect GitHub runner worker processes" >&2
+      exit 1
+    fi
 
-    case "${status}" in
-      0)
-        echo "Waiting for the active GitHub runner job to finish..."
-        sleep 5
-        ;;
-      1)
-        return
-        ;;
-      *)
-        echo "Could not inspect GitHub runner worker processes" >&2
-        exit 1
-        ;;
-    esac
+    worker_active=0
+    while IFS= read -r process_name; do
+      if [[ "${process_name}" == "Runner.Worker" ]]; then
+        worker_active=1
+        break
+      fi
+    done <<< "${process_names}"
+
+    if (( worker_active == 0 )); then
+      return
+    fi
+
+    echo "Waiting for the active GitHub runner job to finish..."
+    sleep 5
   done
 }
 
@@ -98,8 +99,8 @@ expected_admin="$(tr -d '\r\n' < "${ADMIN_FILE}")"
   echo "Pinned TypeScript compiler is missing: /usr/local/bin/tsc" >&2
   exit 1
 }
-[[ -x /usr/bin/pgrep ]] || {
-  echo "pgrep is missing: install procps with ./install.sh" >&2
+[[ -x /usr/bin/ps ]] || {
+  echo "Process inspection is unavailable: /usr/bin/ps" >&2
   exit 1
 }
 [[ -f "${RUNTIME_CONFIG}" && ! -L "${RUNTIME_CONFIG}" ]] || {

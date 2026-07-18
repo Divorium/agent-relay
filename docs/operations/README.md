@@ -9,8 +9,8 @@ All application-owned paths are grouped under `/srv/github-runner/storage`:
 /srv/github-runner/storage/work         github-runner-owned workflow workspaces
 /srv/github-runner/storage/runner       official GitHub Actions runner
 /srv/github-runner/storage/home         github-runner home and Codex authentication
-/srv/github-runner/storage/build        isolated temporary build area
-/srv/github-runner/storage/build-home   builder home and tool caches
+/srv/github-runner/storage/build        disposable update leftovers
+/srv/github-runner/storage/build-home   builder home
 ```
 
 `/srv/github-runner/storage/runner/_work` is a managed symlink to `../work`.
@@ -37,10 +37,13 @@ Do not run `install.sh` for normal releases.
 
 ```bash
 cd /srv/github-runner/storage/agent-relay
+git pull --ff-only
 ./update.sh
 ```
 
-The update is rejected when the checkout contains local changes. It stops the runner service, pulls with fast-forward only, re-executes the updater from the pulled revision, builds in an isolated no-sudo account, runs the complete test suite with 100% TypeScript runtime coverage, atomically publishes `dist`, and restarts the service. Failure restores the previous revision and runtime.
+Git synchronization is always explicit and remains outside `update.sh`. The pipeline validates the revision before it reaches `main`. The updater stops the runner listener, waits for an existing `Runner.Worker`, removes the old runtime, compiles `dist` directly from the checked-out sources with the pinned global TypeScript compiler, applies root ownership and read-only runtime modes, and starts the service.
+
+The updater does not require a clean checkout and does not run dependency installation, tests, coverage, syntax checks, or toolchain smoke. It does not retain or restore the old runtime. If an update fails, correct the cause and run `./update.sh` again; the next invocation deletes `dist` and rebuilds it from zero.
 
 ## Status
 

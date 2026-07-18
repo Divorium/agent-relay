@@ -1,4 +1,4 @@
-name: Agent Relay
+name: Codex
 
 on:
   pull_request:

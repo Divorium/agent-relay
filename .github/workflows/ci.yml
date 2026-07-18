@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
@@ -19,5 +23,40 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Validate repository
-        run: npm run check
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run tests and coverage
+        id: tests
+        shell: bash
+        run: |
+          set +e
+          npm test > "${RUNNER_TEMP}/agent-relay-test-output.log" 2>&1
+          status=$?
+          if (( status != 0 )); then
+            tail -n 80 "${RUNNER_TEMP}/agent-relay-test-output.log"
+          fi
+          exit "${status}"
+
+      - name: Upload test failure output
+        if: failure() && steps.tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-relay-test-output
+          path: ${{ runner.temp }}/agent-relay-test-output.log
+          if-no-files-found: error
+
+      - name: Validate production runtime build
+        run: npm run check:runtime
+
+      - name: Validate shell scripts
+        run: npm run check:shell
+
+      - name: Validate Node scripts
+        run: npm run check:node-scripts
+
+      - name: Validate toolchain
+        run: npm run check:toolchain
+
+      - name: Validate system scripts
+        run: npm run check:system

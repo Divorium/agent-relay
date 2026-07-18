@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const workflowPaths = [
-  ".github/workflows/agent-relay.yml",
-  "examples/github-actions/agent-relay.yml",
+  ".github/workflows/codex.yml",
+  "examples/github-actions/codex.yml",
 ];
 
-test("Agent Relay validates and rechecks the exact pull request revision before Codex", async () => {
+test("Codex validates and rechecks the exact pull request revision before execution", async () => {
   for (const path of workflowPaths) {
     const workflow = await readFile(path, "utf8");
     assert.match(workflow, /permissions:\n  contents: read\n  pull-requests: read/u);

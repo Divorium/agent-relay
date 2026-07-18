@@ -132,10 +132,12 @@ test("foreign head repository is rejected", async () => {
   assert.equal(result.output, "");
 });
 
-test("production and example workflows enforce the approval contract", async () => {
-  const production = await readFile(join(process.cwd(), ".github", "workflows", "agent-relay.yml"), "utf8");
-  const example = await readFile(join(process.cwd(), "examples", "github-actions", "agent-relay.yml"), "utf8");
+test("production and example Codex workflows enforce the approval contract", async () => {
+  const production = await readFile(join(process.cwd(), ".github", "workflows", "codex.yml"), "utf8");
+  const example = await readFile(join(process.cwd(), "examples", "github-actions", "codex.yml"), "utf8");
   assertApprovalWorkflow(production);
   assertApprovalWorkflow(example);
   assert.equal(example, production);
+  await assert.rejects(readFile(join(process.cwd(), ".github", "workflows", "agent-relay.yml"), "utf8"), /ENOENT/u);
+  await assert.rejects(readFile(join(process.cwd(), "examples", "github-actions", "agent-relay.yml"), "utf8"), /ENOENT/u);
 });

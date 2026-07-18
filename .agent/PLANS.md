@@ -10,6 +10,7 @@ Only the explicitly selected file under `docs/exec-plans/active/` is a task inst
 - Distinguish clearly between behavior that exists now and behavior proposed by the plan.
 - Keep the plan scoped to the requested change. Do not restate unrelated updater, workflow, CI, installation, or security mechanics merely for completeness.
 - Refer to an existing current contract instead of duplicating it when the plan does not change that contract.
+- Keep architecture decisions independent from a specific Linux distribution, hypervisor, cloud provider, or bare-metal placement unless the requested feature explicitly requires one. Put package-manager and current-host compatibility details behind explicit implementation boundaries.
 - After a rebase or base-branch change, recheck file names, entrypoints, workflow paths, and all descriptions of current behavior before implementation starts.
 - State explicitly when no workflow, public API, request contract, installation argument, or routing change is required.
 - Do not update current-state README or operator documentation to claim that a planned feature exists before implementation and acceptance are complete.

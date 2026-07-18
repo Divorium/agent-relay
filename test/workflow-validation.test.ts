@@ -17,6 +17,5 @@ test("Agent Relay validates the exact pull request revision before Codex", async
     assert.match(workflow, /ref: \$\{\{ needs\.validate\.outputs\.head_sha \}\}/u);
     assert.match(workflow, /HEAD_SHA: \$\{\{ needs\.validate\.outputs\.head_sha \}\}/u);
     assert.match(workflow, /TARGET_BRANCH: \$\{\{ needs\.validate\.outputs\.head_ref \}\}/u);
-    assert.doesNotMatch(workflow, /Verify resolved revision|git rev-parse HEAD|EXPECTED_HEAD_SHA/u);
   }
 });

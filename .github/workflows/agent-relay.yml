@@ -24,9 +24,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  codex:
+  validate:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: [self-hosted]
+    outputs:
+      head_ref: ${{ steps.pr.outputs.head_ref }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
     steps:
       - name: Resolve execution request
         id: request
@@ -57,6 +60,30 @@ jobs:
           EXPECTED_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD_SHA}"
 
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate repository
+        run: npm run check
+
+  codex:
+    needs: validate
+    if: ${{ needs.validate.result == 'success' }}
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.head_sha }}
+          fetch-depth: 0
+          token: ${{ github.token }}
+          persist-credentials: false
+
+      - name: Verify resolved revision
+        shell: bash
+        env:
+          EXPECTED_HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
+        run: test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD_SHA}"
+
       - name: Verify credential-free checkout
         shell: bash
         run: |
@@ -78,7 +105,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
           INPUT_PLAN_PATH: ${{ inputs.plan_path }}
         run: node /srv/github-runner/storage/agent-relay/runner/resolve-plan.mjs
 
@@ -109,6 +136,6 @@ jobs:
         shell: bash
         env:
           COMMIT_MESSAGE: ${{ steps.codex.outputs.commit_message }}
-          TARGET_BRANCH: ${{ steps.pr.outputs.head_ref }}
+          TARGET_BRANCH: ${{ needs.validate.outputs.head_ref }}
           GITHUB_PUSH_TOKEN: ${{ github.token }}
         run: /srv/github-runner/storage/agent-relay/runner/finalize.sh

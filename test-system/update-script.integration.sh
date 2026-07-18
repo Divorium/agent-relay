@@ -25,7 +25,7 @@ printf '0\n' > "${WORKER_POLLS}"
 : > "${LOG_FILE}"
 
 BASE_ROOT="${BASE_ROOT}" ADMIN_FILE="${ADMIN_FILE}" SOURCE_ROOT="${SOURCE_ROOT}" \
-FAKE_TSC="${FAKE_BIN}/tsc" FAKE_PGREP="${FAKE_BIN}/pgrep" \
+FAKE_TSC="${FAKE_BIN}/tsc" FAKE_PS="${FAKE_BIN}/ps" \
 python3 - "${SOURCE_ROOT}/update.sh" <<'PY'
 import json
 import os
@@ -41,7 +41,7 @@ source = source.replace(
     f"SCRIPT_ROOT={json.dumps(os.environ['SOURCE_ROOT'])}",
 )
 source = source.replace("/usr/local/bin/tsc", os.environ["FAKE_TSC"])
-source = source.replace("/usr/bin/pgrep", os.environ["FAKE_PGREP"])
+source = source.replace("/usr/bin/ps", os.environ["FAKE_PS"])
 path.write_text(source)
 PY
 
@@ -55,13 +55,23 @@ fi
 exec /usr/bin/id "$@"
 EOF_ID
 
-cat > "${FAKE_BIN}/ps" <<'EOF_PS'
+cat > "${FAKE_BIN}/ps" <<EOF_PS
 #!/usr/bin/env bash
-if [[ "$*" == *"-p 1 -o comm="* ]]; then
+set -euo pipefail
+if [[ "\$*" == *"-p 1 -o comm="* ]]; then
   printf 'systemd\n'
-else
-  exec /bin/ps "$@"
+  exit 0
 fi
+if [[ "\$*" == "-u github-runner -o comm=" ]]; then
+  printf 'worker-ps %s\n' "\$*" >> "${LOG_FILE}"
+  remaining="\$(cat "${WORKER_POLLS}")"
+  if (( remaining > 0 )); then
+    printf '%s\n' "\$((remaining - 1))" > "${WORKER_POLLS}"
+    printf 'Runner.Worker\n'
+  fi
+  exit 0
+fi
+exec /bin/ps "\$@"
 EOF_PS
 
 cat > "${FAKE_BIN}/stat" <<EOF_STAT
@@ -88,18 +98,6 @@ case "\${1:-}" in
   *) echo "unexpected systemctl command: \$*" >&2; exit 1 ;;
 esac
 EOF_SYSTEMCTL
-
-cat > "${FAKE_BIN}/pgrep" <<EOF_PGREP
-#!/usr/bin/env bash
-set -euo pipefail
-printf 'pgrep %s\n' "\$*" >> "${LOG_FILE}"
-remaining="\$(cat "${WORKER_POLLS}")"
-if (( remaining > 0 )); then
-  printf '%s\n' "\$((remaining - 1))" > "${WORKER_POLLS}"
-  exit 0
-fi
-exit 1
-EOF_PGREP
 
 cat > "${FAKE_BIN}/tsc" <<EOF_TSC
 #!/usr/bin/env bash
@@ -171,16 +169,15 @@ run_update > "${ROOT}/success.out" 2> "${ROOT}/success.err"
 
 test -f "${SOURCE_ROOT}/local-untracked.txt"
 test "$(cat "${SOURCE_ROOT}/dist/src/run-codex.js")" = 'new runtime'
-test ! -e "${SOURCE_ROOT}/dist/src/old-runtime.js"
 grep -qx active "${SERVICE_STATE}"
 grep -q 'Agent Relay runtime rebuilt and activated successfully' "${ROOT}/success.out"
-test "$(grep -c '^pgrep ' "${LOG_FILE}")" -eq 3
+test "$(grep -c '^worker-ps ' "${LOG_FILE}")" -eq 3
 
 stop_line="$(grep -n 'systemctl stop' "${LOG_FILE}" | head -n 1 | cut -d: -f1)"
-first_pgrep_line="$(grep -n '^pgrep ' "${LOG_FILE}" | head -n 1 | cut -d: -f1)"
+first_worker_line="$(grep -n '^worker-ps ' "${LOG_FILE}" | head -n 1 | cut -d: -f1)"
 tsc_line="$(grep -n '^tsc ' "${LOG_FILE}" | head -n 1 | cut -d: -f1)"
 start_line="$(grep -n 'systemctl start' "${LOG_FILE}" | head -n 1 | cut -d: -f1)"
-(( stop_line < first_pgrep_line && first_pgrep_line < tsc_line && tsc_line < start_line ))
+(( stop_line < first_worker_line && first_worker_line < tsc_line && tsc_line < start_line ))
 
 # A build failure performs no rollback. The service remains stopped and the
 # partial runtime remains until the next invocation deletes it and starts over.

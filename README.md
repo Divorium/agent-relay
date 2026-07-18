@@ -11,13 +11,13 @@ All Agent Relay and GitHub Runner data is grouped under `/srv/github-runner/stor
 /srv/github-runner/storage/work         github-runner-owned workflow workspaces
 /srv/github-runner/storage/runner       official GitHub Actions runner
 /srv/github-runner/storage/home         github-runner home and Codex authentication
-/srv/github-runner/storage/build        isolated temporary build area
-/srv/github-runner/storage/build-home   builder home and tool caches
+/srv/github-runner/storage/build        disposable update leftovers
+/srv/github-runner/storage/build-home   builder home
 ```
 
 This layout is an explicit architecture decision recorded in `docs/exec-plans/completed/2026-07-16-install-native-github-runner.md` and specified in `docs/native-github-runner-specification.md`.
 
-The source checkout is owned by the Debian administrator. The `github-runner` service account can read it but cannot modify it and has no sudo access. Builds run as the separate no-sudo `agent-relay-builder` account.
+The source checkout is owned by the Debian administrator. The `github-runner` service account can read it but cannot modify it and has no sudo access. Runtime compilation runs as the separate no-sudo `agent-relay-builder` account. The activated `dist` tree is owned by root.
 
 ## First installation
 
@@ -26,7 +26,7 @@ cd /srv/github-runner/storage/agent-relay
 ./install.sh
 ```
 
-If the installer enables systemd, run `wsl --shutdown` from Windows and start Debian again. Then deploy and validate the checked-out revision:
+If the installer enables systemd, run `wsl --shutdown` from Windows and start Debian again. Then build and activate the checked-out revision:
 
 ```bash
 cd /srv/github-runner/storage/agent-relay
@@ -37,11 +37,14 @@ cd /srv/github-runner/storage/agent-relay
 
 ## Updates
 
-For every later release run only:
+For every later release, update the checkout explicitly and then rebuild the runtime:
 
 ```bash
 cd /srv/github-runner/storage/agent-relay
+git pull --ff-only
 ./update.sh
 ```
 
-`update.sh` requires a clean checkout, stops the runner, performs `git pull --ff-only`, re-executes the updater from the pulled revision, builds and tests that revision as `agent-relay-builder`, requires 100% TypeScript runtime coverage, atomically replaces `dist`, and starts the runner again. A failed update restores the previous Git revision and compiled runtime.
+The repository pipeline performs dependency installation, type checking, tests, coverage, syntax checks, system tests, production-runtime compilation validation, and the host toolchain smoke test. `update.sh` does not repeat that validation and performs no Git commands. It stops the runner listener, waits for the current `Runner.Worker` to finish, deletes the previous `dist`, compiles a new production runtime directly into `dist`, applies root ownership, and starts the runner.
+
+There is no rollback or recovery. If an update fails, run `./update.sh` again after correcting the cause. Every invocation deletes `dist` and builds it again from zero.

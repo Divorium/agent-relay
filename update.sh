@@ -19,6 +19,7 @@ builder_state=""
 previous_dist=""
 original_head=""
 service_was_active=0
+reexec_phase=0
 committed=0
 dist_swapped=0
 declare -a builder_env=()
@@ -55,6 +56,28 @@ path_metadata() {
   fi
 }
 
+assert_admin_state_file() {
+  local metadata owner group mode mode_value
+  if [[ ! -f "${ADMIN_FILE}" || -L "${ADMIN_FILE}" || ! -r "${ADMIN_FILE}" ]]; then
+    echo "Run ./install.sh before ./update.sh; administrator state must be a readable regular non-symlink file" >&2
+    exit 1
+  fi
+  if ! metadata="$(stat -c '%U|%G|%a' -- "${ADMIN_FILE}")"; then
+    echo "Could not inspect administrator state ownership" >&2
+    exit 1
+  fi
+  IFS='|' read -r owner group mode <<< "${metadata}"
+  if [[ ! "${mode}" =~ ^[0-7]{3,4}$ ]]; then
+    echo "Administrator state has an invalid mode: ${mode}" >&2
+    exit 1
+  fi
+  mode_value=$((8#${mode}))
+  if [[ "${owner}" != root || "${group}" != root ]] || (( (mode_value & 0022) != 0 )); then
+    echo "Administrator state must be root:root and not group/other-writable" >&2
+    exit 1
+  fi
+}
+
 assert_secure_storage_root() {
   local metadata owner group mode mode_value
   if [[ ! -d "${STORAGE_ROOT}" || -L "${STORAGE_ROOT}" ]]; then
@@ -74,6 +97,29 @@ assert_secure_storage_root() {
   if [[ "${owner}" != root || "${group}" != root ]] || (( (mode_value & 0022) != 0 )); then
     printf 'Storage root must be root:root and not group/other-writable: ' >&2
     path_metadata "${STORAGE_ROOT}" >&2
+    printf '\n' >&2
+    exit 1
+  fi
+}
+
+assert_private_directory() {
+  local path="$1"
+  local expected_owner="$2"
+  local expected_group="$3"
+  local label="$4"
+  local metadata owner group mode
+  if [[ ! -d "${path}" || -L "${path}" ]]; then
+    printf '%s must be a regular directory: %q\n' "${label}" "${path}" >&2
+    exit 1
+  fi
+  if ! metadata="$(sudo stat -c '%U|%G|%a' -- "${path}")"; then
+    printf 'Could not inspect %s ownership\n' "${label}" >&2
+    exit 1
+  fi
+  IFS='|' read -r owner group mode <<< "${metadata}"
+  if [[ "${owner}" != "${expected_owner}" || "${group}" != "${expected_group}" || "${mode}" != 700 ]]; then
+    printf '%s must be %s:%s with mode 700: ' "${label}" "${expected_owner}" "${expected_group}" >&2
+    path_metadata "${path}" >&2
     printf '\n' >&2
     exit 1
   fi
@@ -145,6 +191,13 @@ assert_active_runtime() {
   fi
 }
 
+assert_no_builder_processes() {
+  if sudo /usr/bin/pgrep -u "${BUILD_USER}" >/dev/null 2>&1; then
+    echo "The isolated builder still has running processes after validation" >&2
+    exit 1
+  fi
+}
+
 adopt_runtime_tree() {
   local root="$1"
   sudo find -P "${root}" -xdev -exec chown -h root:root {} +
@@ -159,7 +212,7 @@ prepare_builder_state() {
   for state_directory in "${TOOLCHAIN_STATE_SUBDIRECTORIES[@]}"; do
     state_paths+=("${state_root}/${state_directory}")
   done
-  sudo install -d -o "${BUILD_USER}" -g "${BUILD_USER}" -m 0700 "${state_paths[@]}"
+  sudo -u "${BUILD_USER}" /usr/bin/mkdir -m 0700 -- "${state_paths[@]}"
 }
 
 run_builder() {
@@ -223,7 +276,21 @@ if [[ "${SCRIPT_ROOT}" != "${SOURCE_ROOT}" ]]; then
   echo "The repository must be checked out at ${SOURCE_ROOT}" >&2
   exit 1
 fi
-[[ -r "${ADMIN_FILE}" ]] || { echo "Run ./install.sh before ./update.sh" >&2; exit 1; }
+
+if [[ "${AGENT_RELAY_UPDATE_PHASE:-}" == reexec ]]; then
+  original_head="${AGENT_RELAY_ORIGINAL_HEAD:-}"
+  [[ "${original_head}" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid update rollback state" >&2; exit 1; }
+  [[ "${AGENT_RELAY_SERVICE_WAS_ACTIVE:-0}" =~ ^[01]$ ]] \
+    || { echo "Invalid service rollback state" >&2; exit 1; }
+  service_was_active="${AGENT_RELAY_SERVICE_WAS_ACTIVE}"
+  reexec_phase=1
+  unset AGENT_RELAY_UPDATE_PHASE AGENT_RELAY_ORIGINAL_HEAD AGENT_RELAY_SERVICE_WAS_ACTIVE
+elif [[ -n "${AGENT_RELAY_UPDATE_PHASE:-}" ]]; then
+  echo "Unsupported update phase" >&2
+  exit 1
+fi
+
+assert_admin_state_file
 expected_admin="$(tr -d '\r\n' < "${ADMIN_FILE}")"
 [[ "${expected_admin}" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] || { echo "Invalid administrator state" >&2; exit 1; }
 [[ "$(id -un)" == "${expected_admin}" ]] || { echo "update.sh must be run by ${expected_admin}" >&2; exit 1; }
@@ -232,6 +299,8 @@ expected_admin="$(tr -d '\r\n' < "${ADMIN_FILE}")"
 
 sudo -v
 assert_secure_storage_root
+assert_private_directory "${BUILD_ROOT}" "${BUILD_USER}" "${BUILD_USER}" "Build root"
+assert_private_directory "${BUILD_HOME}" "${BUILD_USER}" "${BUILD_USER}" "Builder home"
 assert_source_ownership
 assert_active_runtime
 git -C "${SOURCE_ROOT}" config core.fileMode false
@@ -254,15 +323,9 @@ if sudo -u "${BUILD_USER}" -H sudo -n true >/dev/null 2>&1; then
 fi
 
 cd "${SOURCE_ROOT}"
-if [[ "${AGENT_RELAY_UPDATE_PHASE:-}" == reexec ]]; then
-  original_head="${AGENT_RELAY_ORIGINAL_HEAD:-}"
-  [[ "${original_head}" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid update rollback state" >&2; exit 1; }
+if (( reexec_phase == 1 )); then
   git -C "${SOURCE_ROOT}" cat-file -e "${original_head}^{commit}" 2>/dev/null \
     || { echo "The rollback commit is unavailable" >&2; exit 1; }
-  [[ "${AGENT_RELAY_SERVICE_WAS_ACTIVE:-0}" =~ ^[01]$ ]] \
-    || { echo "Invalid service rollback state" >&2; exit 1; }
-  service_was_active="${AGENT_RELAY_SERVICE_WAS_ACTIVE}"
-  unset AGENT_RELAY_UPDATE_PHASE AGENT_RELAY_ORIGINAL_HEAD AGENT_RELAY_SERVICE_WAS_ACTIVE
 else
   original_head="$(git -C "${SOURCE_ROOT}" rev-parse HEAD)"
   if sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
@@ -287,7 +350,7 @@ build_workspace="${BUILD_ROOT}/workspace.$$"
 stage="${BUILD_ROOT}/dist.$$"
 builder_state="${BUILD_ROOT}/state.$$"
 sudo rm -rf -- "${build_workspace}" "${stage}" "${builder_state}"
-sudo install -d -o "${BUILD_USER}" -g "${BUILD_USER}" -m 0700 "${build_workspace}" "${stage}"
+sudo -u "${BUILD_USER}" /usr/bin/mkdir -m 0700 -- "${build_workspace}" "${stage}"
 prepare_builder_state "${builder_state}"
 toolchain_environment_build "${BUILD_USER}" "${BUILD_HOME}" "${builder_state}" builder_env
 
@@ -326,10 +389,13 @@ run_builder \
   EXPECTED_TOOLCHAIN_STATE_ROOT="${builder_state}" \
   "${SOURCE_ROOT}/scripts/toolchain-smoke.sh"
 
+assert_no_builder_processes
 sudo rm -rf -- "${builder_state}"
 builder_state=""
 sudo -v
 assert_secure_storage_root
+assert_private_directory "${BUILD_ROOT}" "${BUILD_USER}" "${BUILD_USER}" "Build root"
+assert_private_directory "${BUILD_HOME}" "${BUILD_USER}" "${BUILD_USER}" "Builder home"
 assert_source_ownership
 assert_active_runtime
 assert_runtime_tree_safe "${stage}" "Staged runtime"
@@ -339,6 +405,8 @@ previous_dist="${STORAGE_ROOT}/.agent-relay-dist.previous.$$"
 sudo rm -rf -- "${activation_stage}" "${previous_dist}"
 sudo mv -- "${stage}" "${activation_stage}"
 stage=""
+sudo chown -h root:root "${activation_stage}"
+sudo chmod 0700 "${activation_stage}"
 assert_runtime_tree_safe "${activation_stage}" "Staged runtime"
 adopt_runtime_tree "${activation_stage}"
 assert_tree_ownership "${activation_stage}" root "Staged runtime"

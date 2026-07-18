@@ -19,6 +19,7 @@ test("update leaves Git and repository validation outside deployment", async () 
 
 test("update stops intake, waits, deletes and rebuilds the final runtime", async () => {
   const update = await read("update.sh");
+  const runnerUid = update.indexOf('RUNNER_UID="$(id -u "${RUNNER_USER}")"');
   const stop = update.indexOf('sudo systemctl stop "${SERVICE_NAME}"');
   const wait = update.indexOf("wait_for_runner_worker", stop);
   const removeBuild = update.indexOf('sudo rm -rf -- "${BUILD_ROOT}"', wait);
@@ -30,6 +31,7 @@ test("update stops intake, waits, deletes and rebuilds the final runtime", async
   const enable = update.indexOf('sudo systemctl enable "${SERVICE_NAME}"', adopt);
   const start = update.indexOf('sudo systemctl start "${SERVICE_NAME}"', enable);
 
+  assert.ok(runnerUid >= 0 && runnerUid < stop);
   assert.ok(stop >= 0 && wait > stop && removeBuild > wait);
   assert.ok(removeRuntime > removeBuild && createRuntime > removeRuntime && compile > createRuntime);
   assert.ok(entrypoint > compile && adopt > entrypoint && enable > adopt && start > enable);
@@ -40,14 +42,17 @@ test("update stops intake, waits, deletes and rebuilds the final runtime", async
   assert.doesNotMatch(update, /\bmv\b|\.previous|\.stage|workspace\./u);
 });
 
-test("runner wait distinguishes active, idle and inspection failure", async () => {
+test("runner wait scans the complete process table and filters by numeric UID", async () => {
   const update = await read("update.sh");
-  assert.match(update, /\/usr\/bin\/ps -u "\$\{RUNNER_USER\}" -o comm=/u);
-  assert.match(update, /"\$\{process_name\}" == "Runner\.Worker"/u);
+
+  assert.match(update, /RUNNER_UID="\$\(id -u "\$\{RUNNER_USER\}"\)"/u);
+  assert.match(update, /sudo \/usr\/bin\/ps -e -o euid=,comm=/u);
+  assert.match(update, /"\$\{process_uid\}" == "\$\{RUNNER_UID\}" && "\$\{process_name\}" == "Runner\.Worker"/u);
   assert.match(update, /worker_active=1/u);
   assert.match(update, /worker_active == 0/u);
   assert.match(update, /sleep 5/u);
   assert.match(update, /Could not inspect GitHub runner worker processes/u);
+  assert.doesNotMatch(update, /\/usr\/bin\/ps -u/u);
   assert.doesNotMatch(update, /\/usr\/bin\/pgrep/u);
 });
 

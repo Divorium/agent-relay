@@ -41,7 +41,7 @@ git pull --ff-only
 ./update.sh
 ```
 
-Git synchronization is always explicit and remains outside `update.sh`. The pipeline validates the revision before it reaches `main`. The updater stops the runner listener, waits for an existing `Runner.Worker`, removes the old runtime, compiles `dist` directly from the checked-out sources with the pinned global TypeScript compiler, applies root ownership and read-only runtime modes, and starts the service.
+Git synchronization is always explicit and remains outside `update.sh`. The pipeline validates the revision before it reaches `main`. The updater stops the runner listener, scans the complete process table for a `Runner.Worker` owned by the numeric `github-runner` UID, waits only while that worker exists, removes the old runtime, compiles `dist` directly from the checked-out sources with the pinned global TypeScript compiler, applies root ownership and read-only runtime modes, and starts the service. No processes owned by `github-runner`, or a listener without a worker, means the runner is idle and replacement continues.
 
 The updater does not require a clean checkout and does not run dependency installation, tests, coverage, syntax checks, or toolchain smoke. It does not retain or restore the old runtime. If an update fails, correct the cause and run `./update.sh` again; the next invocation deletes `dist` and rebuilds it from zero.
 

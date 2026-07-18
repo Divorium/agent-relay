@@ -14,13 +14,16 @@ FAKE_BIN="${ROOT}/bin"
 ADMIN_FILE="${ROOT}/administrator"
 LOG_FILE="${ROOT}/commands.log"
 SERVICE_STATE="${ROOT}/service.state"
+PROCESS_MODE="${ROOT}/process-mode"
 WORKER_POLLS="${ROOT}/worker-polls"
 FAIL_NEXT_BUILD="${ROOT}/fail-next-build"
+FAIL_PROCESS_INSPECTION="${ROOT}/fail-process-inspection"
 
 mkdir -p "${SOURCE_ROOT}" "${BUILD_ROOT}" "${BUILD_HOME}" "${FAKE_BIN}"
 rsync -a --exclude=.git --exclude=node_modules --exclude=dist ./ "${SOURCE_ROOT}/"
 printf '%s\n' "$(id -un)" > "${ADMIN_FILE}"
 printf 'active\n' > "${SERVICE_STATE}"
+printf 'idle\n' > "${PROCESS_MODE}"
 printf '0\n' > "${WORKER_POLLS}"
 : > "${LOG_FILE}"
 
@@ -48,8 +51,12 @@ PY
 cat > "${FAKE_BIN}/id" <<'EOF_ID'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "${1:-}" == "-u" && ( "${2:-}" == "agent-relay-builder" || "${2:-}" == "github-runner" ) ]]; then
+if [[ "${1:-}" == "-u" && "${2:-}" == "agent-relay-builder" ]]; then
   printf '1001\n'
+  exit 0
+fi
+if [[ "${1:-}" == "-u" && "${2:-}" == "github-runner" ]]; then
+  printf '1002\n'
   exit 0
 fi
 exec /usr/bin/id "$@"
@@ -62,13 +69,36 @@ if [[ "\$*" == *"-p 1 -o comm="* ]]; then
   printf 'systemd\n'
   exit 0
 fi
-if [[ "\$*" == "-u github-runner -o comm=" ]]; then
-  printf 'worker-ps %s\n' "\$*" >> "${LOG_FILE}"
-  remaining="\$(cat "${WORKER_POLLS}")"
-  if (( remaining > 0 )); then
-    printf '%s\n' "\$((remaining - 1))" > "${WORKER_POLLS}"
-    printf 'Runner.Worker\n'
+if [[ "\$*" == "-e -o euid=,comm=" ]]; then
+  printf 'process-table %s\n' "\$*" >> "${LOG_FILE}"
+  if [[ -f "${FAIL_PROCESS_INSPECTION}" ]]; then
+    exit 42
   fi
+
+  printf '0 init\n'
+  mode="\$(cat "${PROCESS_MODE}")"
+  case "\${mode}" in
+    idle)
+      ;;
+    listener)
+      printf '1002 Runner.Listener\n'
+      ;;
+    foreign-worker)
+      printf '2002 Runner.Worker\n'
+      ;;
+    worker)
+      printf '1002 Runner.Listener\n'
+      remaining="\$(cat "${WORKER_POLLS}")"
+      if (( remaining > 0 )); then
+        printf '%s\n' "\$((remaining - 1))" > "${WORKER_POLLS}"
+        printf '1002 Runner.Worker\n'
+      fi
+      ;;
+    *)
+      echo "unexpected process mode: \${mode}" >&2
+      exit 1
+      ;;
+  esac
   exit 0
 fi
 exec /bin/ps "\$@"
@@ -160,29 +190,94 @@ run_update() {
   (cd "${SOURCE_ROOT}" && bash "${SOURCE_ROOT}/update.sh")
 }
 
-# A dirty checkout and an active worker do not block deployment permanently.
+reset_log() {
+  : > "${LOG_FILE}"
+}
+
+assert_no_wait_message() {
+  local output="$1"
+  if grep -q 'Waiting for the active GitHub runner job to finish' "${output}"; then
+    echo "Update waited for a worker that should have been ignored" >&2
+    exit 1
+  fi
+}
+
+# An idle host with no github-runner processes must continue after listener stop.
 printf 'local change\n' > "${SOURCE_ROOT}/local-untracked.txt"
 mkdir -p "${SOURCE_ROOT}/dist/src"
 printf 'old runtime\n' > "${SOURCE_ROOT}/dist/src/run-codex.js"
-printf '2\n' > "${WORKER_POLLS}"
-run_update > "${ROOT}/success.out" 2> "${ROOT}/success.err"
+printf 'idle\n' > "${PROCESS_MODE}"
+reset_log
+run_update > "${ROOT}/idle.out" 2> "${ROOT}/idle.err"
 
 test -f "${SOURCE_ROOT}/local-untracked.txt"
 test "$(cat "${SOURCE_ROOT}/dist/src/run-codex.js")" = 'new runtime'
 grep -qx active "${SERVICE_STATE}"
-grep -q 'Agent Relay runtime rebuilt and activated successfully' "${ROOT}/success.out"
-test "$(grep -c '^worker-ps ' "${LOG_FILE}")" -eq 3
+grep -q 'Agent Relay runtime rebuilt and activated successfully' "${ROOT}/idle.out"
+test "$(grep -c '^process-table ' "${LOG_FILE}")" -eq 1
+assert_no_wait_message "${ROOT}/idle.out"
+
+# A runner-owned listener without a worker is also idle.
+printf 'listener\n' > "${PROCESS_MODE}"
+reset_log
+run_update > "${ROOT}/listener.out" 2> "${ROOT}/listener.err"
+test "$(grep -c '^process-table ' "${LOG_FILE}")" -eq 1
+assert_no_wait_message "${ROOT}/listener.out"
+grep -qx active "${SERVICE_STATE}"
+
+# A process with the worker name but a different UID must not block replacement.
+printf 'foreign-worker\n' > "${PROCESS_MODE}"
+reset_log
+run_update > "${ROOT}/foreign-worker.out" 2> "${ROOT}/foreign-worker.err"
+test "$(grep -c '^process-table ' "${LOG_FILE}")" -eq 1
+assert_no_wait_message "${ROOT}/foreign-worker.out"
+grep -qx active "${SERVICE_STATE}"
+
+# A worker owned by github-runner delays replacement until it exits.
+printf 'worker\n' > "${PROCESS_MODE}"
+printf '2\n' > "${WORKER_POLLS}"
+reset_log
+run_update > "${ROOT}/worker.out" 2> "${ROOT}/worker.err"
+test "$(grep -c '^process-table ' "${LOG_FILE}")" -eq 3
+test "$(grep -c 'Waiting for the active GitHub runner job to finish' "${ROOT}/worker.out")" -eq 2
 
 stop_line="$(grep -n 'systemctl stop' "${LOG_FILE}" | head -n 1 | cut -d: -f1)"
-first_worker_line="$(grep -n '^worker-ps ' "${LOG_FILE}" | head -n 1 | cut -d: -f1)"
+first_process_line="$(grep -n '^process-table ' "${LOG_FILE}" | head -n 1 | cut -d: -f1)"
 tsc_line="$(grep -n '^tsc ' "${LOG_FILE}" | head -n 1 | cut -d: -f1)"
 start_line="$(grep -n 'systemctl start' "${LOG_FILE}" | head -n 1 | cut -d: -f1)"
-(( stop_line < first_worker_line && first_worker_line < tsc_line && tsc_line < start_line ))
+(( stop_line < first_process_line && first_process_line < tsc_line && tsc_line < start_line ))
+
+# A real process-table failure is fatal before build or runtime deletion.
+mkdir -p "${BUILD_ROOT}"
+printf 'keep build\n' > "${BUILD_ROOT}/sentinel"
+mkdir -p "${SOURCE_ROOT}/dist/src"
+printf 'keep runtime\n' > "${SOURCE_ROOT}/dist/src/run-codex.js"
+printf 'idle\n' > "${PROCESS_MODE}"
+: > "${FAIL_PROCESS_INSPECTION}"
+reset_log
+if run_update > "${ROOT}/ps-failure.out" 2> "${ROOT}/ps-failure.err"; then
+  echo 'Process inspection failure unexpectedly succeeded' >&2
+  exit 1
+fi
+rm -f "${FAIL_PROCESS_INSPECTION}"
+grep -q 'Could not inspect GitHub runner worker processes' "${ROOT}/ps-failure.err"
+grep -qx inactive "${SERVICE_STATE}"
+test "$(cat "${BUILD_ROOT}/sentinel")" = 'keep build'
+test "$(cat "${SOURCE_ROOT}/dist/src/run-codex.js")" = 'keep runtime'
+if grep -q '^tsc ' "${LOG_FILE}"; then
+  echo 'TypeScript ran after process inspection failed' >&2
+  exit 1
+fi
+if grep -q 'sudo rm -rf' "${LOG_FILE}"; then
+  echo 'Runtime directories were removed after process inspection failed' >&2
+  exit 1
+fi
 
 # A build failure performs no rollback. The service remains stopped and the
 # partial runtime remains until the next invocation deletes it and starts over.
 : > "${FAIL_NEXT_BUILD}"
-if run_update > "${ROOT}/failure.out" 2> "${ROOT}/failure.err"; then
+reset_log
+if run_update > "${ROOT}/build-failure.out" 2> "${ROOT}/build-failure.err"; then
   echo 'Build failure unexpectedly succeeded' >&2
   exit 1
 fi
@@ -190,7 +285,8 @@ grep -qx inactive "${SERVICE_STATE}"
 test ! -e "${SOURCE_ROOT}/dist/src/run-codex.js"
 test -f "${SOURCE_ROOT}/dist/src/partial.js"
 
-printf '0\n' > "${WORKER_POLLS}"
+printf 'idle\n' > "${PROCESS_MODE}"
+reset_log
 run_update > "${ROOT}/retry.out" 2> "${ROOT}/retry.err"
 grep -qx active "${SERVICE_STATE}"
 test "$(cat "${SOURCE_ROOT}/dist/src/run-codex.js")" = 'new runtime'

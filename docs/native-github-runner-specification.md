@@ -114,7 +114,7 @@ Installation, Codex execution, and the pipeline toolchain smoke use this profile
 3. perform no Git command and impose no clean-worktree requirement;
 4. acquire sudo credentials and register only sudo-cache invalidation as process cleanup, never runtime or service rollback;
 5. stop `actions.runner.Divorium.gh-runner.service` before waiting, preventing the listener from accepting another job;
-6. inspect process names for `github-runner` through `/usr/bin/ps`, fail when inspection fails, and wait without a timeout while `Runner.Worker` is present;
+6. resolve the numeric effective UID of `github-runner`, inspect the complete process table through `/usr/bin/ps -e -o euid=,comm=`, fail when that command fails, and wait without a timeout only while a row matches both that UID and `Runner.Worker`;
 7. delete and recreate `/srv/github-runner/storage/build` as a private builder-owned directory, discarding previous update leftovers;
 8. delete `/srv/github-runner/storage/agent-relay/dist` completely and recreate it as `agent-relay-builder:agent-relay-builder` mode `0700`;
 9. invoke only `/usr/local/bin/tsc -p tsconfig.runtime.json --outDir dist` as `agent-relay-builder` through `env -i` with explicit identity, home, locale, and path;
@@ -168,6 +168,6 @@ The GitHub Actions pipeline runs `npm ci` and `npm run check`. The check suite i
 - the real managed toolchain smoke with isolated writable state;
 - system-level mocked installation and simplified update executions;
 - updater contract checks proving there are no Git, validation-suite, staging, backup, recovery, or rollback operations;
-- a system update test proving listener stop before worker wait, dirty-checkout acceptance, complete runtime replacement, no rollback after build failure, and successful full rebuild on the next invocation.
+- a system update test proving listener stop before worker inspection, idle and listener-only continuation, UID-scoped worker waiting, fail-closed process inspection before destructive work, dirty-checkout acceptance, complete runtime replacement, no rollback after build failure, and successful full rebuild on the next invocation.
 
 The full-flow integration test creates a local Git remote and pull-request branch, serves a mock GitHub pull-request API, resolves the request and active plan, checks out the exact revision, invokes a mock Codex executable, and validates finalization behavior without granting GitHub credentials to Codex.

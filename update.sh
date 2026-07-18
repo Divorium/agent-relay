@@ -43,21 +43,22 @@ assert_admin_state_file() {
 }
 
 wait_for_runner_worker() {
-  local process_name process_names worker_active
+  local process_table process_uid process_name worker_active
 
   while true; do
-    if ! process_names="$(sudo /usr/bin/ps -u "${RUNNER_USER}" -o comm=)"; then
+    if ! process_table="$(sudo /usr/bin/ps -e -o euid=,comm=)"; then
       echo "Could not inspect GitHub runner worker processes" >&2
       exit 1
     fi
 
     worker_active=0
-    while IFS= read -r process_name; do
-      if [[ "${process_name}" == "Runner.Worker" ]]; then
+    while read -r process_uid process_name; do
+      [[ -n "${process_uid}" && -n "${process_name}" ]] || continue
+      if [[ "${process_uid}" == "${RUNNER_UID}" && "${process_name}" == "Runner.Worker" ]]; then
         worker_active=1
         break
       fi
-    done <<< "${process_names}"
+    done <<< "${process_table}"
 
     if (( worker_active == 0 )); then
       return
@@ -111,8 +112,12 @@ id -u "${BUILD_USER}" >/dev/null 2>&1 || {
   echo "Missing build account: ${BUILD_USER}" >&2
   exit 1
 }
-id -u "${RUNNER_USER}" >/dev/null 2>&1 || {
+if ! RUNNER_UID="$(id -u "${RUNNER_USER}")"; then
   echo "Missing runner account: ${RUNNER_USER}" >&2
+  exit 1
+fi
+[[ "${RUNNER_UID}" =~ ^[0-9]+$ ]] || {
+  echo "Runner account has an invalid UID: ${RUNNER_UID}" >&2
   exit 1
 }
 

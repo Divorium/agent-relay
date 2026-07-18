@@ -4,19 +4,23 @@ This ExecPlan is maintained according to `.agent/PLANS.md`. It describes only th
 
 ## Purpose / Big Picture
 
-Agent Relay runs on a dedicated Debian 13 systemd virtual machine under Hyper-V. After this change, Codex running as `github-runner` can build, start, inspect, test, and stop applications through the complete local Docker CLI, Docker Buildx, and Docker Compose v2.
+Agent Relay runs on a dedicated systemd-capable Linux runner host. The concrete Linux distribution, virtualization platform, cloud provider, and bare-metal placement are deployment details rather than part of this feature contract.
+
+After this change, Codex running as `github-runner` can build, start, inspect, test, and stop applications through the complete local Docker CLI, Docker Buildx, and Docker Compose v2.
 
 Docker is a host command-line tool, not an Agent Relay product feature. Do not add a Docker request type, capability flag, workflow mode, custom runner label, command broker, command allowlist, or Docker-specific routing.
 
-The Debian virtual machine is the containment boundary. Access to the rootful Docker socket is root-equivalent inside that VM. The VM has no shared Windows folders, so root inside the guest is not direct access to the Windows host filesystem.
+The dedicated runner host is the containment boundary selected by the deployment. Rootful Docker socket access is root-equivalent on that host. Isolation from other machines, host filesystems, cloud control planes, or hypervisors is an infrastructure responsibility and must not be inferred from Codex filesystem permissions.
 
 ## Binding user decisions
 
 - Install and configure Docker only through `./update.sh`.
 - Keep `install.sh` Docker-free.
 - Use rootful Docker Engine managed by systemd and enabled at boot.
-- Use Docker's official Debian repository.
-- On a Docker-absent Debian 13 amd64 host, install concrete pinned package versions.
+- Keep the Docker runtime contract independent from Linux distribution and hosting environment.
+- Isolate distribution-specific package discovery, repositories, pins, and installation commands behind an explicit host-platform adapter.
+- Do not detect or branch on WSL, Hyper-V, VMware, a cloud provider, or bare-metal placement.
+- The initial adapter must support the currently implemented Debian x86-64 installer environment; additional Linux adapters can be added without changing the Docker runtime, Compose, workflow, or security contracts.
 - On a host with Docker already installed, preserve the installed engine, CLI, and containerd versions.
 - Add `github-runner` to the `docker` group.
 - Keep `agent-relay-builder` outside the `docker` group.
@@ -43,8 +47,9 @@ The Debian virtual machine is the containment boundary. Access to the rootful Do
 - No second Docker daemon, rootless Docker, Docker Desktop, TCP daemon listener, or Docker authorization proxy.
 - No automatic engine upgrade or downgrade for an existing installation.
 - No automatic deletion of old Docker/containerd data after migration.
-- No automatic cleanup after an uncatchable `SIGKILL`, runner crash, VM crash, or host shutdown.
-- No guarantee that Codex filesystem restrictions protect VM secrets after Docker socket access is granted.
+- No automatic cleanup after an uncatchable `SIGKILL`, runner crash, host crash, or host shutdown.
+- No guarantee that Codex filesystem restrictions protect host secrets after Docker socket access is granted.
+- No assumption that the runner is hosted in a VM or on a particular hypervisor.
 - No rewrite of completed ExecPlans.
 
 ## Current integration boundary
@@ -61,12 +66,12 @@ Do not restate or redesign unrelated update, CI, Git synchronization, installati
 
 ## Progress
 
-- [x] Confirm the target host is the dedicated Debian 13 Hyper-V VM.
-- [x] Confirm unrestricted rootful Docker access is acceptable inside that VM.
+- [x] Confirm the architecture must remain independent from Linux distribution, hypervisor, cloud provider, and bare-metal placement.
+- [x] Confirm unrestricted rootful Docker access is acceptable within the dedicated runner-host isolation boundary.
 - [x] Confirm Docker installation belongs only to `update.sh`.
 - [x] Confirm the existing workflow log stream is sufficient and no workflow edit is required.
 - [x] Confirm the Compose lifecycle must survive normal workload timeout long enough to emit logs and run cleanup.
-- [ ] Add trusted Docker host provisioning used only by `update.sh`.
+- [ ] Add trusted, platform-adapted Docker host provisioning used only by `update.sh`.
 - [ ] Install or adapt Docker without replacing an existing engine stack.
 - [ ] Move or initialize persistent Docker and containerd data below `/srv/github-runner/docker`.
 - [ ] Configure group membership, systemd units, and host smoke validation.
@@ -80,9 +85,25 @@ Do not restate or redesign unrelated update, CI, Git synchronization, installati
 
 ## Decision Log
 
-### Docker installation
+### Host-platform boundary
 
-Use these initial Debian 13 amd64 pins for a Docker-absent host and fail if the official repository no longer exposes them:
+Create one distribution-neutral orchestration module, `scripts/docker-host.sh`. It detects the Linux platform from stable operating-system metadata and dispatches package operations to a narrow adapter. Storage migration, daemon configuration, identity management, service activation, smoke validation, and the Codex runtime contract remain shared.
+
+The platform adapter must expose deterministic operations for:
+
+- determining whether the platform is supported;
+- locating the official Docker package source for that platform;
+- resolving and validating pinned package versions for a fresh install;
+- simulating plugin-only augmentation on an existing install;
+- installing packages without silently replacing an existing engine stack.
+
+Unsupported platforms fail before repository, package, configuration, group, service, or storage mutation. The error must identify the detected platform and the supported adapters.
+
+No code may inspect virtualization vendor information or use WSL-, Hyper-V-, cloud-, or bare-metal-specific behavior to choose Docker semantics.
+
+### Initial Debian adapter
+
+The first adapter supports the current Debian 13 amd64 installation environment. These are adapter-specific pins, not global architecture requirements:
 
 ```text
 docker-ce=5:29.6.2-1~debian.13~trixie
@@ -92,7 +113,9 @@ docker-buildx-plugin=0.35.0-1~debian.13~trixie
 docker-compose-plugin=5.3.1-1~debian.13~trixie
 ```
 
-For an existing installation, keep the installed engine, CLI, and containerd package versions. A missing Buildx or Compose plugin may be installed only when package-manager simulation proves that doing so will not replace those packages. Otherwise fail with an exact compatibility diagnostic.
+The adapter uses Docker's official Debian package source and fails if an exact configured version is unavailable. A future adapter defines its own official source, package names, versions, simulation, and installation behavior while preserving the shared post-install contract.
+
+For an existing installation, keep the installed engine, CLI, and containerd package versions. A missing Buildx or Compose plugin may be installed only when adapter-specific package-manager simulation proves that doing so will not replace those packages. Otherwise fail with an exact compatibility diagnostic.
 
 ### Persistent storage
 
@@ -127,7 +150,7 @@ Do not modify `.github/workflows/codex.yml` or `examples/github-actions/codex.ym
 
 Rationale:
 
-- Docker is installed on the self-hosted host and becomes available through the existing generic command path.
+- Docker is installed on the self-hosted runner host and becomes available through the existing generic command path.
 - Workspace identity is already available to the runtime and can be propagated internally.
 - Compose lifecycle output written by `scripts/codex-run` already reaches the existing `tee` stream and artifact.
 - No new secret, request field, runner label, permission, service container, or workflow environment contract is required.
@@ -216,17 +239,19 @@ Every checkout path must be owned by the current `github-runner` UID. On violati
 
 ## Plan of Work
 
-### 1. Add host provisioning
+### 1. Add platform-adapted host provisioning
 
 Create `scripts/docker-host.sh` as a trusted regular non-symlink Bash module with no side effects when sourced. Invoke it only from `update.sh` at the existing host-mutation boundary after the runner cannot accept or continue a job and before destructive runtime replacement.
 
-The module owns detection, repository setup, package installation, storage migration, configuration, group membership, service activation, and smoke validation. Keep `update.sh` orchestration narrow.
+Keep orchestration distribution-neutral. Place package-source, package-name, version, simulation, and installation logic behind explicit platform-adapter functions. Shared storage migration, configuration, group, systemd, validation, and runtime logic must not be duplicated per platform.
 
 ### 2. Install or adapt Docker
 
-For a Docker-absent Debian 13 amd64 host, add the official apt key and source, validate every pinned version, and install the exact package set with `--no-install-recommends`.
+Detect a supported platform from `/etc/os-release` and architecture metadata. Reject unsupported or ambiguous platforms before mutation.
 
-For an existing installation, inspect client, server, package ownership, Buildx, and Compose independently. Preserve the engine stack and augment only compatible missing plugins.
+For the initial Debian adapter, add the official Docker apt key and source, validate every configured pin, and install the exact package set with `--no-install-recommends`.
+
+For an existing installation on any supported adapter, inspect client, server, package ownership, Buildx, and Compose independently. Preserve the engine stack and augment only compatible missing plugins.
 
 ### 3. Configure storage and services
 
@@ -264,11 +289,14 @@ Implement the foreign-ownership scan before worktree inspection.
 
 ### 7. Add deterministic coverage
 
-Repository validation must not require a live Docker daemon. Extend shell and TypeScript harnesses with fake package, systemd, filesystem, process, and Docker clients.
+Repository validation must not require a live Docker daemon. Extend shell and TypeScript harnesses with fake platform metadata, package managers, systemd, filesystem, process, and Docker clients.
 
 Cover at least:
 
-- fresh pinned installation;
+- supported-platform detection and dispatch;
+- unsupported-platform failure before mutation;
+- proof that virtualization or cloud metadata is never consulted;
+- fresh pinned installation through the initial Debian adapter;
 - existing complete Docker without engine replacement;
 - compatible and incompatible plugin-only augmentation;
 - data migration and conflicting target roots;
@@ -289,23 +317,28 @@ Cover at least:
 
 ### 8. Target-host acceptance
 
-On the Debian 13 Hyper-V VM, use the normal update entrypoint. Do not rerun installation, runner registration, or Codex login.
+On a supported isolated runner host, use the normal update entrypoint. Do not rerun installation, runner registration, or Codex login.
 
-Verify services, group membership, storage roots, client/server access, Buildx, Compose, and `hello-world`. Verify `agent-relay-builder` cannot access Docker and stopping Docker does not stop the GitHub Actions runner.
+Record the detected platform adapter. Verify services, group membership, storage roots, client/server access, Buildx, Compose, and `hello-world`. Verify `agent-relay-builder` cannot access Docker and stopping Docker does not stop the GitHub Actions runner.
 
 Run real Codex tasks against a workspace-local Compose fixture that uses an env file, profile, named volume, interpolation variable, recognizable logs, and a directory name requiring normalization. Prove logs precede cleanup and resources are removed after success, intentional command failure, controlled timeout, and controlled interrupt.
 
 Verify global Compose operations work without a Compose file or replay registration. Verify a controlled foreign-owned checkout file blocks finalization before Git worktree inspection.
+
+The acceptance evidence must describe the tested operating system and deployment environment as evidence, not as a new architecture requirement.
 
 ## Validation and Acceptance
 
 The implementation is accepted only when:
 
 - Docker installation occurs only through `update.sh` and `install.sh` remains Docker-free;
-- fresh installation uses the exact pinned official package set;
+- the shared Docker contract contains no hypervisor-, cloud-, WSL-, or bare-metal-specific branch;
+- a supported host selects exactly one explicit platform adapter;
+- an unsupported host fails before host mutation with an actionable diagnostic;
+- a fresh installation uses the exact official package set configured by the selected adapter;
 - an existing installation keeps its engine, CLI, and containerd versions;
 - persistent data lives below `/srv/github-runner/docker` and existing data is preserved during migration;
-- Docker and containerd are enabled and active;
+- Docker and containerd are enabled and active under systemd;
 - `github-runner` has Docker access and `agent-relay-builder` does not;
 - the runner service has no Docker dependency;
 - Codex receives full rootful Docker access without sudo or command filtering;
@@ -327,15 +360,17 @@ The implementation is accepted only when:
 
 Repeated provisioning must not reinstall or upgrade a complete Docker stack, duplicate membership, recopy equivalent data, or restart healthy correctly configured services unnecessarily. The complete smoke still runs on every successful invocation.
 
-Partial package or data-copy work must be resumable. Never delete source data automatically. If an uncatchable kill or host crash leaves Docker resources, recovery is manual administration inside the VM.
+Partial package or data-copy work must be resumable. Never delete source data automatically. If an uncatchable kill or host crash leaves Docker resources, recovery is manual administration on the runner host.
 
 Per-run Docker and Compose state remains available through cleanup and is removed after the supervisor finishes.
 
 ## Security model
 
-Within the VM, Docker socket access makes `github-runner` and Codex root-equivalent. They can run privileged containers, mount VM filesystems, inspect runner credentials, change networking, and bypass direct filesystem denies. Workspace checks, exact socket entries, launcher normalization, and private replay state are operational correctness controls, not a security boundary against trusted code.
+On the runner host, Docker socket access makes `github-runner` and Codex root-equivalent. They can run privileged containers, mount host filesystems, inspect runner credentials, change networking, and bypass direct filesystem denies. Workspace checks, exact socket entries, launcher normalization, and private replay state are operational correctness controls, not a security boundary against trusted code.
 
-Do not expose Docker over TCP. Do not mount the socket into application containers by default. Do not claim that VM credentials or secrets remain protected from Docker-enabled Codex.
+The deployment must isolate the runner host appropriately for that privilege level. This may be a VM, cloud instance, dedicated physical system, or another isolated Linux environment; the repository does not select or validate that outer boundary.
+
+Do not expose Docker over TCP. Do not mount the socket into application containers by default. Do not claim that host credentials or secrets remain protected from Docker-enabled Codex.
 
 ## Outcomes & Retrospective
 

@@ -55,6 +55,30 @@ path_metadata() {
   fi
 }
 
+assert_secure_storage_root() {
+  local metadata owner group mode mode_value
+  if [[ ! -d "${STORAGE_ROOT}" || -L "${STORAGE_ROOT}" ]]; then
+    printf 'Storage root must be a regular directory: %q\n' "${STORAGE_ROOT}" >&2
+    exit 1
+  fi
+  if ! metadata="$(sudo stat -c '%U|%G|%a' -- "${STORAGE_ROOT}")"; then
+    echo "Could not inspect storage root ownership" >&2
+    exit 1
+  fi
+  IFS='|' read -r owner group mode <<< "${metadata}"
+  if [[ ! "${mode}" =~ ^[0-7]{3,4}$ ]]; then
+    echo "Storage root has an invalid mode: ${mode}" >&2
+    exit 1
+  fi
+  mode_value=$((8#${mode}))
+  if [[ "${owner}" != root || "${group}" != root ]] || (( (mode_value & 0022) != 0 )); then
+    printf 'Storage root must be root:root and not group/other-writable: ' >&2
+    path_metadata "${STORAGE_ROOT}" >&2
+    printf '\n' >&2
+    exit 1
+  fi
+}
+
 assert_source_ownership() {
   local foreign_path
   if ! foreign_path="$(
@@ -67,6 +91,23 @@ assert_source_ownership() {
   fi
   if [[ -n "${foreign_path}" ]]; then
     printf 'The source checkout contains a path not owned by %s: ' "${expected_admin}" >&2
+    path_metadata "${foreign_path}" >&2
+    printf '\n' >&2
+    exit 1
+  fi
+}
+
+assert_tree_ownership() {
+  local root="$1"
+  local expected_owner="$2"
+  local label="$3"
+  local foreign_path
+  if ! foreign_path="$(sudo find -P "${root}" -xdev ! -user "${expected_owner}" -print -quit)"; then
+    printf 'Could not verify %s ownership\n' "${label}" >&2
+    exit 1
+  fi
+  if [[ -n "${foreign_path}" ]]; then
+    printf '%s contains a path not owned by %s: ' "${label}" "${expected_owner}" >&2
     path_metadata "${foreign_path}" >&2
     printf '\n' >&2
     exit 1
@@ -94,6 +135,13 @@ assert_runtime_tree_safe() {
     path_metadata "${invalid_path}" >&2
     printf '\n' >&2
     exit 1
+  fi
+}
+
+assert_active_runtime() {
+  if [[ -e "${SOURCE_ROOT}/dist" || -L "${SOURCE_ROOT}/dist" ]]; then
+    assert_runtime_tree_safe "${SOURCE_ROOT}/dist" "Active runtime"
+    assert_tree_ownership "${SOURCE_ROOT}/dist" root "Active runtime"
   fi
 }
 
@@ -183,7 +231,9 @@ expected_admin="$(tr -d '\r\n' < "${ADMIN_FILE}")"
 [[ -d "${SOURCE_ROOT}/.git" ]] || { echo "${SOURCE_ROOT} must be a Git checkout" >&2; exit 1; }
 
 sudo -v
+assert_secure_storage_root
 assert_source_ownership
+assert_active_runtime
 git -C "${SOURCE_ROOT}" config core.fileMode false
 git_status=""
 if ! git_status="$(git -C "${SOURCE_ROOT}" status --porcelain --untracked-files=all)"; then
@@ -279,7 +329,9 @@ run_builder \
 sudo rm -rf -- "${builder_state}"
 builder_state=""
 sudo -v
+assert_secure_storage_root
 assert_source_ownership
+assert_active_runtime
 assert_runtime_tree_safe "${stage}" "Staged runtime"
 
 activation_stage="${STORAGE_ROOT}/.agent-relay-dist.stage.$$"
@@ -289,9 +341,10 @@ sudo mv -- "${stage}" "${activation_stage}"
 stage=""
 assert_runtime_tree_safe "${activation_stage}" "Staged runtime"
 adopt_runtime_tree "${activation_stage}"
+assert_tree_ownership "${activation_stage}" root "Staged runtime"
 
 if [[ -e "${SOURCE_ROOT}/dist" || -L "${SOURCE_ROOT}/dist" ]]; then
-  assert_runtime_tree_safe "${SOURCE_ROOT}/dist" "Active runtime"
+  assert_active_runtime
   sudo mv -- "${SOURCE_ROOT}/dist" "${previous_dist}"
 fi
 if ! sudo mv -- "${activation_stage}" "${SOURCE_ROOT}/dist"; then

@@ -20,21 +20,4 @@ jobs:
         run: npm ci
 
       - name: Validate repository
-        id: validation
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          npm run check 2>&1 | tee check.log
-
-      - name: Upload validation log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: validation-log
-          path: check.log
-          if-no-files-found: error
-
-      - name: Fail when validation failed
-        if: steps.validation.outcome == 'failure'
-        run: exit 1
+        run: npm run check

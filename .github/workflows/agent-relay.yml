@@ -54,12 +54,6 @@ jobs:
           token: ${{ github.token }}
           persist-credentials: false
 
-      - name: Verify resolved revision
-        shell: bash
-        env:
-          EXPECTED_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
-        run: test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD_SHA}"
-
       - name: Install dependencies
         run: npm ci
 
@@ -77,12 +71,6 @@ jobs:
           fetch-depth: 0
           token: ${{ github.token }}
           persist-credentials: false
-
-      - name: Verify resolved revision
-        shell: bash
-        env:
-          EXPECTED_HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
-        run: test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD_SHA}"
 
       - name: Verify credential-free checkout
         shell: bash

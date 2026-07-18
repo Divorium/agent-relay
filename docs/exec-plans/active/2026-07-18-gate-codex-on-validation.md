@@ -15,22 +15,39 @@ After this change, the Agent Relay workflow validates the exact resolved pull-re
 - [x] Replace the unmanaged launcher path with the trusted repository launcher.
 - [x] Preserve the operating-system spawn diagnostic.
 - [x] Add regression tests for the workflow gate, launcher path, and spawn message.
+- [x] Keep the update-system harness focused on updater orchestration instead of recursively rerunning tests against rewritten fixture paths.
 - [ ] Run the complete repository validation in GitHub Actions.
 - [ ] Record the final validation outcome and move this plan to `docs/exec-plans/completed/`.
+
+## Surprises & Discoveries
+
+- Observation: the complete TypeScript suite and coverage checks passed, but the update-system harness failed when `update.sh` recursively invoked the same tests inside a fixture with rewritten host paths.
+  Evidence: nested tests observed fixture values rather than the production constants they are designed to validate.
+
+- Observation: the update harness already had a `FAST_VALIDATION` mechanism, but enabled it only for the final rollback scenario.
+  Evidence: enabling the same mechanism before the first updater run avoids duplicate fixture-contaminated unit tests while retaining compilation, shell validation, toolchain smoke checks, activation, restart, and rollback assertions.
 
 ## Decision Log
 
 - Decision: keep the standalone CI workflow and add the same validation directly to Agent Relay.
-  Rationale: GitHub Actions does not provide an intrinsic dependency between independent workflow runs. A job-level `needs` relationship inside Agent Relay guarantees that Codex cannot start when validation of the same resolved SHA fails.
+  Rationale: independent workflow runs have no job-level dependency. A `needs` relationship inside Agent Relay guarantees that Codex cannot start when validation of the same resolved SHA fails.
   Date/Author: 2026-07-18 / implementation.
 
 - Decision: resolve the pull request and validate its exact head in the `validate` job, then expose `head_sha` and `head_ref` as job outputs.
-  Rationale: this works for both `ready_for_review` and manual `workflow_dispatch` runs and avoids validating a different checkout from the one Codex later executes.
+  Rationale: this works for both `ready_for_review` and manual runs and avoids validating a different checkout from the one Codex later executes.
   Date/Author: 2026-07-18 / implementation.
 
 - Decision: invoke the launcher directly from the trusted Agent Relay source root.
   Rationale: `install.sh` and `update.sh` already validate and secure that script. No managed `/usr/local/bin/codex-run` entrypoint exists.
   Date/Author: 2026-07-18 / implementation.
+
+- Decision: use the update harness fast-validation marker for all simulated update runs.
+  Rationale: the outer `npm run check` executes the full test suite. The harness rewrites host paths to test updater orchestration, so rerunning unit tests inside that fixture creates false failures without adding production coverage.
+  Date/Author: 2026-07-18 / implementation.
+
+## Outcomes & Retrospective
+
+Implementation is complete. Final GitHub Actions validation and archival of this plan remain pending.
 
 ## Validation and Acceptance
 

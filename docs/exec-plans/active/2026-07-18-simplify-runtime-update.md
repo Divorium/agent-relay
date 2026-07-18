@@ -118,7 +118,7 @@ The first implementation review found that `pgrep` would introduce an unnecessar
 
 A local isolated validation reproduced the intended host flow with rewritten fixed paths and mocked service accounts: production TypeScript compilation passed, the new updater contract tests passed, shell syntax passed, the listener-stop/worker-wait sequence passed, a forced compiler failure left the service stopped with partial `dist`, and the following invocation deleted the partial runtime and completed successfully.
 
-A subsequent workflow review added ref-scoped CI concurrency to prevent repeated commits from accumulating stale self-hosted jobs and renamed the agent workflow from `Agent Relay` to `Codex`. The Codex workflow's separate per-PR concurrency policy was intentionally left unchanged.
+A subsequent workflow review added ref-scoped CI concurrency to prevent repeated commits from accumulating stale self-hosted jobs and renamed the agent workflow from `Agent Relay` to `Codex`. The Codex workflow's separate per-PR concurrency policy was intentionally left unchanged. The new CI run cancelled stale run #650 and started validation for the current head.
 
 ## Plan Review Checklist
 
@@ -137,7 +137,7 @@ A subsequent workflow review added ref-scoped CI concurrency to prevent repeated
 
 - The reported `Staged runtime must be a regular directory` error occurred after successful compilation, coverage, and toolchain output. The directory existed, but the administrator could not traverse its builder-owned mode-`0700` parent.
 - The previous integration harness stripped `sudo -u` and mocked ownership metadata, so it could not reproduce that production boundary.
-- An intermediate CI run using the old system harness waits for its own `Runner.Worker`; this is a stale-test problem, not a behavior of the final harness. The final harness replaces process inspection and cannot wait on the CI worker.
+- An intermediate CI run using the old system harness waited for its own `Runner.Worker`; workflow-level concurrency cancelled that obsolete run once added to CI.
 - Without workflow-level CI concurrency, every branch update queued another self-hosted run even when an older run was already obsolete.
 
 ## Decision Log
@@ -168,4 +168,4 @@ A subsequent workflow review added ref-scoped CI concurrency to prevent repeated
 
 ## Outcomes & Retrospective
 
-Implementation and local isolated validation are complete. Final self-hosted CI validation is pending. The CI workflow now cancels future superseded runs for the same pull-request ref; this setting is not assumed to retroactively terminate a run that started before the concurrency policy existed.
+Implementation and local isolated validation are complete. Workflow concurrency was verified by cancellation of stale CI #650. Final self-hosted CI validation for the current head is in progress.

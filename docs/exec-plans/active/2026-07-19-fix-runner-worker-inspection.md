@@ -42,7 +42,7 @@ After the listener is stopped, an idle host with no processes owned by `github-r
 Resolve the numeric UID of `github-runner` during preflight and retain it for worker inspection. Replace the user-selected process command with a full process-table command:
 
 ```bash
-sudo /usr/bin/ps -eo euid=,comm=
+sudo /usr/bin/ps -e -o euid=,comm=
 ```
 
 A successful full-table invocation has an unambiguous contract: command success means the table was inspected, regardless of whether any row belongs to the runner account. Parse each row as numeric effective UID plus command name and match only:
@@ -52,7 +52,7 @@ process UID == resolved github-runner UID
 command name == Runner.Worker
 ```
 
-Ignore `Runner.Worker` rows owned by another UID and ignore other runner-owned commands such as `Runner.Listener`. If the `ps` command itself exits nonzero, preserve the current fail-closed error.
+Ignore empty rows, `Runner.Worker` rows owned by another UID, and other runner-owned commands such as `Runner.Listener`. If the `ps` command itself exits nonzero, preserve the current fail-closed error.
 
 ### Test model
 
@@ -62,10 +62,10 @@ Update the system harness so its fake `ps` returns a complete process table rath
 2. runner-owned `Runner.Listener` only — update continues;
 3. runner-owned `Runner.Worker` — update waits for the configured polls and then continues;
 4. `Runner.Worker` owned by another UID — update does not wait;
-5. process-table command failure — update exits before deleting `build` or `dist` and before invoking TypeScript;
+5. process-table command failure — update exits before `rm -rf build`, `rm -rf dist`, and TypeScript invocation;
 6. following a successful inspection, the existing direct rebuild and no-rollback scenarios continue to pass.
 
-Add static regression assertions requiring `ps -eo euid=,comm=`, UID matching, and prohibiting `ps -u github-runner` in `update.sh`.
+Add static regression assertions requiring `ps -e -o euid=,comm=`, numeric UID matching, and prohibiting `ps -u github-runner` in `update.sh`.
 
 ### Documentation
 
@@ -74,7 +74,7 @@ Update the technical specification and operations documentation only where they 
 ## Progress
 
 - [x] Reproduce the production failure from the merged implementation and identify the ambiguous `ps -u` exit status.
-- [ ] Review this plan against the existing direct-rebuild contract.
+- [x] Review this plan against the existing direct-rebuild contract.
 - [ ] Replace user-selected `ps` inspection with full-table UID-filtered inspection.
 - [ ] Expand static and system regression coverage for idle, listener-only, worker, foreign-UID worker, and inspection-failure states.
 - [ ] Update the relevant technical documentation.
@@ -85,20 +85,20 @@ Update the technical specification and operations documentation only where they 
 ## Acceptance Criteria
 
 - `update.sh` resolves the numeric UID for `github-runner` before stopping the service.
-- Worker inspection executes `/usr/bin/ps -eo euid=,comm=` through sudo.
+- Worker inspection executes `/usr/bin/ps -e -o euid=,comm=` through sudo.
 - An empty set of runner-owned processes is treated as idle.
 - A runner-owned `Runner.Listener` without a worker is treated as idle.
 - A runner-owned `Runner.Worker` causes repeated waiting.
 - A `Runner.Worker` owned by another UID is ignored.
 - A nonzero exit from the full process-table command remains a hard failure.
-- Inspection failure occurs before removal of `build` and `dist`.
+- Inspection failure occurs before removal of `build` and `dist` and before TypeScript execution.
 - Existing update behavior remains unchanged after the runner becomes idle.
 - Tests no longer mock the invalid assumption that an empty user selection always exits zero.
 - CI passes all explicit validation phases on the final head.
 
 ## Plan and Implementation Reviews
 
-Pending.
+The initial plan review confirmed that the direct-rebuild architecture does not need to change. It changed the process-table command to separate `-e` and `-o` options for an explicit, portable invocation and strengthened the failure-order requirement: a failed `ps` call must occur before both destructive directory removals and TypeScript execution. The review retained the existing unlimited wait, no-rollback behavior, and service sequence.
 
 ## Plan Review Checklist
 
@@ -120,6 +120,10 @@ Pending.
 - Decision: inspect the full process table and filter by numeric effective UID plus `comm`.
   Rationale: this removes the ambiguous empty-selection exit status while preserving fail-closed command execution.
   Date/Author: 2026-07-19 / implementation plan.
+
+- Decision: use separate `-e` and `-o` options for `ps`.
+  Rationale: it makes the full-table selection and output format explicit in code and tests.
+  Date/Author: 2026-07-19 / plan review.
 
 - Decision: keep the current direct rebuild and no-rollback model unchanged.
   Rationale: the reported defect is limited to worker-idle detection and does not require reopening the deployment architecture.

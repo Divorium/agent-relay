@@ -10,10 +10,12 @@
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test --test-concurrency=1 --experimental-test-coverage --test-coverage-include='dist/src/**/*.js' --test-coverage-lines=100 --test-coverage-branches=100 --test-coverage-functions=100 dist/test/**/*.test.js",
-    "check:shell": "bash -n install.sh update.sh runner/finalize.sh scripts/codex-run scripts/toolchain-environment.sh scripts/toolchain-smoke.sh test-system/install-script.integration.sh test-system/update-script.integration.sh",
-    "check": "npm run typecheck && npm test && npm run check:shell && npm run check:node-scripts && npm run check:system",
+    "check:runtime": "bash scripts/ci-runtime-build.sh",
+    "check:shell": "bash -n install.sh update.sh runner/finalize.sh scripts/codex-run scripts/toolchain-environment.sh scripts/toolchain-smoke.sh scripts/ci-runtime-build.sh scripts/ci-toolchain-smoke.sh test-system/install-script.integration.sh test-system/update-script.integration.sh",
     "check:node-scripts": "node --check runner/resolve-pr.mjs && node --check runner/resolve-plan.mjs && node --check runner/resolve-request.mjs && node --check runner/run-codex.mjs",
-    "check:system": "bash test-system/install-script.integration.sh && bash test-system/update-script.integration.sh"
+    "check:toolchain": "bash scripts/ci-toolchain-smoke.sh",
+    "check:system": "bash test-system/install-script.integration.sh && bash test-system/update-script.integration.sh",
+    "check": "npm run typecheck && npm test && npm run check:runtime && npm run check:shell && npm run check:node-scripts && npm run check:toolchain && npm run check:system"
   },
   "devDependencies": {
     "typescript": "5.8.3"

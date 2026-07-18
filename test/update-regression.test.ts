@@ -61,7 +61,17 @@ test("pipeline validates the production build and real host toolchain", async ()
   assert.match(packageJson.scripts.check ?? "", /npm run check:toolchain/u);
   assert.equal(packageJson.scripts["check:runtime"], "bash scripts/ci-runtime-build.sh");
   assert.equal(packageJson.scripts["check:toolchain"], "bash scripts/ci-toolchain-smoke.sh");
-  assert.match(workflow, /npm run check/u);
+  for (const command of [
+    "npm run typecheck",
+    "npm test",
+    "npm run check:runtime",
+    "npm run check:shell",
+    "npm run check:node-scripts",
+    "npm run check:toolchain",
+    "npm run check:system",
+  ]) {
+    assert.ok(workflow.includes(command), `CI workflow must run ${command}`);
+  }
   assert.match(runtimeCheck, /tsconfig\.runtime\.json/u);
   assert.match(runtimeCheck, /src\/run-codex\.js/u);
   assert.match(toolchainCheck, /toolchain_environment_build/u);

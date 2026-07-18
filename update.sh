@@ -13,6 +13,7 @@ ADMIN_FILE=/etc/agent-relay/administrator
 SCRIPT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 stage=""
+activation_stage=""
 build_workspace=""
 builder_state=""
 previous_dist=""
@@ -42,6 +43,65 @@ validate_source_entrypoints() {
       exit 1
     fi
   done
+}
+
+path_metadata() {
+  local path="$1"
+  local metadata
+  if metadata="$(sudo stat -c 'owner=%U group=%G mode=%a type=%F links=%h' -- "${path}" 2>/dev/null)"; then
+    printf '%s path=%q' "${metadata}" "${path}"
+  else
+    printf 'metadata=unavailable path=%q' "${path}"
+  fi
+}
+
+assert_source_ownership() {
+  local foreign_path
+  if ! foreign_path="$(
+    sudo find -P "${SOURCE_ROOT}" -xdev \
+      -path "${SOURCE_ROOT}/dist" -prune -o \
+      ! -user "${expected_admin}" -print -quit
+  )"; then
+    echo "Could not verify source checkout ownership" >&2
+    exit 1
+  fi
+  if [[ -n "${foreign_path}" ]]; then
+    printf 'The source checkout contains a path not owned by %s: ' "${expected_admin}" >&2
+    path_metadata "${foreign_path}" >&2
+    printf '\n' >&2
+    exit 1
+  fi
+}
+
+assert_runtime_tree_safe() {
+  local root="$1"
+  local label="$2"
+  local invalid_path
+  if [[ ! -d "${root}" || -L "${root}" ]]; then
+    printf '%s must be a regular directory: %q\n' "${label}" "${root}" >&2
+    exit 1
+  fi
+  if ! invalid_path="$(
+    sudo find -P "${root}" -xdev \
+      \( \( ! -type d ! -type f \) -o \( -type f -links +1 \) \) \
+      -print -quit
+  )"; then
+    printf 'Could not validate %s filesystem entries\n' "${label}" >&2
+    exit 1
+  fi
+  if [[ -n "${invalid_path}" ]]; then
+    printf '%s contains an unsupported or multiply linked entry: ' "${label}" >&2
+    path_metadata "${invalid_path}" >&2
+    printf '\n' >&2
+    exit 1
+  fi
+}
+
+adopt_runtime_tree() {
+  local root="$1"
+  sudo find -P "${root}" -xdev -exec chown -h root:root {} +
+  sudo find -P "${root}" -xdev -type d -exec chmod 0755 {} +
+  sudo find -P "${root}" -xdev -type f -exec chmod 0644 {} +
 }
 
 prepare_builder_state() {
@@ -77,6 +137,9 @@ rollback() {
   fi
   if [[ -n "${stage}" ]]; then
     sudo rm -rf -- "${stage}" >/dev/null 2>&1
+  fi
+  if [[ -n "${activation_stage}" ]]; then
+    sudo rm -rf -- "${activation_stage}" >/dev/null 2>&1
   fi
   if [[ -n "${build_workspace}" ]]; then
     sudo rm -rf -- "${build_workspace}" >/dev/null 2>&1
@@ -118,11 +181,19 @@ expected_admin="$(tr -d '\r\n' < "${ADMIN_FILE}")"
 [[ "$(id -un)" == "${expected_admin}" ]] || { echo "update.sh must be run by ${expected_admin}" >&2; exit 1; }
 [[ "$(ps -p 1 -o comm= | tr -d '[:space:]')" == "systemd" ]] || { echo "systemd must run as PID 1; run wsl --shutdown first" >&2; exit 1; }
 [[ -d "${SOURCE_ROOT}/.git" ]] || { echo "${SOURCE_ROOT} must be a Git checkout" >&2; exit 1; }
+
+sudo -v
+assert_source_ownership
 git -C "${SOURCE_ROOT}" config core.fileMode false
-[[ -z "$(git -C "${SOURCE_ROOT}" status --porcelain --untracked-files=all)" ]] || {
+git_status=""
+if ! git_status="$(git -C "${SOURCE_ROOT}" status --porcelain --untracked-files=all)"; then
+  echo "Could not inspect the source checkout status" >&2
+  exit 1
+fi
+if [[ -n "${git_status}" ]]; then
   echo "The source checkout must be clean before update" >&2
   exit 1
-}
+fi
 if sudo -u "${RUNNER_USER}" -H sudo -n true >/dev/null 2>&1; then
   echo "${RUNNER_USER} must not have passwordless sudo access" >&2
   exit 1
@@ -142,10 +213,8 @@ if [[ "${AGENT_RELAY_UPDATE_PHASE:-}" == reexec ]]; then
     || { echo "Invalid service rollback state" >&2; exit 1; }
   service_was_active="${AGENT_RELAY_SERVICE_WAS_ACTIVE}"
   unset AGENT_RELAY_UPDATE_PHASE AGENT_RELAY_ORIGINAL_HEAD AGENT_RELAY_SERVICE_WAS_ACTIVE
-  sudo -v
 else
   original_head="$(git -C "${SOURCE_ROOT}" rev-parse HEAD)"
-  sudo -v
   if sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
     service_was_active=1
     sudo systemctl stop "${SERVICE_NAME}"
@@ -210,34 +279,36 @@ run_builder \
 sudo rm -rf -- "${builder_state}"
 builder_state=""
 sudo -v
-previous_dist="${SOURCE_ROOT}/.dist.previous.$$"
-sudo rm -rf -- "${previous_dist}"
-if [[ -d "${SOURCE_ROOT}/dist" ]]; then
+assert_source_ownership
+assert_runtime_tree_safe "${stage}" "Staged runtime"
+
+activation_stage="${STORAGE_ROOT}/.agent-relay-dist.stage.$$"
+previous_dist="${STORAGE_ROOT}/.agent-relay-dist.previous.$$"
+sudo rm -rf -- "${activation_stage}" "${previous_dist}"
+sudo mv -- "${stage}" "${activation_stage}"
+stage=""
+assert_runtime_tree_safe "${activation_stage}" "Staged runtime"
+adopt_runtime_tree "${activation_stage}"
+
+if [[ -e "${SOURCE_ROOT}/dist" || -L "${SOURCE_ROOT}/dist" ]]; then
+  assert_runtime_tree_safe "${SOURCE_ROOT}/dist" "Active runtime"
   sudo mv -- "${SOURCE_ROOT}/dist" "${previous_dist}"
 fi
-if ! sudo mv -- "${stage}" "${SOURCE_ROOT}/dist"; then
+if ! sudo mv -- "${activation_stage}" "${SOURCE_ROOT}/dist"; then
   if [[ -d "${previous_dist}" ]]; then
     sudo mv -- "${previous_dist}" "${SOURCE_ROOT}/dist"
   fi
   exit 1
 fi
-stage=""
+activation_stage=""
 dist_swapped=1
 sudo rm -rf -- "${build_workspace}"
 build_workspace=""
 
-if sudo find -P "${SOURCE_ROOT}" -xdev -path "${SOURCE_ROOT}/dist" -prune -o \
-  ! -user "${expected_admin}" -print -quit | grep -q .; then
-  echo "The source checkout contains files not owned by ${expected_admin}" >&2
-  exit 1
-fi
 sudo find -P "${SOURCE_ROOT}" -xdev -path "${SOURCE_ROOT}/dist" -prune -o \
   -type d -exec chmod u+rwx,go+rx,go-w {} +
 sudo find -P "${SOURCE_ROOT}" -xdev -path "${SOURCE_ROOT}/dist" -prune -o \
   -type f -exec chmod a+r,go-w {} +
-sudo chown -R root:root "${SOURCE_ROOT}/dist"
-sudo find "${SOURCE_ROOT}/dist" -type d -exec chmod 0755 {} +
-sudo find "${SOURCE_ROOT}/dist" -type f -exec chmod 0644 {} +
 sudo chmod 0755 \
   "${SOURCE_ROOT}/install.sh" \
   "${SOURCE_ROOT}/update.sh" \

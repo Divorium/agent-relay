@@ -71,6 +71,8 @@ The pipeline runs `npm ci` followed by the complete repository checks. The check
 
 The existing pipeline continues to perform type checking, source-and-test compilation, all Node tests, 100% runtime coverage, shell syntax checks, Node script checks, and system integration tests.
 
+The `CI` workflow uses `${{ github.ref }}` as its concurrency group with `cancel-in-progress: true`, so a newer run for the same pull-request ref supersedes older queued or running CI work. The agent-execution workflow is exposed in GitHub Actions as `Codex`; its existing per-PR serialization remains unchanged.
+
 ### Installer alignment
 
 No new host package is required. `install.sh` already relies on `ps` to verify systemd and installs the pinned global TypeScript compiler. The simplified updater uses the same process-inspection command and validates both `/usr/bin/ps` and `/usr/local/bin/tsc` before stopping the service. The systemd unit retains `KillMode=process`.
@@ -84,6 +86,7 @@ No new host package is required. `install.sh` already relies on `ps` to verify s
 - [x] Move validation-only commands fully into the pipeline.
 - [x] Align host assumptions and technical documentation.
 - [x] Replace obsolete updater and ownership regression tests while retaining unrelated installer coverage.
+- [x] Add CI supersession and rename the agent workflow to Codex.
 - [ ] Validate the complete repository in the self-hosted GitHub Actions pipeline.
 - [x] Review the implementation for environment-specific failures and update this plan.
 - [ ] Record final CI outcomes and move this plan to `docs/exec-plans/completed/`.
@@ -104,6 +107,8 @@ No new host package is required. `install.sh` already relies on `ps` to verify s
 - The pipeline independently executes dependency installation, type checking, compilation, tests, coverage, shell checks, Node checks, system tests, production-runtime compilation, and the real toolchain smoke.
 - The system harness proves successful replacement, waiting for a worker, acceptance of dirty checkout content, no rollback after build failure, and successful full replacement on the following invocation.
 - No unrelated installer regression contracts are removed.
+- A newer CI run for the same `github.ref` cancels the superseded run.
+- The GitHub Actions workflow that invokes the agent is named `Codex`.
 
 ## Plan and Implementation Reviews
 
@@ -112,6 +117,8 @@ The first plan review removed the last proposed Git operation (`rev-parse`) and 
 The first implementation review found that `pgrep` would introduce an unnecessary additional binary contract. The implementation now uses fail-closed `/usr/bin/ps`, which the installer and host already require. The review also found that the initial rewrite of `test/installer.test.ts` removed unrelated installation assertions; the full installer regression coverage was restored and only updater-specific expectations were replaced.
 
 A local isolated validation reproduced the intended host flow with rewritten fixed paths and mocked service accounts: production TypeScript compilation passed, the new updater contract tests passed, shell syntax passed, the listener-stop/worker-wait sequence passed, a forced compiler failure left the service stopped with partial `dist`, and the following invocation deleted the partial runtime and completed successfully.
+
+A subsequent workflow review added ref-scoped CI concurrency to prevent repeated commits from accumulating stale self-hosted jobs and renamed the agent workflow from `Agent Relay` to `Codex`. The Codex workflow's separate per-PR concurrency policy was intentionally left unchanged.
 
 ## Plan Review Checklist
 
@@ -124,12 +131,14 @@ A local isolated validation reproduced the intended host flow with rewritten fix
 7. Listener stop precedes worker wait, and runtime replacement follows worker completion.
 8. Every required command is already part of the installed host contract and is checked before destructive work.
 9. Existing installer and runtime security tests unrelated to update staging remain present.
+10. CI supersession applies only to the `CI` workflow and does not cancel a running Codex mutation for the same PR.
 
 ## Surprises & Discoveries
 
 - The reported `Staged runtime must be a regular directory` error occurred after successful compilation, coverage, and toolchain output. The directory existed, but the administrator could not traverse its builder-owned mode-`0700` parent.
 - The previous integration harness stripped `sudo -u` and mocked ownership metadata, so it could not reproduce that production boundary.
 - An intermediate CI run using the old system harness waits for its own `Runner.Worker`; this is a stale-test problem, not a behavior of the final harness. The final harness replaces process inspection and cannot wait on the CI worker.
+- Without workflow-level CI concurrency, every branch update queued another self-hosted run even when an older run was already obsolete.
 
 ## Decision Log
 
@@ -153,6 +162,10 @@ A local isolated validation reproduced the intended host flow with rewritten fix
   Rationale: it avoids a new host dependency and provides fail-closed inspection using an existing installer prerequisite.
   Date/Author: 2026-07-18 / implementation review.
 
+- Decision: cancel superseded CI runs by `github.ref` and expose the agent workflow as `Codex`.
+  Rationale: the self-hosted runner must not accumulate obsolete validation jobs, while the mutation workflow should be clearly identified and retain its existing serialization.
+  Date/Author: 2026-07-18 / user requirement.
+
 ## Outcomes & Retrospective
 
-Implementation and local isolated validation are complete. Final self-hosted CI validation is pending because stale workflow run `CI #650` executes an intermediate harness that waits on its own `Runner.Worker`; the available GitHub connector exposes workflow reads and reruns but no cancellation action.
+Implementation and local isolated validation are complete. Final self-hosted CI validation is pending. The CI workflow now cancels future superseded runs for the same pull-request ref; this setting is not assumed to retroactively terminate a run that started before the concurrency policy existed.

@@ -1,6 +1,6 @@
 # Agent Relay
 
-Agent Relay runs on a dedicated Debian 13 systemd virtual machine under Hyper-V. The virtual machine is the production containment boundary; the deployment does not depend on shared Windows folders.
+Agent Relay is designed to run on a dedicated systemd-capable Linux runner host. The Linux distribution, virtualization platform, cloud provider, and bare-metal placement are deployment details rather than part of the repository architecture contract.
 
 This README describes the currently implemented repository and host behavior. Active ExecPlans describe proposed work. Completed ExecPlans are historical records and are not current architecture specifications.
 
@@ -19,7 +19,7 @@ All Agent Relay and GitHub Runner application data is grouped under `/srv/github
 
 The current ownership and runtime contracts are specified in `docs/native-github-runner-specification.md`. Operator procedures are in `docs/operations/README.md`.
 
-The source checkout is owned by the Debian administrator. The `github-runner` service account can read it but cannot modify it and has no sudo access. Runtime compilation runs as the separate no-sudo `agent-relay-builder` account. The activated `dist` tree is owned by root.
+The source checkout is owned by the host administrator. The `github-runner` service account can read it but cannot modify it and has no sudo access. Runtime compilation runs as the separate no-sudo `agent-relay-builder` account. The activated `dist` tree is owned by root.
 
 ## First installation
 
@@ -31,7 +31,7 @@ cd /srv/github-runner/storage/agent-relay
 
 `install.sh` performs one-time host and runner setup: it installs system dependencies, creates the isolated service accounts, registers the organization runner, configures the root-owned systemd unit, and performs Codex login for `github-runner`.
 
-The production VM already uses systemd as PID 1. The installer retains WSL compatibility; only a WSL installation on which it newly enables systemd requires `wsl --shutdown` before `./update.sh` is run.
+The architecture does not require a particular hypervisor or host operating system outside the supported Linux/systemd contract. The current installer implementation supports Debian x86-64 and retains a WSL compatibility path; only that WSL path may require `wsl --shutdown` after enabling systemd.
 
 ## Updates
 

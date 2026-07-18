@@ -27,7 +27,24 @@ jobs:
         run: npm run typecheck
 
       - name: Run tests and coverage
-        run: npm test
+        id: tests
+        shell: bash
+        run: |
+          set +e
+          npm test > "${RUNNER_TEMP}/agent-relay-test-output.log" 2>&1
+          status=$?
+          if (( status != 0 )); then
+            tail -n 80 "${RUNNER_TEMP}/agent-relay-test-output.log"
+          fi
+          exit "${status}"
+
+      - name: Upload test failure output
+        if: failure() && steps.tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-relay-test-output
+          path: ${{ runner.temp }}/agent-relay-test-output.log
+          if-no-files-found: error
 
       - name: Validate production runtime build
         run: npm run check:runtime

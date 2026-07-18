@@ -277,6 +277,12 @@ run_update() {
   (cd "${SOURCE_ROOT}" && bash "${SOURCE_ROOT}/update.sh")
 }
 
+# The outer repository check already executes the complete test suite. The
+# update harness rewrites host paths and fakes user switching, so a nested
+# node --test run would validate fixture mutations instead of production
+# contracts. Keep the updater orchestration test deterministic.
+: > "${FAST_VALIDATION}"
+
 run_update > "${ROOT}/update-success.out" 2> "${ROOT}/update-success.err"
 test "$(cat "${SOURCE_ROOT}/release-marker.txt")" = 'release two'
 test -f "${SOURCE_ROOT}/dist/src/run-codex.js"

@@ -30,7 +30,7 @@ Every workflow checkout below `/srv/github-runner/storage/work` is treated as a 
 Three identities are used:
 
 - the Debian administrator owns the source checkout, performs one-time installation, runs `git pull` manually, and invokes `update.sh`;
-- `agent-relay-builder` has a locked password, no interactive shell, and no sudo access; during update it compiles the production runtime directly into the administrator-selected `dist` directory created for that identity;
+- `agent-relay-builder` has a locked password, no interactive shell, and no sudo access; during update it compiles the production runtime directly into the `dist` directory created for that identity;
 - `github-runner` has a locked password and no sudo access; systemd runs the official runner and Codex as this account, and GitHub Actions pipeline commands execute in its workflow workspaces.
 
 The source checkout is readable by both service accounts but writable only by the administrator. During compilation `dist` is temporarily builder-owned and mode `0700`. After compilation every runtime entry is changed to `root:root`; directories are mode `0755` and regular files are mode `0644`.
@@ -103,35 +103,35 @@ PATH            /opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr
 
 The profile has no side effects when sourced. It constructs an ordered environment array with explicit identity, locale, immutable toolchain paths, and writable state paths below a caller-supplied root.
 
-Installation, Codex execution, and the pipeline toolchain smoke use this profile. The simplified updater does not source it because runtime compilation requires only the pinned `/usr/local/bin/tsc`, the builder home, a minimal locale, and the standard executable path.
+Installation, Codex execution, and the pipeline toolchain smoke use this profile. The simplified updater does not source it because runtime compilation requires only the pinned `/usr/local/bin/tsc`, the builder home, locale, and standard executable path.
 
 ## Runtime update contract
 
 `update.sh` must:
 
 1. accept no arguments and refuse root execution;
-2. require the exact repository location, the protected administrator file, the recorded administrator identity, systemd as PID 1, the builder and runner accounts, `/usr/local/bin/tsc`, `/usr/bin/pgrep`, and `tsconfig.runtime.json`;
+2. require the exact repository location, protected administrator file, recorded administrator identity, systemd as PID 1, builder and runner accounts, `/usr/local/bin/tsc`, `/usr/bin/ps`, and `tsconfig.runtime.json`;
 3. perform no Git command and impose no clean-worktree requirement;
 4. acquire sudo credentials and register only sudo-cache invalidation as process cleanup, never runtime or service rollback;
 5. stop `actions.runner.Divorium.gh-runner.service` before waiting, preventing the listener from accepting another job;
-6. wait without a timeout until no `Runner.Worker` owned by `github-runner` remains, interpreting `pgrep` status `0` as active, `1` as idle, and all other statuses as errors;
-7. delete and recreate `/srv/github-runner/storage/build` as a private builder-owned directory, discarding all previous update leftovers;
+6. inspect process names for `github-runner` through `/usr/bin/ps`, fail when inspection fails, and wait without a timeout while `Runner.Worker` is present;
+7. delete and recreate `/srv/github-runner/storage/build` as a private builder-owned directory, discarding previous update leftovers;
 8. delete `/srv/github-runner/storage/agent-relay/dist` completely and recreate it as `agent-relay-builder:agent-relay-builder` mode `0700`;
-9. invoke only the production compilation command, `/usr/local/bin/tsc -p tsconfig.runtime.json --outDir dist`, as `agent-relay-builder` through `env -i` with explicit identity, home, locale, and path;
+9. invoke only `/usr/local/bin/tsc -p tsconfig.runtime.json --outDir dist` as `agent-relay-builder` through `env -i` with explicit identity, home, locale, and path;
 10. require `dist/src/run-codex.js` to exist;
-11. change the complete runtime tree to `root:root`, set directories to `0755`, and set regular files to `0644` through physical filesystem-bounded traversal;
+11. change the runtime tree to `root:root`, set directories to `0755`, and set regular files to `0644` through physical filesystem-bounded traversal;
 12. enable and start the runner unit, require it to become active, and display its status.
 
 The updater does not run `npm ci`, tests, coverage, shell checks, Node checks, system tests, or toolchain smoke. Those are pipeline responsibilities.
 
-The updater has no stage, backup, activation move, transaction journal, recovery, or rollback. If any step fails, the service may remain stopped and `dist` may be absent or partial. The next invocation repeats the same procedure, deletes `dist`, and compiles it again from zero.
+The updater has no stage, backup, activation move, transaction journal, recovery, or rollback. If any step fails, the service may remain stopped and `dist` may be absent or partial. The next invocation deletes `dist` and compiles it again from zero.
 
 ## GitHub request flow
 
 The workflow processes one request as follows:
 
 1. `resolve-request.mjs` selects and validates the pull request number from `pull_request` or `workflow_dispatch` input.
-2. `resolve-pr.mjs` queries GitHub, requires an open non-draft same-repository pull request, validates its head ref and exact SHA, and publishes checkout outputs.
+2. `resolve-pr.mjs` requires an open non-draft same-repository pull request, validates its head ref and exact SHA, and publishes checkout outputs.
 3. `actions/checkout` checks out that exact SHA with `persist-credentials: false`.
 4. `resolve-plan.mjs` requires exactly one added or modified active ExecPlan for a pull request, or validates the explicit dispatch path.
 5. `run-codex.mjs` calls the compiled direct runtime.
@@ -168,6 +168,6 @@ The GitHub Actions pipeline runs `npm ci` and `npm run check`. The check suite i
 - the real managed toolchain smoke with isolated writable state;
 - system-level mocked installation and simplified update executions;
 - updater contract checks proving there are no Git, validation-suite, staging, backup, recovery, or rollback operations;
-- a system update test proving listener stop before worker wait, acceptance of dirty checkout content, complete runtime replacement, no rollback after build failure, and a successful clean rebuild on the next invocation.
+- a system update test proving listener stop before worker wait, dirty-checkout acceptance, complete runtime replacement, no rollback after build failure, and successful full rebuild on the next invocation.
 
 The full-flow integration test creates a local Git remote and pull-request branch, serves a mock GitHub pull-request API, resolves the request and active plan, checks out the exact revision, invokes a mock Codex executable, and validates finalization behavior without granting GitHub credentials to Codex.

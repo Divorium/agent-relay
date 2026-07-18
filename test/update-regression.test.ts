@@ -42,10 +42,13 @@ test("update stops intake, waits, deletes and rebuilds the final runtime", async
 
 test("runner wait distinguishes active, idle and inspection failure", async () => {
   const update = await read("update.sh");
-  assert.match(update, /\/usr\/bin\/pgrep -u "\$\{RUNNER_USER\}" -f 'Runner\\\.Worker'/u);
-  assert.match(update, /0\)[\s\S]*sleep 5/u);
-  assert.match(update, /1\)[\s\S]*return/u);
+  assert.match(update, /\/usr\/bin\/ps -u "\$\{RUNNER_USER\}" -o comm=/u);
+  assert.match(update, /"\$\{process_name\}" == "Runner\.Worker"/u);
+  assert.match(update, /worker_active=1/u);
+  assert.match(update, /worker_active == 0/u);
+  assert.match(update, /sleep 5/u);
   assert.match(update, /Could not inspect GitHub runner worker processes/u);
+  assert.doesNotMatch(update, /\/usr\/bin\/pgrep/u);
 });
 
 test("pipeline validates the production build and real host toolchain", async () => {

@@ -1,14 +1,16 @@
 # Native GitHub Runner and Codex Technical Specification
 
-## Goal
+## Scope and authority
 
-Run Agent Relay directly in one fresh Debian WSL installation. The official organization-level GitHub Actions runner is the only long-lived service. It executes the trusted Agent Relay runtime from the administrator-owned repository checkout and gives Codex access only to the selected workflow workspace.
+This document describes the currently implemented architecture. Agent Relay runs on a dedicated systemd-capable Linux runner host. The Linux distribution, virtualization platform, cloud provider, and bare-metal placement are deployment details rather than part of the repository architecture contract. Active ExecPlans describe proposed changes; completed ExecPlans are historical records and are not current architecture specifications.
 
-There is no Relay HTTP service, queue, polling loop, persisted job state, Docker image, Compose deployment, `.env`, or `/opt/agent-relay` copy.
+The dedicated runner host is the production containment boundary selected by the deployment. The repository does not assume Windows integration, shared host folders, a specific hypervisor, or a particular cloud. The official organization-level GitHub Actions runner is the only long-lived Agent Relay service. It executes the trusted runtime from the administrator-owned repository checkout and gives Codex direct access only to the selected workflow workspace.
+
+There is currently no Relay HTTP service, queue, polling loop, persisted job state, Docker integration, Compose deployment, `.env`, or `/opt/agent-relay` copy.
 
 ## Fixed paths
 
-All Agent Relay and GitHub Runner data is grouped below `/srv/github-runner/storage`:
+All Agent Relay and GitHub Runner application data is grouped below `/srv/github-runner/storage`:
 
 ```text
 /srv/github-runner/storage/agent-relay  administrator-owned source and root-owned compiled runtime
@@ -29,7 +31,7 @@ Every workflow checkout below `/srv/github-runner/storage/work` is treated as a 
 
 Three identities are used:
 
-- the Debian administrator owns the source checkout, performs one-time installation, runs `git pull` manually, and invokes `update.sh`;
+- the host administrator owns the source checkout, performs one-time installation, updates the checkout explicitly, and invokes `update.sh`;
 - `agent-relay-builder` has a locked password, no interactive shell, and no sudo access; during update it compiles the production runtime directly into the `dist` directory created for that identity;
 - `github-runner` has a locked password and no sudo access; systemd runs the official runner and Codex as this account, and GitHub Actions pipeline commands execute in its workflow workspaces.
 
@@ -46,14 +48,12 @@ Neither service account can use the administrator's cached sudo authentication. 
 ```bash
 cd /srv/github-runner/storage/agent-relay
 ./install.sh
-```
-
-If installation enables systemd in `/etc/wsl.conf`, run `wsl --shutdown` from Windows, start Debian again, and activate the checked-out runtime:
-
-```bash
-cd /srv/github-runner/storage/agent-relay
 ./update.sh
 ```
+
+`install.sh` performs one-time host, service-account, runner, systemd-unit, toolchain, and Codex-authentication setup.
+
+The architecture requires a supported Linux host with systemd as PID 1 but does not require a particular distribution or virtualization environment. The current installer implementation supports Debian x86-64. It also retains a WSL compatibility path that may configure `[boot] systemd=true`; only that compatibility path requires `wsl --shutdown` before `./update.sh`.
 
 The installer is not rerun for ordinary releases.
 
@@ -72,8 +72,8 @@ Git synchronization is always an explicit operator action. `update.sh` performs 
 `install.sh` must:
 
 - accept no arguments and refuse root execution;
-- require Debian x86-64 and `/srv/github-runner/storage/agent-relay`;
-- configure only `[boot] systemd=true` when WSL does not run systemd;
+- require the currently supported Debian x86-64 installer environment and `/srv/github-runner/storage/agent-relay`, without treating that compatibility limitation as an architecture requirement;
+- require systemd as PID 1 and retain the explicit WSL compatibility path described above;
 - validate and source `scripts/toolchain-environment.sh` before installing or checking host toolchains;
 - install the pinned system toolchains and build dependencies;
 - create locked `github-runner` and `agent-relay-builder` accounts and remove sudo access;
@@ -128,15 +128,17 @@ The updater has no stage, backup, activation move, transaction journal, recovery
 
 ## GitHub request flow
 
-The workflow processes one request as follows:
+The workflow is `.github/workflows/codex.yml` and processes one request as follows:
 
 1. `resolve-request.mjs` selects and validates the pull request number from `pull_request` or `workflow_dispatch` input.
 2. `resolve-pr.mjs` requires an open non-draft same-repository pull request, validates its head ref and exact SHA, and publishes checkout outputs.
 3. `actions/checkout` checks out that exact SHA with `persist-credentials: false`.
 4. `resolve-plan.mjs` requires exactly one added or modified active ExecPlan for a pull request, or validates the explicit dispatch path.
-5. `run-codex.mjs` calls the compiled direct runtime.
-6. `CodexExecutor` canonicalizes the selected workspace and invokes `scripts/codex-run` with timeout, process-group termination, output limits, streaming redaction, and filesystem/network permissions.
-7. `finalize.sh` validates the branch and commit message, checks the diff, commits, and pushes through a temporary askpass helper. Codex receives no GitHub token.
+5. The validation job runs `npm ci` and `npm run check` before Codex execution.
+6. `run-codex.mjs` calls the compiled direct runtime.
+7. `CodexExecutor` canonicalizes the selected workspace and invokes `scripts/codex-run` with timeout, process-group termination, output limits, streaming redaction, and filesystem/network permissions.
+8. Standard output and standard error pass through `tee` into `${RUNNER_TEMP}/agent-relay-console.log`, which is uploaded as the existing `agent-relay-output` artifact.
+9. `finalize.sh` validates the branch and commit message, checks the diff, commits, and pushes through a temporary askpass helper. Codex receives no GitHub token.
 
 The workflow runs only same-repository pull requests and uses `runs-on: [self-hosted]` without custom labels.
 

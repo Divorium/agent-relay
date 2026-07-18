@@ -13,7 +13,7 @@
     "check:shell": "bash -n install.sh update.sh runner/finalize.sh scripts/codex-run scripts/toolchain-environment.sh scripts/toolchain-smoke.sh test-system/install-script.integration.sh test-system/update-script.integration.sh",
     "check": "npm run typecheck && npm test && npm run check:shell && npm run check:node-scripts && npm run check:system",
     "check:node-scripts": "node --check runner/resolve-pr.mjs && node --check runner/resolve-plan.mjs && node --check runner/resolve-request.mjs && node --check runner/run-codex.mjs",
-    "check:system": "bash test-system/install-script.integration.sh && bash test-system/update-script.integration.sh"
+    "check:system": "bash test-system/install-script.integration.sh && bash -x test-system/update-script.integration.sh"
   },
   "devDependencies": {
     "typescript": "5.8.3"

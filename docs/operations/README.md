@@ -1,6 +1,6 @@
 # Native GitHub Runner Operations
 
-These procedures describe the current dedicated Debian 13 systemd virtual machine under Hyper-V. Active ExecPlans may propose later behavior; do not operate the host as though a planned feature already exists.
+These procedures describe the supported systemd-capable Linux runner host contract. The concrete Linux distribution, virtualization platform, cloud provider, or bare-metal placement is not part of the operating contract. Active ExecPlans may propose later behavior; do not operate the host as though a planned feature already exists.
 
 ## Filesystem layout
 
@@ -27,7 +27,7 @@ cd /srv/github-runner/storage/agent-relay
 ./update.sh
 ```
 
-The production VM already runs systemd as PID 1. The installer retains a WSL compatibility path; only a WSL installation on which it newly enables systemd requires `wsl --shutdown` before the first `./update.sh`.
+The host must run systemd as PID 1. The current installer implementation supports Debian x86-64 and retains a WSL compatibility path; only that WSL path may require `wsl --shutdown` after systemd is enabled. This compatibility limitation does not make WSL, a virtual machine, or any specific hypervisor part of the architecture.
 
 Do not run `install.sh` for normal releases.
 

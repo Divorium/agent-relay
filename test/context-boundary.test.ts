@@ -5,8 +5,8 @@ import { buildCodexPrompt } from "../src/execution/prompt.js";
 import { createCodexArgs, createCodexEnvironment } from "../src/execution/codex-executor.js";
 
 const workflowPaths = [
-  ".github/workflows/agent-relay.yml",
-  "examples/github-actions/agent-relay.yml",
+  ".github/workflows/codex.yml",
+  "examples/github-actions/codex.yml",
 ];
 
 test("runtime prompt contains only plan-rules and active-plan pointers", () => {

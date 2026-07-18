@@ -1,0 +1,141 @@
+name: Codex
+
+on:
+  pull_request:
+    types:
+      - ready_for_review
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open pull request number to update
+        required: true
+        type: string
+      plan_path:
+        description: Active ExecPlan path in the pull request workspace
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: agent-relay-${{ github.repository }}-pr-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted]
+    outputs:
+      pr_number: ${{ steps.request.outputs.pr_number }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+    steps:
+      - name: Resolve execution request
+        id: request
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+        run: node /srv/github-runner/storage/agent-relay/runner/resolve-request.mjs
+
+      - name: Resolve ready pull request
+        id: pr
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.request.outputs.pr_number }}
+        run: node /srv/github-runner/storage/agent-relay/runner/resolve-pr.mjs
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+          fetch-depth: 0
+          token: ${{ github.token }}
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate repository
+        run: npm run check
+
+  codex:
+    needs: validate
+    if: ${{ needs.validate.result == 'success' }}
+    runs-on: [self-hosted]
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Re-resolve ready pull request
+        id: pr
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.validate.outputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
+        run: node /srv/github-runner/storage/agent-relay/runner/resolve-pr.mjs
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+          fetch-depth: 0
+          token: ${{ github.token }}
+          persist-credentials: false
+
+      - name: Verify credential-free checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git config --local --get-regexp '^(http\..*\.extraheader|credential\.)' >/dev/null; then
+            echo "Checkout credentials must not remain in the repository config" >&2
+            exit 1
+          fi
+          remote_url="$(git remote get-url origin)"
+          case "${remote_url}" in
+            *://*@*)
+              echo "The repository remote must not contain embedded credentials" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Resolve active ExecPlan
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          INPUT_PLAN_PATH: ${{ inputs.plan_path }}
+        run: node /srv/github-runner/storage/agent-relay/runner/resolve-plan.mjs
+
+      - name: Run Codex directly
+        id: codex
+        continue-on-error: true
+        env:
+          CODEX_PLAN_PATH: ${{ steps.plan.outputs.plan_path }}
+          CODEX_WORKSPACE_ROOT: ${{ runner.workspace }}
+        run: |
+          set -o pipefail
+          node /srv/github-runner/storage/agent-relay/runner/run-codex.mjs 2>&1 | tee "${RUNNER_TEMP}/agent-relay-console.log"
+
+      - name: Upload Agent Relay output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-relay-output
+          path: ${{ runner.temp }}/agent-relay-console.log
+          if-no-files-found: warn
+
+      - name: Fail when Codex failed
+        if: steps.codex.outcome == 'failure'
+        shell: bash
+        run: exit 1
+
+      - name: Commit and push
+        shell: bash
+        env:
+          COMMIT_MESSAGE: ${{ steps.codex.outputs.commit_message }}
+          TARGET_BRANCH: ${{ steps.pr.outputs.head_ref }}
+          GITHUB_PUSH_TOKEN: ${{ github.token }}
+        run: /srv/github-runner/storage/agent-relay/runner/finalize.sh

@@ -47,6 +47,6 @@ The repository pipeline performs dependency installation, type checking, tests, 
 
 There is no runtime rollback or recovery transaction. If an update fails, correct the cause and run `./update.sh` again; every invocation deletes `dist` and builds it again from zero.
 
-## Proposed changes
+## Documentation authority
 
-Only the selected file under `docs/exec-plans/active/` is an implementation instruction for Codex. A proposed feature must not be described here as currently available until its ExecPlan is complete and the implementation has been validated.
+Current behavior is defined by the checked-out source, this README, `docs/native-github-runner-specification.md`, and `docs/operations/README.md`. Only an explicitly selected file under `docs/exec-plans/active/` is an implementation instruction. Files under `docs/exec-plans/completed/` are historical records.

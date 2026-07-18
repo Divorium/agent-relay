@@ -123,6 +123,17 @@ else
 fi
 EOF_PS
 
+cat > "${FAKE_BIN}/stat" <<EOF_STAT
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'stat %s\n' "\$*" >> "${LOG_FILE}"
+if [[ "\$*" == "-c %U|%G|%a -- ${ADMIN_FILE}" ]]; then
+  printf 'root|root|644\n'
+  exit 0
+fi
+exec /usr/bin/stat "\$@"
+EOF_STAT
+
 cat > "${FAKE_BIN}/systemctl" <<EOF_SYSTEMCTL
 #!/usr/bin/env bash
 set -euo pipefail
@@ -160,10 +171,13 @@ if [[ "\${1:-}" == "sudo" ]]; then shift; exec sudo "\$@"; fi
 case "\${1:-}" in
   chown) exit 0 ;;
   stat)
-    if [[ "\$*" == "stat -c %U|%G|%a -- ${STORAGE_ROOT}" ]]; then
-      printf 'root|root|755\n'
-      exit 0
-    fi
+    case "\$*" in
+      "stat -c %U|%G|%a -- ${STORAGE_ROOT}") printf 'root|root|755\n'; exit 0 ;;
+      "stat -c %U|%G|%a -- ${BUILD_ROOT}"|"stat -c %U|%G|%a -- ${BUILD_HOME}")
+        printf 'agent-relay-builder|agent-relay-builder|700\n'
+        exit 0
+        ;;
+    esac
     shift
     exec /usr/bin/stat "\$@"
     ;;
@@ -313,8 +327,12 @@ grep -qx active "${SERVICE_STATE}"
 grep -q 'systemctl stop' "${LOG_FILE}"
 grep -q 'systemctl enable' "${LOG_FILE}"
 grep -q 'systemctl start' "${LOG_FILE}"
+grep -Fq "stat -c %U|%G|%a -- ${ADMIN_FILE}" "${LOG_FILE}"
 grep -Fq "sudo stat -c %U|%G|%a -- ${STORAGE_ROOT}" "${LOG_FILE}"
+grep -Fq "sudo stat -c %U|%G|%a -- ${BUILD_ROOT}" "${LOG_FILE}"
+grep -Fq "sudo stat -c %U|%G|%a -- ${BUILD_HOME}" "${LOG_FILE}"
 grep -q '! -user root' "${LOG_FILE}"
+grep -q 'sudo -u agent-relay-builder /usr/bin/mkdir -m 0700' "${LOG_FILE}"
 grep -q 'Agent Relay updated successfully' "${ROOT}/update-success.out"
 grep -q 'go version go1.24.5 linux/amd64' "${ROOT}/update-success.out"
 grep -q 'rustc 1.90.0 (mock)' "${ROOT}/update-success.out"
@@ -322,7 +340,7 @@ grep -q 'cargo 1.90.0 (mock)' "${ROOT}/update-success.out"
 grep -q '^node --test --test-concurrency=1 ' "${NODE_TEST_LOG}"
 test -s "${TOOLCHAIN_LOG}"
 
-mapfile -t builder_lines < <(grep '^sudo -u agent-relay-builder ' "${LOG_FILE}" | grep -v ' sudo -n true$')
+mapfile -t builder_lines < <(grep '^sudo -u agent-relay-builder ' "${LOG_FILE}" | grep -v ' sudo -n true$' | grep -v ' /usr/bin/mkdir ')
 (( ${#builder_lines[@]} > 0 ))
 for builder_line in "${builder_lines[@]}"; do
   [[ "${builder_line}" == *' -H /usr/bin/env -i '* ]] || {

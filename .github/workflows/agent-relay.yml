@@ -16,7 +16,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: read
 
 concurrency:
@@ -28,7 +28,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: [self-hosted]
     outputs:
-      head_ref: ${{ steps.pr.outputs.head_ref }}
+      pr_number: ${{ steps.request.outputs.pr_number }}
       head_sha: ${{ steps.pr.outputs.head_sha }}
     steps:
       - name: Resolve execution request
@@ -64,10 +64,22 @@ jobs:
     needs: validate
     if: ${{ needs.validate.result == 'success' }}
     runs-on: [self-hosted]
+    permissions:
+      contents: write
+      pull-requests: read
     steps:
+      - name: Re-resolve ready pull request
+        id: pr
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.validate.outputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
+        run: node /srv/github-runner/storage/agent-relay/runner/resolve-pr.mjs
+
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.validate.outputs.head_sha }}
+          ref: ${{ steps.pr.outputs.head_sha }}
           fetch-depth: 0
           token: ${{ github.token }}
           persist-credentials: false
@@ -93,7 +105,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           INPUT_PLAN_PATH: ${{ inputs.plan_path }}
         run: node /srv/github-runner/storage/agent-relay/runner/resolve-plan.mjs
 
@@ -124,6 +136,6 @@ jobs:
         shell: bash
         env:
           COMMIT_MESSAGE: ${{ steps.codex.outputs.commit_message }}
-          TARGET_BRANCH: ${{ needs.validate.outputs.head_ref }}
+          TARGET_BRANCH: ${{ steps.pr.outputs.head_ref }}
           GITHUB_PUSH_TOKEN: ${{ github.token }}
         run: /srv/github-runner/storage/agent-relay/runner/finalize.sh

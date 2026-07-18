@@ -20,4 +20,9 @@ test("Agent Relay validates and rechecks the exact pull request revision before 
     assert.match(workflow, /HEAD_SHA: \$\{\{ steps\.pr\.outputs\.head_sha \}\}/u);
     assert.match(workflow, /TARGET_BRANCH: \$\{\{ steps\.pr\.outputs\.head_ref \}\}/u);
   }
+
+  const resolver = await readFile("runner/resolve-pr.mjs", "utf8");
+  assert.match(resolver, /EXPECTED_HEAD_SHA/u);
+  assert.match(resolver, /headSha !== expectedHeadSha/u);
+  assert.match(resolver, /Pull request head changed after validation/u);
 });

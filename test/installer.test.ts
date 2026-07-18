@@ -156,24 +156,73 @@ test("normal update pulls once and runs all project code through one clean build
   assert.doesNotMatch(update, /sudo npm|sudo node --test|sudo .*tsc|BUILDER_PATH=/);
 });
 
-test("privileged permission updates do not follow repository symlinks", async () => {
+test("update validates storage, source, runtime and repository status before mutation", async () => {
+  const { update } = await scripts();
+  const gitCheckoutCheck = update.indexOf('[[ -d "${SOURCE_ROOT}/.git" ]]');
+  const sudo = update.indexOf("\nsudo -v\n", gitCheckoutCheck);
+  const storage = update.indexOf("\nassert_secure_storage_root\n", sudo);
+  const ownership = update.indexOf("\nassert_source_ownership\n", storage);
+  const activeRuntime = update.indexOf("\nassert_active_runtime\n", ownership);
+  const gitConfig = update.indexOf('git -C "${SOURCE_ROOT}" config core.fileMode false', activeRuntime);
+  const status = update.indexOf('git_status="$(git -C "${SOURCE_ROOT}" status --porcelain --untracked-files=all)"', gitConfig);
+  const stop = update.indexOf('sudo systemctl stop "${SERVICE_NAME}"', status);
+  const pull = update.indexOf("pull --ff-only", stop);
+  assert.ok(gitCheckoutCheck >= 0 && sudo > gitCheckoutCheck && storage > sudo && ownership > storage);
+  assert.ok(activeRuntime > ownership && gitConfig > activeRuntime && status > gitConfig && stop > status && pull > stop);
+  assert.match(update, /if ! git_status="\$\(git -C "\$\{SOURCE_ROOT\}" status --porcelain --untracked-files=all\)"; then/);
+  assert.match(update, /Could not inspect the source checkout status/);
+  assert.match(update, /if \[\[ -n "\$\{git_status\}" \]\]; then/);
+});
+
+test("ownership probes fail closed and retain actionable path metadata", async () => {
+  const { update } = await scripts();
+  assert.match(update, /assert_secure_storage_root\(\)/);
+  assert.match(update, /Storage root must be root:root and not group\/other-writable/);
+  assert.match(update, /mode_value & 0022/);
+  assert.match(update, /assert_source_ownership\(\)/);
+  assert.match(update, /if ! foreign_path="\$\([\s\S]*sudo find -P "\$\{SOURCE_ROOT\}" -xdev[\s\S]*\)"; then/u);
+  assert.match(update, /Could not verify source checkout ownership/);
+  assert.match(update, /assert_tree_ownership\(\)/);
+  assert.match(update, /assert_active_runtime\(\)/);
+  assert.match(update, /assert_tree_ownership "\$\{SOURCE_ROOT\}\/dist" root "Active runtime"/);
+  assert.match(update, /stat -c 'owner=%U group=%G mode=%a type=%F links=%h'/);
+  assert.match(update, /The source checkout contains a path not owned by/);
+  assert.match(update, /path_metadata "\$\{foreign_path\}"/);
+  assert.equal((update.match(/\nassert_secure_storage_root\n/gu) ?? []).length, 2);
+  assert.equal((update.match(/\nassert_source_ownership\n/gu) ?? []).length, 2);
+});
+
+test("privileged permission updates do not follow source or runtime links", async () => {
   const { install, update } = await scripts();
   assert.match(install, /find -P "\$\{SOURCE_ROOT\}" -xdev -exec chown -h/);
   assert.match(install, /Required source file must be a regular non-symlink file/);
   assert.match(install, /scripts\/toolchain-environment\.sh/);
   assert.doesNotMatch(install, /chown -R "\$\{owner\}:\$\{group\}" "\$\{SOURCE_ROOT\}"/);
-  assert.match(update, /validate_source_entrypoints/);
-  assert.match(update, /find -P "\$\{SOURCE_ROOT\}" -xdev/);
+  assert.match(update, /assert_runtime_tree_safe\(\)/);
+  assert.match(update, /! -type d ! -type f/);
+  assert.match(update, /-type f -links \+1/);
+  assert.match(update, /find -P "\$\{root\}" -xdev -exec chown -h root:root \{\} \+/);
+  assert.match(update, /assert_tree_ownership "\$\{activation_stage\}" root "Staged runtime"/);
+  assert.doesNotMatch(update, /chown -R/);
   assert.doesNotMatch(update, /-exec chown "\$\{expected_admin\}:\$\{admin_group\}"/);
 });
 
-test("update keeps the previous runtime until the staged build passes", async () => {
+test("update keeps activation and rollback runtime paths outside the source checkout", async () => {
   const { update } = await scripts();
   const build = update.indexOf('run_builder "${build_workspace}/node_modules/.bin/tsc"');
   const testRun = update.indexOf("run_builder node --test", build);
-  const previous = update.indexOf('previous_dist="${SOURCE_ROOT}/.dist.previous.$$"', testRun);
-  const swap = update.indexOf('sudo mv -- "${stage}" "${SOURCE_ROOT}/dist"', previous);
-  assert.ok(build >= 0 && testRun > build && previous > testRun && swap > previous);
+  const preActivationStorage = update.indexOf("assert_secure_storage_root", testRun);
+  const preActivationOwnership = update.indexOf("assert_source_ownership", preActivationStorage);
+  const activeRuntime = update.indexOf("assert_active_runtime", preActivationOwnership);
+  const stageSafety = update.indexOf('assert_runtime_tree_safe "${stage}" "Staged runtime"', activeRuntime);
+  const activationStage = update.indexOf('activation_stage="${STORAGE_ROOT}/.agent-relay-dist.stage.$$"', stageSafety);
+  const previous = update.indexOf('previous_dist="${STORAGE_ROOT}/.agent-relay-dist.previous.$$"', activationStage);
+  const adopt = update.indexOf('adopt_runtime_tree "${activation_stage}"', previous);
+  const swap = update.indexOf('sudo mv -- "${activation_stage}" "${SOURCE_ROOT}/dist"', adopt);
+  assert.ok(build >= 0 && testRun > build && preActivationStorage > testRun);
+  assert.ok(preActivationOwnership > preActivationStorage && activeRuntime > preActivationOwnership && stageSafety > activeRuntime);
+  assert.ok(activationStage > stageSafety && previous > activationStage && adopt > previous && swap > adopt);
+  assert.doesNotMatch(update, /\.dist\.previous\.\$\$|previous_dist="\$\{SOURCE_ROOT\}/);
   assert.match(update, /git -C "\$\{SOURCE_ROOT\}" reset --hard "\$\{original_head\}"/);
   assert.match(update, /sudo mv -- "\$\{previous_dist\}" "\$\{SOURCE_ROOT\}\/dist"/);
   assert.match(update, /dist_swapped=1/);
@@ -181,7 +230,6 @@ test("update keeps the previous runtime until the staged build passes", async ()
   const activate = update.indexOf("restart_service", swap);
   const removePrevious = update.indexOf('sudo rm -rf -- "${previous_dist}"', activate);
   assert.ok(activate > swap && removePrevious > activate);
-  assert.match(update, /The source checkout must be clean before update/);
 });
 
 test("install and update contain no legacy Docker or Relay deployment", async () => {

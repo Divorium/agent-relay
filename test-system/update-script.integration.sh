@@ -123,6 +123,17 @@ else
 fi
 EOF_PS
 
+cat > "${FAKE_BIN}/stat" <<EOF_STAT
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'stat %s\n' "\$*" >> "${LOG_FILE}"
+if [[ "\$*" == "-c %U|%G|%a -- ${ADMIN_FILE}" ]]; then
+  printf 'root|root|644\n'
+  exit 0
+fi
+exec /usr/bin/stat "\$@"
+EOF_STAT
+
 cat > "${FAKE_BIN}/systemctl" <<EOF_SYSTEMCTL
 #!/usr/bin/env bash
 set -euo pipefail
@@ -159,8 +170,20 @@ fi
 if [[ "\${1:-}" == "sudo" ]]; then shift; exec sudo "\$@"; fi
 case "\${1:-}" in
   chown) exit 0 ;;
+  stat)
+    case "\$*" in
+      "stat -c %U|%G|%a -- ${STORAGE_ROOT}") printf 'root|root|755\n'; exit 0 ;;
+      "stat -c %U|%G|%a -- ${BUILD_ROOT}"|"stat -c %U|%G|%a -- ${BUILD_HOME}")
+        printf 'agent-relay-builder|agent-relay-builder|700\n'
+        exit 0
+        ;;
+    esac
+    shift
+    exec /usr/bin/stat "\$@"
+    ;;
   find)
     if printf '%s\n' "\$*" | grep -q -- '-exec chown'; then exit 0; fi
+    if printf '%s\n' "\$*" | grep -q -- '! -user root'; then exit 0; fi
     shift
     exec /usr/bin/find "\$@"
     ;;
@@ -287,6 +310,10 @@ run_update() {
   (cd "${SOURCE_ROOT}" && bash "${SOURCE_ROOT}/update.sh")
 }
 
+assert_no_runtime_transaction_paths() {
+  test -z "$(find "${STORAGE_ROOT}" -maxdepth 1 -name '.agent-relay-dist.*' -print -quit)"
+}
+
 run_update > "${ROOT}/update-success.out" 2> "${ROOT}/update-success.err"
 test "$(cat "${SOURCE_ROOT}/release-marker.txt")" = 'release two'
 test -f "${SOURCE_ROOT}/dist/src/run-codex.js"
@@ -295,10 +322,17 @@ test -d "${STORAGE_ROOT}/build"
 test -d "${STORAGE_ROOT}/build-home"
 test ! -d "${BASE_ROOT}/build"
 test ! -d "${BASE_ROOT}/build-home"
+assert_no_runtime_transaction_paths
 grep -qx active "${SERVICE_STATE}"
 grep -q 'systemctl stop' "${LOG_FILE}"
 grep -q 'systemctl enable' "${LOG_FILE}"
 grep -q 'systemctl start' "${LOG_FILE}"
+grep -Fq "stat -c %U|%G|%a -- ${ADMIN_FILE}" "${LOG_FILE}"
+grep -Fq "sudo stat -c %U|%G|%a -- ${STORAGE_ROOT}" "${LOG_FILE}"
+grep -Fq "sudo stat -c %U|%G|%a -- ${BUILD_ROOT}" "${LOG_FILE}"
+grep -Fq "sudo stat -c %U|%G|%a -- ${BUILD_HOME}" "${LOG_FILE}"
+grep -q '! -user root' "${LOG_FILE}"
+grep -q 'sudo -u agent-relay-builder /usr/bin/mkdir -m 0700' "${LOG_FILE}"
 grep -q 'Agent Relay updated successfully' "${ROOT}/update-success.out"
 grep -q 'go version go1.24.5 linux/amd64' "${ROOT}/update-success.out"
 grep -q 'rustc 1.90.0 (mock)' "${ROOT}/update-success.out"
@@ -306,7 +340,7 @@ grep -q 'cargo 1.90.0 (mock)' "${ROOT}/update-success.out"
 grep -q '^node --test --test-concurrency=1 ' "${NODE_TEST_LOG}"
 test -s "${TOOLCHAIN_LOG}"
 
-mapfile -t builder_lines < <(grep '^sudo -u agent-relay-builder ' "${LOG_FILE}" | grep -v ' sudo -n true$')
+mapfile -t builder_lines < <(grep '^sudo -u agent-relay-builder ' "${LOG_FILE}" | grep -v ' sudo -n true$' | grep -v ' /usr/bin/mkdir ')
 (( ${#builder_lines[@]} > 0 ))
 for builder_line in "${builder_lines[@]}"; do
   [[ "${builder_line}" == *' -H /usr/bin/env -i '* ]] || {
@@ -344,6 +378,7 @@ test "$(sha256sum "${SOURCE_ROOT}/dist/src/run-codex.js" | cut -d' ' -f1)" = "${
 test ! -e "${SOURCE_ROOT}/release-test-broken.txt"
 test ! -e "${FAIL_NEXT_TEST}"
 test "$(wc -l < "${NODE_TEST_LOG}")" -eq "$((TEST_INVOCATIONS + 1))"
+assert_no_runtime_transaction_paths
 grep -qx active "${SERVICE_STATE}"
 
 printf 'release with simulated build failure\n' > "${RELEASE_ROOT}/release-broken.txt"
@@ -358,6 +393,7 @@ fi
 test "$(git -C "${SOURCE_ROOT}" rev-parse HEAD)" = "${SUCCESSFUL_HEAD}"
 test "$(sha256sum "${SOURCE_ROOT}/dist/src/run-codex.js" | cut -d' ' -f1)" = "${SUCCESSFUL_RUNTIME_SHA}"
 test ! -e "${SOURCE_ROOT}/release-broken.txt"
+assert_no_runtime_transaction_paths
 grep -qx active "${SERVICE_STATE}"
 
 printf 'release three\n' > "${RELEASE_ROOT}/release-three.txt"
@@ -372,6 +408,7 @@ fi
 test "$(git -C "${SOURCE_ROOT}" rev-parse HEAD)" = "${SUCCESSFUL_HEAD}"
 test "$(sha256sum "${SOURCE_ROOT}/dist/src/run-codex.js" | cut -d' ' -f1)" = "${SUCCESSFUL_RUNTIME_SHA}"
 test ! -e "${SOURCE_ROOT}/release-three.txt"
+assert_no_runtime_transaction_paths
 grep -qx active "${SERVICE_STATE}"
 
 printf 'update.sh system integration passed\n'

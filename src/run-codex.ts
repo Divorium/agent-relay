@@ -5,8 +5,8 @@ import { CodexExecutionError } from "./execution/errors.js";
 import { assertActivePlanFile, resolveWorkspace } from "./security/workspace.js";
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/u;
 const CONTROL_CHARACTERS_GLOBAL = /[\u0000-\u001f\u007f]/gu;
-const TRUSTED_SOURCE_ROOT = "/srv/github-runner/storage/agent-relay";
-export const CODEX_RUN_COMMAND = join(TRUSTED_SOURCE_ROOT, "scripts", "codex-run");
+const TRUSTED_RUNTIME_ROOT = "/srv/github-runner/storage/agent-relay";
+export const CODEX_RUN_COMMAND = join(TRUSTED_RUNTIME_ROOT, "scripts", "codex-run");
 const ACTIVE_PLAN_PATH = /^docs\/exec-plans\/active\/[A-Za-z0-9._-]+\.md$/u;
 function requiredEnvironment(name: string): string { const value = process.env[name]; if (!value || CONTROL_CHARACTERS.test(value)) throw new CodexExecutionError("INVALID_CONFIGURATION", `${name} is required and must not contain control characters`); return value; }
 function positiveInteger(name: string, fallback: number): number { const raw = process.env[name]; if (raw === undefined) return fallback; if (!/^[1-9][0-9]*$/u.test(raw)) throw new CodexExecutionError("INVALID_CONFIGURATION", `${name} must be a positive integer`); const value = Number(raw); if (!Number.isSafeInteger(value)) throw new CodexExecutionError("INVALID_CONFIGURATION", `${name} is outside the supported range`); return value; }
@@ -17,5 +17,5 @@ export async function main(command = CODEX_RUN_COMMAND): Promise<void> {
   const timeoutMs = positiveInteger("CODEX_TIMEOUT_MS", 21_600_000); const maxOutputBytes = positiveInteger("MAX_OUTPUT_BYTES", 10_000_000);
   const workspace = await resolveWorkspace(workspaceRoot, workspaceInput); const planFile = await assertActivePlanFile(workspace, planPath); const commitMessage = deriveCommitMessage(await readFile(planFile, "utf8"));
   const runtimeRoot = join(home, ".cache", "agent-relay-runtime"); await mkdir(runtimeRoot, { recursive: true, mode: 0o700 }); await chmod(runtimeRoot, 0o700);
-  const executor = new CodexExecutor(command, timeoutMs, maxOutputBytes, workspaceRoot, home, runtimeRoot, TRUSTED_SOURCE_ROOT); await executor.run(planPath, workspace); await appendFile(githubOutput, `commit_message=${commitMessage}\n`, "utf8");
+  const executor = new CodexExecutor(command, timeoutMs, maxOutputBytes, home, runtimeRoot, TRUSTED_RUNTIME_ROOT); await executor.run(planPath, workspace); await appendFile(githubOutput, `commit_message=${commitMessage}\n`, "utf8");
 }

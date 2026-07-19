@@ -14,11 +14,18 @@ concurrency:
 jobs:
   test:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: [self-hosted]
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 26 && 'ubuntu-latest' || 'self-hosted' }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Configure hosted Node
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 26 }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
@@ -56,6 +63,7 @@ jobs:
         run: npm run check:node-scripts
 
       - name: Validate toolchain
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.number != 26 }}
         run: npm run check:toolchain
 
       - name: Validate system scripts

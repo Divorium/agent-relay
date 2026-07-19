@@ -30,8 +30,9 @@ function utf8Prefix(bytes: Uint8Array, limit: number): Uint8Array {
   let end = Math.min(Math.max(limit, 0), bytes.length);
   if (end === bytes.length) return bytes;
   while (end > 0) {
-    const next = bytes[end];
-    if (next === undefined || (next & 0xc0) !== 0x80) break;
+    // The early return above guarantees end is a valid index here.
+    const next = bytes[end]!;
+    if ((next & 0xc0) !== 0x80) break;
     end -= 1;
   }
   return bytes.subarray(0, end);

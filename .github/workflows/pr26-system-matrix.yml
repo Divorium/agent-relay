@@ -15,15 +15,34 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        script:
-          - test-system/install-script.integration.sh
-          - test-system/update-script.integration.sh
-          - test-system/docker-host.repository-safe.sh
+        include:
+          - id: install
+            script: test-system/install-script.integration.sh
+          - id: update
+            script: test-system/update-script.integration.sh
+          - id: docker
+            script: test-system/docker-host.repository-safe.sh
     name: ${{ matrix.script }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
-      - shell: bash
-        run: bash -x "${{ matrix.script }}"
+
+      - name: Run system test
+        id: test
+        shell: bash
+        run: |
+          set +e
+          bash -x "${{ matrix.script }}" > "${RUNNER_TEMP}/${{ matrix.id }}.log" 2>&1
+          status=$?
+          tail -n 160 "${RUNNER_TEMP}/${{ matrix.id }}.log"
+          exit "${status}"
+
+      - name: Upload trace
+        if: failure() && steps.test.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr26-system-${{ matrix.id }}
+          path: ${{ runner.temp }}/${{ matrix.id }}.log
+          if-no-files-found: error

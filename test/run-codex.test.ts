@@ -10,7 +10,7 @@ import { CodexExecutionError } from "../src/execution/errors.js";
 
 const ENVIRONMENT_NAMES = [
   "GITHUB_WORKSPACE", "GITHUB_OUTPUT", "CODEX_PLAN_PATH", "CODEX_WORKSPACE_ROOT",
-  "CODEX_TIMEOUT_MS", "MAX_OUTPUT_BYTES", "HOME",
+  "CODEX_TIMEOUT_MS", "MAX_OUTPUT_BYTES", "MAX_JSONL_RECORD_BYTES", "HOME", "RUNNER_TEMP", "CODEX_TRANSCRIPT_PATH",
 ] as const;
 
 async function createFixture(name: string) {
@@ -21,14 +21,17 @@ async function createFixture(name: string) {
   const completed = join(workspace, "docs", "exec-plans", "completed");
   const home = join(root, "home");
   const githubOutput = join(root, "github-output");
+  const runnerTemp = join(root, "runner-temp");
+  const transcript = join(runnerTemp, "transcript.log");
   const planPath = "docs/exec-plans/active/task.md";
   await mkdir(active, { recursive: true });
   await mkdir(completed, { recursive: true });
   await mkdir(join(workspace, ".git"), { recursive: true });
   await mkdir(home, { recursive: true });
+  await mkdir(runnerTemp, { recursive: true });
   await writeFile(join(workspace, planPath), "# Implement native runner\n\nPlan body.\n");
   await writeFile(githubOutput, "");
-  return { root, workspaceRoot, workspace, active, completed, home, githubOutput, planPath };
+  return { root, workspaceRoot, workspace, active, completed, home, githubOutput, runnerTemp, transcript, planPath };
 }
 
 async function withEnvironment(values: Record<string, string>, run: () => Promise<void>): Promise<void> {
@@ -55,6 +58,8 @@ function fixtureEnvironment(fixture: Awaited<ReturnType<typeof createFixture>>):
     HOME: fixture.home,
     CODEX_TIMEOUT_MS: "5000",
     MAX_OUTPUT_BYTES: "100000",
+    RUNNER_TEMP: fixture.runnerTemp,
+    CODEX_TRANSCRIPT_PATH: fixture.transcript,
   };
 }
 
@@ -115,6 +120,12 @@ test("direct CLI rejects invalid limits and symlink plans before execution", asy
       await assert.rejects(() => main(executable),
         (error: unknown) => error instanceof CodexExecutionError && error.code === "INVALID_CONFIGURATION");
     });
+    for (const MAX_JSONL_RECORD_BYTES of ["100", "268435457"]) {
+      await withEnvironment({ ...fixtureEnvironment(fixture), MAX_JSONL_RECORD_BYTES }, async () => {
+        await assert.rejects(() => main(executable),
+          (error: unknown) => error instanceof CodexExecutionError && error.code === "INVALID_CONFIGURATION");
+      });
+    }
     await rm(join(fixture.workspace, fixture.planPath));
     await symlink(join(fixture.completed, "missing.md"), join(fixture.workspace, fixture.planPath));
     await withEnvironment(fixtureEnvironment(fixture), async () => {

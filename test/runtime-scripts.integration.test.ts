@@ -244,7 +244,8 @@ test("toolchain smoke validates retained pins and the complete environment profi
   await writeFile(join(scripts, "toolchain-environment.sh"), profile, { mode: 0o600 });
   await writeFile(
     join(scripts, "toolchain-smoke.sh"),
-    await readFile(join(process.cwd(), "scripts", "toolchain-smoke.sh"), "utf8"),
+    (await readFile(join(process.cwd(), "scripts", "toolchain-smoke.sh"), "utf8"))
+      .replace("/tmp/agent-relay-smoke.XXXXXX", `${join(stateRoot, "tmp")}/agent-relay-smoke.XXXXXX`),
     { mode: 0o700 },
   );
 
@@ -298,7 +299,7 @@ test("toolchain smoke validates retained pins and the complete environment profi
 
     const profileInvocation = invocations.split("\n").find((line) => line.includes("permissions.agent.filesystem="));
     if (!profileInvocation) throw new Error("Codex profile invocation was not recorded");
-    const smokeRoot = /exec --cd (\/tmp\/agent-relay-smoke\.[A-Za-z0-9]+) --help$/.exec(profileInvocation)?.[1];
+    const smokeRoot = new RegExp(`exec --cd (${escapeRegExp(join(stateRoot, "tmp"))}\/agent-relay-smoke\\.[A-Za-z0-9]+) --help$`).exec(profileInvocation)?.[1];
     if (!smokeRoot) throw new Error("Codex profile invocation did not contain the private smoke workspace");
     assert.match(
       profileInvocation,

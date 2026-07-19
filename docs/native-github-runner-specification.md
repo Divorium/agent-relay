@@ -136,9 +136,10 @@ The workflow is `.github/workflows/codex.yml` and processes one request as follo
 4. `resolve-plan.mjs` requires exactly one added or modified active ExecPlan for a pull request, or validates the explicit dispatch path.
 5. The validation job runs `npm ci` and `npm run check` before Codex execution.
 6. `run-codex.mjs` calls the compiled direct runtime.
-7. `CodexExecutor` canonicalizes the selected workspace and invokes `scripts/codex-run` with timeout, process-group termination, output limits, streaming redaction, and filesystem/network permissions.
-8. Standard output and standard error pass through `tee` into `${RUNNER_TEMP}/agent-relay-console.log`, which is uploaded as the existing `agent-relay-output` artifact.
-9. `finalize.sh` validates the branch and commit message, checks the diff, commits, and pushes through a temporary askpass helper. Codex receives no GitHub token.
+7. `CodexExecutor` canonicalizes the selected workspace and invokes `scripts/codex-run` with `codex exec --json`, timeout, process-group termination, normalized-output limits, streaming redaction, and filesystem/network permissions.
+8. Relay immediately pauses the source of each stdout or stderr callback, places that one tagged raw chunk into a callback-arrival queue, and processes the queue serially. This is an arrival-order rule, not a claim of total kernel ordering between the two pipes. A source resumes only after its current raw chunk has been processed and the normalized queue is below 128 KiB.
+9. Relay writes every accepted redacted segment to both the live Actions log and `${RUNNER_TEMP}/agent-relay-console.log`. The workflow uploads that file as the existing `agent-relay-output` artifact after the Codex step, including when execution fails.
+10. `finalize.sh` validates the branch and commit message, checks the diff, commits, and pushes through a temporary askpass helper. Codex receives no GitHub token.
 
 The workflow runs only same-repository pull requests and uses `runs-on: [self-hosted]` without custom labels.
 
@@ -157,6 +158,24 @@ The launcher and runtime:
 - keep the selected repository's `.git` directory read-only;
 - enable network access and disable memories;
 - remove only their own private runtime directory.
+
+## Codex output contract
+
+Raw Codex JSONL is an internal protocol and is never copied directly to the job log or artifact. Relay retains byte slices, scans every incoming byte once for LF, decodes and parses each complete record once, and releases its slices after parsing or failure. It validates complete JSON records across arbitrary byte chunks, normalizes supported item lifecycles by item identifier, bounds unknown-event notices, and labels stderr as process diagnostics. The separate JSONL protocol budget defaults to `max(16 MiB, 8 * MAX_OUTPUT_BYTES + 1 MiB)`: the factor of eight covers worst-case JSON string escaping plus envelope headroom. `MAX_JSONL_RECORD_BYTES` may explicitly set a value from 1 MiB through the 256 MiB hard ceiling. Complete and unfinished records over that budget fail independently from transcript truncation.
+
+Every normalized physical line begins with the fixed Relay-owned `[codex] ` prefix. CRLF, bare CR, and LF are canonicalized as line boundaries, including empty continuation lines, and unsafe C0 controls and DEL are visibly encoded. This structural rule applies uniformly to model messages, reasoning, commands, patches, todos, warnings, errors, unknown notices, and stderr; Relay does not depend on a list of known GitHub workflow commands.
+
+Normalization happens before streaming redaction and `MAX_OUTPUT_BYTES` accounting. Normalization and UTF-8-safe transport splitting yield lazily; a segment is at most 32 KiB. Admission waits whenever the pending normalized queue is at least 256 KiB, so the hard queue maximum is less than 256 KiB plus one 32 KiB segment, with at most one current normalized segment outside that accounting. The serial raw-input path retains at most one paused raw chunk per child source. The consumer always awaits the live Node Writable callback, additionally awaits `drain` when `write()` returns false, and does not advance to another segment until both live and transcript writes settle. On parser, normalizer, or sink failure, Relay retains the first failure, terminates the process group, and drains/discards both pipes through close. Live-output and transcript-output failures have distinct diagnostics.
+
+Relay owns one fan-out, so successful live output and the uploaded transcript contain byte-identical normalized content. When the normalized redacted byte budget cannot accept the next complete physical line, Relay keeps the already accepted complete-line prefix and writes one `[codex] [OUTPUT TRUNCATED]` line to both sinks. It clears lifecycle state and stops normalizing ordinary events. It continues bounded stderr line framing and syntax/size/UTF-8 validation of JSONL records while draining both pipes, so malformed transport still fails without retaining lifecycle content. A later timeout or nonzero exit remains authoritative. The fixed Relay-owned marker is a reserved terminal notice outside the configured ordinary-output budget.
+
+An unfinished stderr line is emitted in labeled continuation chunks with a 16 KiB framing bound. Active cumulative command, reasoning, message, and patch state retains only JavaScript string length and a SHA-256 digest of the prior UTF-8 prefix. Active items are capped at 1,024, file identities per active file-change item are capped at 1,024, and completed-item and event replay identities use deterministic 4,096-entry eviction. Completion releases active state immediately.
+
+The Actions job log remains live while Codex runs. The `agent-relay-output` artifact becomes available only after the later upload step and contains the same Relay transcript. Relay validates that the workflow-provided transcript is a new non-symlink path below `RUNNER_TEMP`, then flushes and closes it before returning. Transcript create, write, flush, or close failures fail the Codex step, including when Codex itself exits successfully.
+
+`GITHUB_OUTPUT` remains restricted to workflow values such as `commit_message`; execution logs never use that channel. No public API, request contract, installation argument, routing, result-semantic, commit-ownership, or finalization-decision change is part of this output contract.
+
+Pre-merge tests execute the branch implementation with real Node streams and controlled child processes. The pull-request Codex workflow itself invokes the trusted deployed runtime, so it cannot prove that an unmerged checkout supplies the active transport. A real Codex transport smoke is post-merge and post-deployment evidence only.
 
 ## Validation contract
 

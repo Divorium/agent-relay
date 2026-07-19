@@ -84,7 +84,8 @@ function assertApprovalWorkflow(workflow: string): void {
   assert.match(workflow, /BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/u);
   assert.match(workflow, /HEAD_SHA: \$\{\{ steps\.pr\.outputs\.head_sha \}\}/u);
   assert.match(workflow, /persist-credentials: false/u);
-  assert.match(workflow, /tee "\$\{RUNNER_TEMP\}\/agent-relay-console\.log"/u);
+  assert.match(workflow, /CODEX_TRANSCRIPT_PATH: \$\{\{ runner\.temp \}\}\/agent-relay-console\.log/u);
+  assert.doesNotMatch(workflow, /\btee\b/u);
   assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ github\.token \}\}/u);
   assert.doesNotMatch(workflow, /\/opt\/agent-relay|AGENT_RELAY_TOKEN|AGENT_RELAY_URL|runner\/client\.mjs/u);
   assert.ok(requestIndex >= 0);

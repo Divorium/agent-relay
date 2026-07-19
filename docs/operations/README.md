@@ -49,6 +49,20 @@ The updater does not require a clean checkout and does not run dependency instal
 sudo systemctl status actions.runner.Divorium.gh-runner.service
 ```
 
+## Codex execution output
+
+Codex progress is normalized into `[codex] `-prefixed Actions-safe physical lines, redacted, and streamed live in the Actions job log through a bounded queue. After the Codex step, the workflow uploads `agent-relay-output`; its transcript contains the same bytes Relay accepted for the live log. Raw `codex exec --json` records are internal and are not an operator-facing log format. If the next complete physical line would exceed `MAX_OUTPUT_BYTES` after normalization and redaction, both views keep the same accepted complete-line prefix and contain one `[codex] [OUTPUT TRUNCATED]` line while Relay continues bounded transport validation and draining and preserves the eventual step status.
+
+`MAX_JSONL_RECORD_BYTES` is a separate protocol limit. When unset, Relay derives `max(16 MiB, 8 * MAX_OUTPUT_BYTES + 1 MiB)` for JSON escaping and envelope headroom. An explicit value must be between 1 MiB and 256 MiB. JSONL framing is byte-oriented and rejects on the first byte over that limit. The default 256 KiB/128 KiB queue watermarks, hard queue maximum of less than 256 KiB plus one 32 KiB segment, one paused raw chunk per child source, 16 KiB stderr continuation bound, and lifecycle replay caps are runtime invariants rather than operator settings.
+
+The artifact is not available until its upload step runs. `${GITHUB_OUTPUT}` carries workflow outputs such as the commit message and is not a logging channel.
+
+## Post-deployment Codex output smoke
+
+The branch implementation is proven pre-merge by exact-SHA CI with controlled child processes; the pull-request Codex job still runs the previously deployed trusted runtime. Only after the implementation is merged and the standard `./update.sh` deployment completes may a real Codex run count as transport smoke evidence.
+
+Run the normal Codex workflow against a small active ExecPlan after deployment. The automated smoke evidence must record the merged SHA and deployed runtime revision, show normalized progress before Codex exits, confirm that every untrusted physical line is `[codex] `-prefixed, confirm exactly one bounded artifact transcript, and confirm successful finalization or the expected authoritative nonzero/timeout result. Store that evidence with the deployment record; do not describe a pre-merge run as final-SHA runtime evidence.
+
 ## Documentation authority
 
 - `README.md`, this operations guide, the technical specification, and the current source describe implemented behavior.

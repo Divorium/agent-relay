@@ -45,7 +45,7 @@ test("executor passes only the required launcher environment", () => {
   });
 });
 
-test("Codex arguments isolate the selected repository from native host paths", () => {
+test("Codex arguments keep the selected repository reachable while isolating native host paths", () => {
   const args = createCodexArgs(
     "/work/root/repository",
     "prompt",
@@ -65,11 +65,11 @@ test("Codex arguments isolate the selected repository from native host paths", (
     '"/opt/rust"="read"',
     '"/tmp"="deny"',
     '"/var/tmp"="deny"',
-    '"/work/root"="deny"',
     '"/home/user/.cache/runtime"="write"',
     '"/work/root/repository"="write"',
     '"/work/root/repository/.git"="read"',
   ]) assert.match(filesystem, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(filesystem, /"\/work\/root"="deny"/);
   assert.ok(args.includes("permissions.agent.network.enabled=true"));
   assert.ok(!args.includes("danger-full-access"));
 });

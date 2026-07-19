@@ -9,11 +9,13 @@ const workflowPaths = [
   "examples/github-actions/codex.yml",
 ];
 
-test("runtime prompt contains only plan-rules and active-plan pointers", () => {
-  assert.equal(
-    buildCodexPrompt("docs/exec-plans/active/task.md"),
-    "Follow .agent/PLANS.md and execute the active ExecPlan at docs/exec-plans/active/task.md.",
-  );
+test("runtime prompt includes plan pointers and context-driven ordinary Docker use", () => {
+  const prompt = buildCodexPrompt("docs/exec-plans/active/task.md");
+  assert.match(prompt, /^Follow \.agent\/PLANS\.md and execute the active ExecPlan at docs\/exec-plans\/active\/task\.md\./u);
+  assert.match(prompt, /Docker and Docker Compose are available as ordinary host CLI tools/u);
+  assert.match(prompt, /Decide whether existing services should be reused, restarted, rebuilt, or removed/u);
+  assert.match(prompt, /including logs and cleanup when appropriate/u);
+  assert.match(prompt, /Do not assume Agent Relay manages container lifecycle/u);
 });
 
 test("repository instructions remain durable and plan-driven", async () => {
@@ -28,7 +30,7 @@ test("repository instructions remain durable and plan-driven", async () => {
   assert.match(rules, /cause, impact, evidence, and concrete unblock condition/);
 });
 
-test("executor exposes only native launcher context without denying the workspace ancestor", () => {
+test("executor exposes Docker sockets without denying the workspace ancestor", () => {
   assert.deepEqual(createCodexEnvironment("/home/user", "/home/user/.cache/runtime"), {
     HOME: "/home/user",
     CODEX_RUNTIME_ROOT: "/home/user/.cache/runtime",
@@ -47,14 +49,17 @@ test("executor exposes only native launcher context without denying the workspac
   assert.match(filesystem, /"\/home\/user"="deny"/);
   assert.match(filesystem, /"\/srv\/github-runner\/storage\/agent-relay"="deny"/);
   assert.match(filesystem, /"\/opt\/rust"="read"/);
+  assert.match(filesystem, /"\/var\/run\/docker\.sock"="write"/);
+  assert.match(filesystem, /"\/run\/docker\.sock"="write"/);
   assert.doesNotMatch(filesystem, /"\/runner\/_work"="deny"/);
   assert.match(filesystem, /"\/runner\/_work\/repository\/repository"="write"/);
   assert.match(filesystem, /"\/runner\/_work\/repository\/repository\/\.git"="read"/);
   assert.ok(args.includes("permissions.agent.network.enabled=true"));
+  assert.ok(args.includes("--json"));
   assert.ok(!args.includes("danger-full-access"));
 });
 
-test("workflows use installed direct execution and strict token scoping", async () => {
+test("workflows use installed direct execution, transcript output, and strict token scoping", async () => {
   for (const path of workflowPaths) {
     const workflow = await readFile(path, "utf8");
     assert.match(workflow, /runs-on: \[self-hosted\]/);

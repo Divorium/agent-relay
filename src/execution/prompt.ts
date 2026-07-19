@@ -1,3 +1,3 @@
 export function buildCodexPrompt(planPath: string): string {
-  return `Follow .agent/PLANS.md and execute the active ExecPlan at ${planPath}.`;
+  return `Follow .agent/PLANS.md and execute the active ExecPlan at ${planPath}. Docker and Docker Compose are available as ordinary host CLI tools. When the task requires them, inspect repository instructions, Docker or Compose configuration, current Docker state, and the requested outcome. Decide whether existing services should be reused, restarted, rebuilt, or removed. Execute the required Docker commands yourself, including logs and cleanup when appropriate. Do not assume Agent Relay manages container lifecycle.`;
 }

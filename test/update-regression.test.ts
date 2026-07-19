@@ -20,7 +20,8 @@ test("update leaves Git and repository validation outside deployment", async () 
 test("update stops intake, waits, deletes and rebuilds the final runtime", async () => {
   const update = await read("update.sh");
   const runnerUid = update.indexOf('RUNNER_UID="$(id -u "${RUNNER_USER}")"');
-  const stop = update.indexOf('sudo systemctl stop "${SERVICE_NAME}"');
+  const restorationResponsibility = update.indexOf("runner_needs_restore=1");
+  const stop = update.indexOf('systemctl stop "${SERVICE_NAME}"');
   const wait = update.indexOf("wait_for_runner_worker", stop);
   const removeBuild = update.indexOf('sudo rm -rf -- "${BUILD_ROOT}"', wait);
   const removeRuntime = update.indexOf('sudo rm -rf -- "${RUNTIME_ROOT}"', removeBuild);
@@ -28,18 +29,22 @@ test("update stops intake, waits, deletes and rebuilds the final runtime", async
   const compile = update.indexOf("/usr/local/bin/tsc", createRuntime);
   const entrypoint = update.indexOf('sudo test -f "${RUNTIME_ENTRYPOINT}"', compile);
   const adopt = update.indexOf('sudo find -P "${RUNTIME_ROOT}" -xdev -exec chown -h root:root', entrypoint);
-  const enable = update.indexOf('sudo systemctl enable "${SERVICE_NAME}"', adopt);
-  const start = update.indexOf('sudo systemctl start "${SERVICE_NAME}"', enable);
+  const provision = update.indexOf('sudo "${DOCKER_PROVISIONER}"', adopt);
+  const enable = update.indexOf('systemctl enable "${SERVICE_NAME}"', provision);
+  const start = update.indexOf('systemctl start "${SERVICE_NAME}"', enable);
 
   assert.ok(runnerUid >= 0 && runnerUid < stop);
+  assert.ok(restorationResponsibility >= 0 && restorationResponsibility < stop);
   assert.ok(stop >= 0 && wait > stop && removeBuild > wait);
   assert.ok(removeRuntime > removeBuild && createRuntime > removeRuntime && compile > createRuntime);
-  assert.ok(entrypoint > compile && adopt > entrypoint && enable > adopt && start > enable);
+  assert.ok(entrypoint > compile && adopt > entrypoint && provision > adopt && enable > provision && start > enable);
   assert.match(update, /sudo -u "\$\{BUILD_USER\}" -H \/usr\/bin\/env -i/u);
   assert.match(update, /--outDir "\$\{RUNTIME_ROOT\}"/u);
   assert.match(update, /-type d -exec chmod 0755/u);
   assert.match(update, /-type f -exec chmod 0644/u);
   assert.doesNotMatch(update, /\bmv\b|\.previous|\.stage|workspace\./u);
+  assert.match(update, /exec \{UPDATE_LOCK_FD\}< "\$\{ADMIN_FILE\}"/u);
+  assert.match(update, /flock --exclusive --nonblock --conflict-exit-code 75 "\$\{UPDATE_LOCK_FD\}"/u);
 });
 
 test("runner wait scans the complete process table and filters by numeric UID", async () => {

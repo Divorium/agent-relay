@@ -109,6 +109,7 @@ set -euo pipefail
   printf 'TMPDIR=%s\n' "\${TMPDIR:-}"
   printf 'TMP=%s\n' "\${TMP:-}"
   printf 'TEMP=%s\n' "\${TEMP:-}"
+  printf 'DOCKER_CONFIG=%s\n' "\${DOCKER_CONFIG:-}"
   printf 'PATH=%s\n' "\${PATH:-}"
   printf 'GIT_OPTIONAL_LOCKS=%s\n' "\${GIT_OPTIONAL_LOCKS:-}"
   printf 'LEAK=%s\n' "\${LEAK_ME:-}"
@@ -163,6 +164,7 @@ set -euo pipefail
     assert.match(invocation, /TMPDIR=.*\/tmp/);
     assert.match(invocation, /TMP=.*\/tmp/);
     assert.match(invocation, /TEMP=.*\/tmp/);
+    assert.match(invocation, /DOCKER_CONFIG=.*\/docker/);
     assert.match(invocation, /PATH=\/opt\/java\/openjdk\/bin:\/usr\/local\/go\/bin:\/opt\/rust\/cargo\/bin:\/usr\/local\/bin:\/usr\/bin:\/bin/);
     assert.match(invocation, /GIT_OPTIONAL_LOCKS=0/);
     assert.match(invocation, /LEAK=\n/);
@@ -215,11 +217,11 @@ test("toolchain smoke validates retained pins and the complete environment profi
   const home = join(root, "home");
   const log = join(root, "commands.log");
   const headLog = join(root, "head.log");
-  const stateDirectories = ["cargo", "go", "go-cache", "gradle", "npm", "pip", "cache", "config", "data", "tmp"];
+  const stateDirectories = ["cargo", "go", "go-cache", "gradle", "npm", "pip", "cache", "config", "data", "tmp", "docker"];
   const generalCommands = [
     "node", "npm", "tsc", "python3", "git", "gcc", "g++", "clang", "make", "cmake", "pkg-config",
-    "bash", "curl", "wget", "jq", "zip", "unzip", "tar", "gzip", "xz", "zstd", "rsync", "file",
-    "find", "diff", "codex", "head", "ssh", "dotnet",
+    "bash", "curl", "wget", "jq", "zip", "unzip", "tar", "gzip", "xz", "zstd", "file",
+    "diff", "codex", "head", "ssh", "dotnet",
   ];
 
   await mkdir(scripts, { recursive: true });
@@ -270,6 +272,7 @@ test("toolchain smoke validates retained pins and the complete environment profi
     TMPDIR: join(stateRoot, "tmp"),
     TMP: join(stateRoot, "tmp"),
     TEMP: join(stateRoot, "tmp"),
+    DOCKER_CONFIG: join(stateRoot, "docker"),
     PATH: `${javaHome}/bin:${goRoot}/bin:${rustCargoHome}/bin:${bin}:/usr/bin:/bin`,
     EXPECTED_TYPESCRIPT_VERSION: "5.8.3",
     EXPECTED_CODEX_VERSION: "0.144.4",
@@ -299,7 +302,7 @@ test("toolchain smoke validates retained pins and the complete environment profi
 
     const profileInvocation = invocations.split("\n").find((line) => line.includes("permissions.agent.filesystem="));
     if (!profileInvocation) throw new Error("Codex profile invocation was not recorded");
-    const smokeRoot = new RegExp(`exec --cd (${escapeRegExp(join(stateRoot, "tmp"))}\/agent-relay-smoke\\.[A-Za-z0-9]+) --help$`).exec(profileInvocation)?.[1];
+    const smokeRoot = new RegExp(`exec --cd (${escapeRegExp(join(stateRoot, "tmp"))}/agent-relay-smoke\\.[A-Za-z0-9]+) --help$`).exec(profileInvocation)?.[1];
     if (!smokeRoot) throw new Error("Codex profile invocation did not contain the private smoke workspace");
     assert.match(
       profileInvocation,

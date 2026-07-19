@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(mktemp -d /tmp/agent-relay-update.XXXXXX)"
-cleanup() { rm -rf -- "${ROOT}"; }
-trap cleanup EXIT
+ROOT="$(mktemp -d "${TMPDIR:-/tmp}/agent-relay-update.XXXXXX")"
+cleanup() {
+  local status="$1"
+  if (( status != 0 )); then
+    find "${ROOT}" -maxdepth 1 -type f \( -name '*.err' -o -name '*.out' -o -name 'commands.log' \) -exec sh -c 'for file do printf "--- %s ---\n" "$file" >&2; sed -n "1,200p" "$file" >&2; done' sh {} + || true
+  fi
+  if [[ "${KEEP_TEST_ROOT:-0}" == 1 ]]; then echo "Preserved update integration root: ${ROOT}" >&2; return; fi
+  rm -rf -- "${ROOT}"
+}
+trap 'cleanup $?' EXIT
 
 BASE_ROOT="${ROOT}/host"
 STORAGE_ROOT="${BASE_ROOT}/storage"
@@ -18,9 +25,11 @@ PROCESS_MODE="${ROOT}/process-mode"
 WORKER_POLLS="${ROOT}/worker-polls"
 FAIL_NEXT_BUILD="${ROOT}/fail-next-build"
 FAIL_PROCESS_INSPECTION="${ROOT}/fail-process-inspection"
+FAIL_DOCKER_PROVISION="${ROOT}/fail-docker-provision"
 
 mkdir -p "${SOURCE_ROOT}" "${BUILD_ROOT}" "${BUILD_HOME}" "${FAKE_BIN}"
-rsync -a --exclude=.git --exclude=node_modules --exclude=dist ./ "${SOURCE_ROOT}/"
+cp -a ./. "${SOURCE_ROOT}/"
+rm -rf -- "${SOURCE_ROOT}/.git" "${SOURCE_ROOT}/node_modules" "${SOURCE_ROOT}/dist"
 printf '%s\n' "$(id -un)" > "${ADMIN_FILE}"
 printf 'active\n' > "${SERVICE_STATE}"
 printf 'idle\n' > "${PROCESS_MODE}"
@@ -28,7 +37,7 @@ printf '0\n' > "${WORKER_POLLS}"
 : > "${LOG_FILE}"
 
 BASE_ROOT="${BASE_ROOT}" ADMIN_FILE="${ADMIN_FILE}" SOURCE_ROOT="${SOURCE_ROOT}" \
-FAKE_TSC="${FAKE_BIN}/tsc" FAKE_PS="${FAKE_BIN}/ps" \
+FAKE_TSC="${FAKE_BIN}/tsc" FAKE_PS="${FAKE_BIN}/ps" FAKE_DOCKER="${FAKE_BIN}/docker-host" \
 python3 - "${SOURCE_ROOT}/update.sh" <<'PY'
 import json
 import os
@@ -45,8 +54,20 @@ source = source.replace(
 )
 source = source.replace("/usr/local/bin/tsc", os.environ["FAKE_TSC"])
 source = source.replace("/usr/bin/ps", os.environ["FAKE_PS"])
+source = source.replace(
+    'DOCKER_PROVISIONER=${SCRIPT_ROOT}/scripts/docker-host.sh',
+    f"DOCKER_PROVISIONER={json.dumps(os.environ['FAKE_DOCKER'])}",
+)
 path.write_text(source)
 PY
+
+cat > "${FAKE_BIN}/docker-host" <<EOF_DOCKER
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'docker-provision\n' >> "${LOG_FILE}"
+/usr/bin/sleep 0.1
+if [[ -f "${FAIL_DOCKER_PROVISION}" ]]; then exit 23; fi
+EOF_DOCKER
 
 cat > "${FAKE_BIN}/id" <<'EOF_ID'
 #!/usr/bin/env bash
@@ -292,5 +313,23 @@ grep -qx active "${SERVICE_STATE}"
 test "$(cat "${SOURCE_ROOT}/dist/src/run-codex.js")" = 'new runtime'
 test ! -e "${SOURCE_ROOT}/dist/src/partial.js"
 grep -q 'Agent Relay runtime rebuilt and activated successfully' "${ROOT}/retry.out"
+
+# Docker provisioning runs only after runtime finalization. Its failure is
+# returned after the newly finalized runtime and runner have been restored.
+: > "${FAIL_DOCKER_PROVISION}"
+reset_log
+set +e
+run_update > "${ROOT}/docker-failure.out" 2> "${ROOT}/docker-failure.err"
+docker_failure_status=$?
+set -e
+rm -f "${FAIL_DOCKER_PROVISION}"
+test "${docker_failure_status}" -eq 23
+grep -qx active "${SERVICE_STATE}"
+test "$(cat "${SOURCE_ROOT}/dist/src/run-codex.js")" = 'new runtime'
+grep -q 'runtime is active, but Docker provisioning failed with status 23' "${ROOT}/docker-failure.err"
+adopt_line="$(grep -n -- '-exec chown' "${LOG_FILE}" | head -n 1 | cut -d: -f1)"
+docker_line="$(grep -n '^docker-provision$' "${LOG_FILE}" | head -n 1 | cut -d: -f1)"
+restore_line="$(grep -n 'systemctl start' "${LOG_FILE}" | tail -n 1 | cut -d: -f1)"
+(( adopt_line < docker_line && docker_line < restore_line ))
 
 printf 'update.sh system integration passed\n'

@@ -122,6 +122,7 @@ test("one trusted profile defines the complete host toolchain environment", asyn
     "XDG_CONFIG_HOME",
     "XDG_DATA_HOME",
     "TMPDIR",
+    "DOCKER_CONFIG",
   ]) {
     assert.ok(profile.includes(`"${binding}=`), `profile must define ${binding}`);
   }
@@ -142,15 +143,16 @@ test("one trusted profile defines the complete host toolchain environment", asyn
 
 test("update directly rebuilds the runtime without repository validation", async () => {
   const { update } = await scripts();
-  const stop = update.indexOf('sudo systemctl stop "${SERVICE_NAME}"');
+  const stop = update.indexOf('systemctl stop "${SERVICE_NAME}"');
   const wait = update.indexOf("wait_for_runner_worker", stop);
   const removeRuntime = update.indexOf('sudo rm -rf -- "${RUNTIME_ROOT}"', wait);
   const createRuntime = update.indexOf('sudo install -d -o "${BUILD_USER}"', removeRuntime);
   const compile = update.indexOf("/usr/local/bin/tsc", createRuntime);
   const adopt = update.indexOf('sudo find -P "${RUNTIME_ROOT}" -xdev -exec chown -h root:root', compile);
-  const start = update.indexOf('sudo systemctl start "${SERVICE_NAME}"', adopt);
+  const provision = update.indexOf('sudo "${DOCKER_PROVISIONER}"', adopt);
+  const start = update.indexOf('systemctl start "${SERVICE_NAME}"', provision);
   assert.ok(stop >= 0 && wait > stop && removeRuntime > wait && createRuntime > removeRuntime);
-  assert.ok(compile > createRuntime && adopt > compile && start > adopt);
+  assert.ok(compile > createRuntime && adopt > compile && provision > adopt && start > provision);
   assert.match(update, /sudo -u "\$\{BUILD_USER\}" -H \/usr\/bin\/env -i/);
   assert.match(update, /-p "\$\{RUNTIME_CONFIG\}"/);
   assert.match(update, /--outDir "\$\{RUNTIME_ROOT\}"/);
@@ -178,15 +180,17 @@ test("runtime adoption does not follow links and applies production modes", asyn
   assert.doesNotMatch(update, /chown -R/);
 });
 
-test("install and update contain no legacy Docker or Relay deployment", async () => {
+test("install remains free of Docker provisioning and both scripts contain no Relay transport deployment", async () => {
   const { install, update } = await scripts();
+  assert.doesNotMatch(install, /apt-get[^\n]*(?:docker-ce|containerd\.io)|groupadd docker|usermod[^\n]*docker|systemctl[^\n]*docker/iu);
+  assert.match(update, /scripts\/docker-host\.sh/u);
   for (const script of [install, update]) {
-    assert.doesNotMatch(script, /docker(?: |-)?compose|compose\.yml|AGENT_RELAY_TOKEN|AGENT_RELAY_URL|HOST_UID|HOST_GID/iu);
+    assert.doesNotMatch(script, /compose\.yml|AGENT_RELAY_TOKEN|AGENT_RELAY_URL|HOST_UID|HOST_GID/iu);
     assert.doesNotMatch(script, /\.env/);
   }
 });
 
-test("README files mirror the filesystem decision recorded in the completed plan", async () => {
+test("README files mirror the native runner filesystem decision", async () => {
   const plan = await readFile("docs/exec-plans/completed/2026-07-16-install-native-github-runner.md", "utf8");
   const specification = await readFile("docs/native-github-runner-specification.md", "utf8");
   for (const path of ["README.md", "docs/operations/README.md"]) {
@@ -198,8 +202,9 @@ test("README files mirror the filesystem decision recorded in the completed plan
     }
     assert.match(document, /\.\/install\.sh/);
     assert.match(document, /\.\/update\.sh/);
+    assert.doesNotMatch(document, /\/srv\/github-runner\/storage\/docker(?:\/|\s|$)/u);
     assert.doesNotMatch(document, /\/srv\/github-runner\/(?:runner|home|build|build-home)(?:\/|\s|$)/u);
-    assert.doesNotMatch(document, /\/opt\/agent-relay|docker compose|AGENT_RELAY_TOKEN/iu);
+    assert.doesNotMatch(document, /\/opt\/agent-relay|AGENT_RELAY_TOKEN/iu);
   }
   assert.match(plan, /README files may summarize it but must not introduce additional filesystem decisions/);
   assert.match(plan, /runner\/_work` is a managed symlink to `\.\.\/work/);

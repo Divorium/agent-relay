@@ -26,6 +26,13 @@ function contained(root: string, candidate: string): boolean {
 
 export interface LiveSink { write(data: Uint8Array): unknown; }
 
+function utf8Prefix(bytes: Uint8Array, limit: number): Uint8Array {
+  let end = Math.min(Math.max(limit, 0), bytes.length);
+  if (end === bytes.length) return bytes;
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end -= 1;
+  return bytes.subarray(0, end);
+}
+
 export async function createTranscriptSink(runnerTemp: string, transcriptPath: string): Promise<TranscriptSink> {
   const lexicalRoot = resolve(runnerTemp);
   const canonicalRoot = await realpath(runnerTemp);
@@ -83,8 +90,9 @@ export class RedactedFanout {
       this.acceptedBytes += bytes.length;
       return;
     }
-    if (remaining > 0) await this.emit(bytes.subarray(0, remaining));
-    this.acceptedBytes += Math.max(remaining, 0);
+    const accepted = utf8Prefix(bytes, remaining);
+    if (accepted.length > 0) await this.emit(accepted);
+    this.acceptedBytes += accepted.length;
     this.truncated = true;
     await this.emit(Buffer.from(TRUNCATION_MARKER));
   }

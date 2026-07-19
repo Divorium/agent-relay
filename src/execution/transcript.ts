@@ -28,9 +28,8 @@ export interface LiveSink { write(data: Uint8Array): unknown; }
 
 function utf8Prefix(bytes: Uint8Array, limit: number): Uint8Array {
   let end = Math.min(Math.max(limit, 0), bytes.length);
-  if (end === bytes.length) return bytes;
   while (end > 0) {
-    // The early return above guarantees end is a valid index here.
+    // accept() calls this helper only when limit is below bytes.length.
     const next = bytes[end]!;
     if ((next & 0xc0) !== 0x80) break;
     end -= 1;

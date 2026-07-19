@@ -18,7 +18,7 @@ async function createRoot(name: string) {
   await mkdir(join(workspace, ".git"), { recursive: true });
   await mkdir(runtimeRoot, { recursive: true });
   await writeFile(join(workspace, planPath), "# Plan\n");
-  return { root, workspaceRoot, workspace, home, runtimeRoot };
+  return { root, workspace, home, runtimeRoot };
 }
 
 async function captureStdout(run: () => Promise<void>): Promise<string> {
@@ -49,7 +49,6 @@ test("Codex arguments keep the selected repository reachable while isolating nat
   const args = createCodexArgs(
     "/work/root/repository",
     "prompt",
-    "/work/root",
     "/home/user",
     "/home/user/.cache/runtime",
     "/srv/github-runner/storage/agent-relay",
@@ -75,7 +74,7 @@ test("Codex arguments keep the selected repository reachable while isolating nat
 });
 
 test("CodexExecutor streams redacted output and edits the workspace", async () => {
-  const { root, workspaceRoot, workspace, home, runtimeRoot } = await createRoot("executor");
+  const { root, workspace, home, runtimeRoot } = await createRoot("executor");
   const executable = join(root, "fake-codex");
   await writeFile(executable, `#!/bin/sh
 set -eu
@@ -88,7 +87,7 @@ printf 'changed\n' > "${workspace}/changed.txt"
 `, { mode: 0o700 });
   await chmod(executable, 0o700);
 
-  const executor = new CodexExecutor(executable, 5_000, 100_000, workspaceRoot, home, runtimeRoot, "/srv/github-runner/storage/agent-relay");
+  const executor = new CodexExecutor(executable, 5_000, 100_000, home, runtimeRoot, "/srv/github-runner/storage/agent-relay");
   try {
     const output = await captureStdout(async () => {
       const outcome = await executor.run(planPath, workspace);
@@ -103,8 +102,8 @@ printf 'changed\n' > "${workspace}/changed.txt"
 });
 
 test("CodexExecutor reports spawn failures", async () => {
-  const { root, workspaceRoot, workspace, home, runtimeRoot } = await createRoot("spawn");
-  const executor = new CodexExecutor(join(root, "missing"), 5_000, 100_000, workspaceRoot, home, runtimeRoot, "/srv/github-runner/storage/agent-relay");
+  const { root, workspace, home, runtimeRoot } = await createRoot("spawn");
+  const executor = new CodexExecutor(join(root, "missing"), 5_000, 100_000, home, runtimeRoot, "/srv/github-runner/storage/agent-relay");
   try {
     await assert.rejects(
       () => executor.run(planPath, workspace),
@@ -116,7 +115,7 @@ test("CodexExecutor reports spawn failures", async () => {
 });
 
 test("CodexExecutor reports timeout after terminating the process group", async () => {
-  const { root, workspaceRoot, workspace, home, runtimeRoot } = await createRoot("timeout");
+  const { root, workspace, home, runtimeRoot } = await createRoot("timeout");
   const executable = join(root, "slow-codex");
   const marker = join(root, "terminated");
   await writeFile(executable, `#!/bin/sh
@@ -126,7 +125,7 @@ while true; do /bin/sleep 1; done
 `, { mode: 0o700 });
   await chmod(executable, 0o700);
 
-  const executor = new CodexExecutor(executable, 50, 100_000, workspaceRoot, home, runtimeRoot, "/srv/github-runner/storage/agent-relay");
+  const executor = new CodexExecutor(executable, 50, 100_000, home, runtimeRoot, "/srv/github-runner/storage/agent-relay");
   try {
     await assert.rejects(
       () => executor.run(planPath, workspace),
@@ -139,12 +138,12 @@ while true; do /bin/sleep 1; done
 });
 
 test("CodexExecutor caps output and emits one truncation marker", async () => {
-  const { root, workspaceRoot, workspace, home, runtimeRoot } = await createRoot("truncate");
+  const { root, workspace, home, runtimeRoot } = await createRoot("truncate");
   const executable = join(root, "verbose-codex");
   await writeFile(executable, "#!/bin/sh\nprintf 'abcdefghijklmnopqrstuvwxyz\\n'\n", { mode: 0o700 });
   await chmod(executable, 0o700);
 
-  const executor = new CodexExecutor(executable, 5_000, 8, workspaceRoot, home, runtimeRoot, "/srv/github-runner/storage/agent-relay");
+  const executor = new CodexExecutor(executable, 5_000, 8, home, runtimeRoot, "/srv/github-runner/storage/agent-relay");
   try {
     const output = await captureStdout(async () => {
       await executor.run(planPath, workspace);
@@ -170,7 +169,7 @@ test("terminateProcess handles direct, grouped and fallback termination", () => 
 });
 
 test("CodexExecutor force-kills a process that ignores termination", async () => {
-  const { root, workspaceRoot, workspace, home, runtimeRoot } = await createRoot("force-kill");
+  const { root, workspace, home, runtimeRoot } = await createRoot("force-kill");
   const executable = join(root, "stubborn-codex");
   await writeFile(executable, "#!/bin/sh\ntrap '' TERM\nwhile true; do /bin/sleep 1; done\n", { mode: 0o700 });
   await chmod(executable, 0o700);
@@ -179,7 +178,6 @@ test("CodexExecutor force-kills a process that ignores termination", async () =>
     executable,
     30,
     100_000,
-    workspaceRoot,
     home,
     runtimeRoot,
     "/srv/github-runner/storage/agent-relay",
@@ -196,12 +194,12 @@ test("CodexExecutor force-kills a process that ignores termination", async () =>
 });
 
 test("CodexExecutor discards chunks received after the output limit", async () => {
-  const { root, workspaceRoot, workspace, home, runtimeRoot } = await createRoot("limit-reached");
+  const { root, workspace, home, runtimeRoot } = await createRoot("limit-reached");
   const executable = join(root, "chunked-codex");
   await writeFile(executable, "#!/bin/sh\nprintf 12345678\n/bin/sleep 0.05\nprintf overflow >&2\n", { mode: 0o700 });
   await chmod(executable, 0o700);
 
-  const executor = new CodexExecutor(executable, 5_000, 8, workspaceRoot, home, runtimeRoot, "/srv/github-runner/storage/agent-relay");
+  const executor = new CodexExecutor(executable, 5_000, 8, home, runtimeRoot, "/srv/github-runner/storage/agent-relay");
   try {
     const output = await captureStdout(async () => executor.run(planPath, workspace).then(() => undefined));
     assert.equal(output, "\n[OUTPUT TRUNCATED]\n");

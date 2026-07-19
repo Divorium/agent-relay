@@ -57,17 +57,19 @@ Do not add live-only control lines unless the live/transcript equality contract 
 
 Replace the Promise-per-segment chain with one explicit bounded asynchronous pump.
 
-- Bound the queue by pending normalized bytes with documented high and low watermarks.
+- Bound the queue by pending normalized bytes, not item count.
+- Use a default high watermark of 256 KiB and low watermark of 128 KiB unless tests demonstrate a safer smaller bound.
+- Bound every normalized segment to at most 32 KiB before enqueueing; split larger safe rendered content on UTF-8 boundaries.
 - Pause both child stdout and stderr at the high watermark and resume only below the low watermark.
 - Permit only current delivered chunks and one bounded normalized segment beyond the high watermark.
 - Use one consumer loop and preserve callback-observation order across the two pipes.
 - On parser, normalizer, or sink failure, retain the first failure, terminate the process group, and continue draining/discarding pipes until close.
-- After transcript truncation, stop retaining ordinary lifecycle content while continuing the documented bounded framing/drain behavior.
+- After transcript truncation, stop retaining ordinary lifecycle content while continuing documented bounded framing/drain behavior.
 
 Make the live sink asynchronous. Its Node Writable adapter must:
 
-- wait for write completion;
-- wait for `drain` when `write()` returns `false`;
+- wait for the write callback;
+- when `write()` returns `false`, also wait for `drain` before accepting another segment;
 - fail on writable `error` or premature `close`;
 - not mark a segment consumed until both live and transcript writes settle successfully.
 
@@ -82,7 +84,9 @@ Add a separate validated `MAX_JSONL_RECORD_BYTES` budget. The default must safel
 - Account for worst-case JSON string escaping.
 - Reject complete or unfinished records above the configured protocol limit.
 - Keep this independent from normalized transcript truncation.
-- Document the rule and configuration.
+- Document the derivation, default, and configuration limits.
+
+A valid default is a bounded formula such as `max(16 MiB, 8 * MAX_OUTPUT_BYTES + 1 MiB)` with an explicit hard ceiling; Codex may choose a different formula only with equivalent escaping analysis and tests.
 
 ### Bounded diagnostics
 
@@ -98,7 +102,7 @@ Stderr framing must have a fixed unfinished-line byte bound. Prefer bounded cont
 
 Do not retain complete cumulative payloads after emission.
 
-For active cumulative items, store only minimum verification metadata, such as prior length plus a cryptographic digest of the prior prefix. On each update, verify the digest of the current corresponding prefix before emitting the suffix.
+For active cumulative items, store only minimum verification metadata: previous JavaScript string length plus a SHA-256 digest of the UTF-8 encoding of the previous prefix. On each update, hash the corresponding current prefix and compare before emitting the suffix.
 
 - Remove active payload state immediately on completion.
 - Keep only bounded replay-protection metadata.
@@ -120,7 +124,15 @@ Preserve these contracts:
 - child pipes remain drained;
 - successful live and artifact sinks contain identical Relay-normalized accepted bytes.
 
-Document and test whether syntax validation continues after ordinary output truncation. The selected behavior must remain bounded.
+After ordinary output truncation, Relay may switch to bounded syntax-only JSONL framing without lifecycle retention. Document and test the exact rule.
+
+## Validation boundary
+
+The pull-request workflow invokes the trusted deployed runtime under `/srv/github-runner/storage/agent-relay/runner`, not the executor code from the PR checkout. Therefore an actual Codex run before merge cannot prove that the branch implementation itself is active.
+
+Pre-merge acceptance must use exact-SHA self-hosted CI and production integration tests with real Node streams and a fake child process. Do not claim an actual Codex final-SHA smoke before deployment.
+
+After merge and standard runtime deployment, perform an operational smoke run to confirm live GitHub output and bounded artifacts. Record this as a post-deployment check, not fabricated pre-merge evidence.
 
 ## Implementation order
 
@@ -132,7 +144,8 @@ Document and test whether syntax validation continues after ordinary output trun
 6. Replace retained cumulative payloads with length/digest state and bounded replay metadata.
 7. Update README, technical specification, operations guide, and prior completed-plan claims.
 8. Run the full repository check after the final production edit.
-9. Leave this plan active until independent review and a self-hosted final-SHA smoke run use the corrected transport.
+9. Leave this plan active until independent review and exact-SHA self-hosted CI pass.
+10. Move the plan to `completed/` only after those pre-merge criteria pass; document the required post-deployment smoke separately.
 
 ## Acceptance criteria
 
@@ -140,7 +153,7 @@ Document and test whether syntax validation continues after ordinary output trun
 - Tests cover `::add-mask::`, `::warning::`, `::error::`, and `::stop-commands::` in all multiline source categories.
 - Live and transcript output remain byte-identical after safe rendering and redaction.
 - A slow Writable returning `false` pauses child ingestion and resumes after `drain`.
-- Stress tests prove the queue stays within the documented allowance.
+- Stress tests prove pending normalized bytes stay within the high watermark plus current chunks and one 32 KiB segment.
 - No unbounded Promise-per-segment chain remains.
 - Live writable errors and premature close fail execution.
 - A valid Codex 0.144.4 command JSONL record larger than 1 MiB is accepted.
@@ -150,9 +163,10 @@ Document and test whether syntax validation continues after ordinary output trun
 - Completed items and event identities use bounded replay tracking and state is released after completion/truncation.
 - Existing lifecycle replay prevention and equal-text independence remain correct.
 - Timeout, forced kill, nonzero exit, parser failure, redaction, transcript safety, workspace, credentials, finalizer, and commit-decision regressions pass.
-- `npm run check` and normal PR CI pass on the exact implementation SHA.
-- A second self-hosted Codex run starts from that exact SHA and demonstrates live progress, bounded output, no cumulative diff replay, and no workflow-command interpretation from adversarial fixture content.
-- The plan remains active until final-SHA smoke evidence and independent review pass.
+- `npm run check` and normal self-hosted PR CI pass on the exact implementation SHA.
+- Exact-SHA integration tests prove live-before-exit behavior, byte-identical fan-out, workflow-command neutralization, bounded queueing, large-record support, bounded diagnostics, and bounded lifecycle state.
+- Documentation explicitly states that the real Codex transport smoke occurs only after merge and deployment of the trusted runtime.
+- The plan remains active until exact-SHA CI and independent review pass.
 
 ## Progress
 
@@ -160,6 +174,8 @@ Document and test whether syntax validation continues after ordinary output trun
 - [x] Confirmed all five blocking findings against production code.
 - [x] Confirmed GitHub workflow-command and Node backpressure contracts from primary documentation.
 - [x] Confirmed Codex 0.144.4 serializes cumulative command output in one JSONL event.
+- [x] Reviewed the plan and corrected the impossible pre-merge actual-runtime smoke assumption.
+- [x] Defined queue watermarks, segment bounds, and exact cumulative digest semantics.
 - [ ] Add regression tests for all findings.
 - [ ] Implement actions-safe multiline rendering.
 - [ ] Implement bounded backpressure-aware pumping.
@@ -168,8 +184,8 @@ Document and test whether syntax validation continues after ordinary output trun
 - [ ] Implement bounded lifecycle state.
 - [ ] Run exact-SHA CI.
 - [ ] Complete independent code review.
-- [ ] Complete final-SHA self-hosted smoke validation.
+- [ ] Document post-deployment smoke procedure.
 
 ## Outcomes and retrospective
 
-Complete only after all acceptance criteria pass. Do not move this plan to `completed/` during the first implementation run.
+Complete only after all pre-merge acceptance criteria pass. Do not move this plan to `completed/` during the first implementation run.

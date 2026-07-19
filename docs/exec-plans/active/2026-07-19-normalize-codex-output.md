@@ -241,14 +241,40 @@ A real Codex transport smoke remains a post-merge, post-`update.sh` operational 
 - [x] Reviewed and partially addressed workflow-command injection, sink backpressure, protocol limits, stderr buffering, and lifecycle retention.
 - [x] Performed a second independent review against current GitHub, Node.js, and Codex 0.144.4 contracts.
 - [x] Identified false queue-bound evidence, quadratic large-record framing, incomplete physical-line ownership, and unreliable Writable arity inference.
-- [ ] Add second-review regression tests.
-- [ ] Implement hard-bounded async admission.
-- [ ] Implement linear byte-oriented JSONL framing.
-- [ ] Correct complete physical-line ownership.
-- [ ] Implement explicit Node Writable completion semantics.
-- [ ] Implement lazy bounded normalizer emission.
-- [ ] Pass exact-SHA full CI.
-- [ ] Complete final independent review.
+- [x] Add second-review regression tests.
+- [x] Implement hard-bounded async admission.
+- [x] Implement linear byte-oriented JSONL framing.
+- [x] Correct complete physical-line ownership.
+- [x] Implement explicit Node Writable completion semantics.
+- [x] Implement lazy bounded normalizer emission.
+- [ ] [blocked] Complete one uninterrupted local `npm run check`. Cause: the managed filesystem denies `/tmp`, while `scripts/toolchain-smoke.sh` and both system integration scripts use explicit `/tmp` templates. Impact: unit/type/runtime/shell/Node checks pass, but the aggregate toolchain and system gates cannot complete here. Evidence: `check:toolchain` fails at `/tmp/agent-relay-smoke.XXXXXX`; `check:system` fails at `/tmp/agent-relay-install.XXXXXX`. Unblock condition: run the unchanged check in normal self-hosted CI with writable `/tmp`.
+- [ ] [blocked] Pass exact-SHA full CI. Cause: the final implementation is an uncommitted worktree on detached HEAD `a7a0714209405ec4f7310a0f3a8672171cda0486`, so no exact final SHA exists for CI. Impact: the required normal pull-request CI conclusion cannot yet be attributed to these bytes. Unblock condition: the normal publication path creates the final commit and self-hosted PR CI reports `success` for that SHA.
+- [ ] [blocked] Complete final independent review. Cause: no independent reviewer has reviewed the final worktree. Impact: the plan's P1/P2 review gate remains open. Unblock condition: independent review of the committed implementation reports no unresolved P1/P2 defect.
+
+## Surprises & discoveries
+
+- The repository check is fully runnable through its 118-test, 100%-coverage Node gate and runtime/syntax checks in this sandbox, but the remaining toolchain and system scripts deliberately use explicit `/tmp` paths that the managed permission profile denies.
+- Strict truncation-line ownership requires accepting only complete redacted physical lines. A byte prefix cut through a line cannot be followed by a Relay-owned marker without either rewriting already emitted bytes or introducing an unowned newline.
+- Pausing in the raw `data` callback is necessary in addition to normalized queue admission. Queue watermarks alone cannot stop one already delivered raw chunk from synchronously producing many records.
+
+## Decision log
+
+- Introduced one tagged raw-input queue shared by stdout and stderr. Each callback pauses its own source immediately; one async consumer frames and normalizes the chunk and resumes that source only after normalized pending bytes fall below the low watermark.
+- Changed JSONL and diagnostic framing plus event normalization to generators, allowing each record, diagnostic, rendered value, and UTF-8-safe transport segment to await admission before the next is produced.
+- Kept the 256 KiB high watermark, 128 KiB low watermark, and 32 KiB segment limit. Admission checks before each segment, giving a hard pending-queue maximum of less than the high watermark plus one segment, with one current segment outside the queue.
+- Buffered redacted output only to the next LF so truncation preserves complete physical lines and emits `[codex] [OUTPUT TRUNCATED]\n` as an ordinary Relay-owned terminal line.
+- Made the live sink an explicit Node Writable contract: every write supplies and awaits its callback, and a false return additionally waits for `drain`; no function-arity inference remains.
+
+## Validation evidence
+
+- `npm test`: 118 tests passed; line, branch, and function coverage are each 100%.
+- Focused output/executor suite: 51 tests passed, including multi-megabyte small-chunk JSONL, early over-limit release, parser-burst admission, large-value admission, zero-arity Writable callback/drain, strict line ownership, and slow-live child burst cases.
+- `RUNNER_TEMP=/srv/github-runner/storage/home/.cache/agent-relay-runtime/run.IDTClJ/tmp npm run check:runtime`: passed.
+- `npm run check:shell && npm run check:node-scripts`: passed.
+- `npm run check:toolchain`: tool inventory passed, then the smoke temp directory failed because `/tmp` is denied.
+- `npm run check:system`: could not start because its explicit `/tmp` integration root is denied.
+- `git diff --check`: passed.
+- No workflow, public API, request contract, installation argument, routing, result-semantics, commit-ownership, finalization, or PR #26 change was made.
 
 ## Outcomes and retrospective
 

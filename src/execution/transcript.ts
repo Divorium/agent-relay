@@ -4,7 +4,7 @@ import { dirname, relative, resolve } from "node:path";
 import { StreamingRedactor } from "../security/redaction.js";
 import { CodexExecutionError } from "./errors.js";
 
-export const TRUNCATION_MARKER = "\n[OUTPUT TRUNCATED]\n";
+export const TRUNCATION_MARKER = "[codex] [OUTPUT TRUNCATED]\n";
 
 export interface TranscriptSink {
   write(data: Uint8Array): Promise<void>;
@@ -25,22 +25,11 @@ function contained(root: string, candidate: string): boolean {
 }
 
 export interface LiveSink {
-  write(data: Uint8Array, callback?: (error?: Error | null) => void): unknown;
-  once?(event: string, listener: (...args: any[]) => void): unknown;
-  removeListener?(event: string, listener: (...args: any[]) => void): unknown;
+  write(data: Uint8Array, callback: (error?: Error | null) => void): unknown;
+  once(event: string, listener: (...args: any[]) => void): unknown;
+  removeListener(event: string, listener: (...args: any[]) => void): unknown;
   destroyed?: boolean;
   writableEnded?: boolean;
-}
-
-function utf8Prefix(bytes: Uint8Array, limit: number): Uint8Array {
-  if (limit <= 0) return bytes.subarray(0, 0);
-  let end = limit;
-  while (true) {
-    const next = bytes[end]!;
-    if ((next & 0xc0) !== 0x80) break;
-    end -= 1;
-  }
-  return bytes.subarray(0, end);
 }
 
 export async function createTranscriptSink(runnerTemp: string, transcriptPath: string): Promise<TranscriptSink> {
@@ -69,6 +58,7 @@ export class RedactedFanout {
   private acceptedBytes = 0;
   private truncated = false;
   private failure: unknown;
+  private pendingLine = "";
 
   constructor(
     live: LiveSink,
@@ -85,18 +75,33 @@ export class RedactedFanout {
   }
 
   async finish(): Promise<void> {
-    if (!this.failure && !this.truncated) await this.accept(this.redactor.end());
+    if (!this.failure && !this.truncated) {
+      await this.accept(this.redactor.end());
+      if (this.pendingLine) await this.acceptCompleteLine(`${this.pendingLine}\n`);
+      this.pendingLine = "";
+    }
     else this.redactor.discard();
-    try { this.liveWriter.finish(); } catch (error) { this.failure ??= error; }
-    try { await this.transcript.sync(); } catch (error) { this.failure ??= error; }
-    try { await this.transcript.close(); } catch (error) { this.failure ??= error; }
+    try { this.liveWriter.finish(); } catch (error) { this.failure ??= this.liveFailure(error); }
+    try { await this.transcript.sync(); } catch (error) { this.failure ??= this.transcriptFailure(error); }
+    try { await this.transcript.close(); } catch (error) { this.failure ??= this.transcriptFailure(error); }
     if (this.failure) {
-      throw this.outputFailure(this.failure);
+      throw this.failure;
     }
   }
 
   private async accept(value: string): Promise<void> {
     if (!value) return;
+    this.pendingLine += value;
+    let newline = this.pendingLine.indexOf("\n");
+    while (newline >= 0 && !this.truncated) {
+      const completeLine = this.pendingLine.slice(0, newline + 1);
+      this.pendingLine = this.pendingLine.slice(newline + 1);
+      await this.acceptCompleteLine(completeLine);
+      newline = this.pendingLine.indexOf("\n");
+    }
+  }
+
+  private async acceptCompleteLine(value: string): Promise<void> {
     const bytes = Buffer.from(value);
     const remaining = this.maxOutputBytes - this.acceptedBytes;
     if (bytes.length <= remaining) {
@@ -104,23 +109,29 @@ export class RedactedFanout {
       this.acceptedBytes += bytes.length;
       return;
     }
-    const accepted = utf8Prefix(bytes, remaining);
-    if (accepted.length > 0) await this.emit(accepted);
-    this.acceptedBytes += accepted.length;
     this.truncated = true;
+    this.pendingLine = "";
     await this.emit(Buffer.from(TRUNCATION_MARKER));
   }
 
   private async emit(bytes: Uint8Array): Promise<void> {
     try {
-      await Promise.all([this.liveWriter.write(bytes), this.transcript.write(bytes)]);
+      await Promise.all([
+        this.liveWriter.write(bytes).catch((error: unknown) => { throw this.liveFailure(error); }),
+        this.transcript.write(bytes).catch((error: unknown) => { throw this.transcriptFailure(error); }),
+      ]);
     } catch (error) {
       this.failure = error;
-      throw this.outputFailure(error);
+      throw error;
     }
   }
 
-  private outputFailure(error: unknown): CodexExecutionError {
+  private liveFailure(error: unknown): CodexExecutionError {
+    const detail = error instanceof Error ? error.message : String(error);
+    return new CodexExecutionError("CODEX_FAILED", `Codex live output failed: ${detail}`);
+  }
+
+  private transcriptFailure(error: unknown): CodexExecutionError {
     const detail = error instanceof Error ? error.message : String(error);
     return new CodexExecutionError("CODEX_FAILED", `Codex transcript failed: ${detail}`);
   }
@@ -132,8 +143,8 @@ class AsyncLiveWriter {
   private readonly onClose = (): void => { this.terminalFailure ??= new Error("live output closed prematurely"); };
 
   constructor(private readonly live: LiveSink) {
-    live.once?.("error", this.onError);
-    live.once?.("close", this.onClose);
+    live.once("error", this.onError);
+    live.once("close", this.onClose);
   }
 
   async write(bytes: Uint8Array): Promise<void> {
@@ -143,8 +154,8 @@ class AsyncLiveWriter {
   }
 
   finish(): void {
-    this.live.removeListener?.("error", this.onError);
-    this.live.removeListener?.("close", this.onClose);
+    this.live.removeListener("error", this.onError);
+    this.live.removeListener("close", this.onClose);
     this.assertOpen();
   }
 
@@ -156,14 +167,14 @@ class AsyncLiveWriter {
 
 async function writeLive(live: LiveSink, bytes: Uint8Array): Promise<void> {
   await new Promise<void>((resolvePromise, rejectPromise) => {
-    let callbackDone = live.write.length < 2;
+    let callbackDone = false;
     let drainDone = true;
     let writeReturned = false;
     let settled = false;
     const cleanup = (): void => {
-      live.removeListener?.("error", onError);
-      live.removeListener?.("close", onClose);
-      live.removeListener?.("drain", onDrain);
+      live.removeListener("error", onError);
+      live.removeListener("close", onClose);
+      live.removeListener("drain", onDrain);
     };
     const finish = (): void => {
       if (!settled && writeReturned && callbackDone && drainDone) {
@@ -182,8 +193,8 @@ async function writeLive(live: LiveSink, bytes: Uint8Array): Promise<void> {
     const onError = (error: unknown): void => fail(error);
     const onClose = (): void => fail(new Error("live output closed before the write completed"));
     const onDrain = (): void => { drainDone = true; finish(); };
-    live.once?.("error", onError);
-    live.once?.("close", onClose);
+    live.once("error", onError);
+    live.once("close", onClose);
     try {
       const accepted = live.write(bytes, (error?: Error | null) => {
         if (error) fail(error);
@@ -191,8 +202,7 @@ async function writeLive(live: LiveSink, bytes: Uint8Array): Promise<void> {
       });
       if (accepted === false) {
         drainDone = false;
-        live.once?.("drain", onDrain);
-        if (!live.once) fail(new Error("live output applied backpressure without drain support"));
+        live.once("drain", onDrain);
       }
       writeReturned = true;
       finish();

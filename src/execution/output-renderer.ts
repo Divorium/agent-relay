@@ -16,12 +16,7 @@ function visible(value: string): string {
 /** Render untrusted content so every physical Actions log line is Relay-owned. */
 export function renderRelayLines(value: string): string {
   const logicalLines = value.split(/\r\n|\r|\n/u);
-  const trailingBoundary = /(?:\r\n|\r|\n)$/u.test(value);
-  const rendered = logicalLines
-    .slice(0, trailingBoundary ? -1 : undefined)
-    .map((logicalLine) => `${RELAY_LINE_PREFIX}${visible(logicalLine)}`)
-    .join("\n");
-  return trailingBoundary ? `${rendered}\n` : rendered;
+  return `${logicalLines.map((logicalLine) => `${RELAY_LINE_PREFIX}${visible(logicalLine)}`).join("\n")}\n`;
 }
 
 function utf8PrefixLength(bytes: Uint8Array, limit: number): number {
@@ -30,15 +25,13 @@ function utf8PrefixLength(bytes: Uint8Array, limit: number): number {
   return end;
 }
 
-export function splitNormalizedSegments(value: string, maxBytes = MAX_NORMALIZED_SEGMENT_BYTES): string[] {
+export function* splitNormalizedSegments(value: string, maxBytes = MAX_NORMALIZED_SEGMENT_BYTES): Generator<string> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 4) throw new RangeError("maxBytes must be an integer of at least 4");
   const encoded = Buffer.from(value);
-  const segments: string[] = [];
   let offset = 0;
   while (offset < encoded.length) {
     const length = utf8PrefixLength(encoded.subarray(offset), maxBytes);
-    segments.push(encoded.subarray(offset, offset + length).toString("utf8"));
+    yield encoded.subarray(offset, offset + length).toString("utf8");
     offset += length;
   }
-  return segments;
 }

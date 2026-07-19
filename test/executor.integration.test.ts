@@ -25,8 +25,9 @@ async function createRoot(name: string) {
 async function captureStdout(run: () => Promise<void>): Promise<string> {
   const original = process.stdout.write;
   let output = "";
-  process.stdout.write = ((value: unknown) => {
+  process.stdout.write = ((value: unknown, callback?: (error?: Error | null) => void) => {
     output += String(value);
+    callback?.();
     return true;
   }) as typeof process.stdout.write;
   try {
@@ -151,7 +152,7 @@ test("CodexExecutor caps output and emits one truncation marker", async () => {
     const output = await captureStdout(async () => {
       await executor.run(planPath, workspace);
     });
-    assert.equal(output, "[codex] \n[OUTPUT TRUNCATED]\n");
+    assert.equal(output, "[codex] [OUTPUT TRUNCATED]\n");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -212,7 +213,7 @@ printf drained > "${drained}"
   const executor = new CodexExecutor(executable, 5_000, 8, home, runtimeRoot, "/srv/github-runner/storage/agent-relay");
   try {
     const output = await captureStdout(async () => executor.run(planPath, workspace).then(() => undefined));
-    assert.equal(output, "[codex] \n[OUTPUT TRUNCATED]\n");
+    assert.equal(output, "[codex] [OUTPUT TRUNCATED]\n");
     assert.equal(await readFile(drained, "utf8"), "drained");
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -251,7 +252,7 @@ printf '%s\n' '{"type":"item.completed","item":{"id":"item_0","type":"command_ex
   const original = process.stdout.write;
   let live = "";
   let settled = false;
-  process.stdout.write = ((value: unknown) => { live += Buffer.from(value as Uint8Array).toString("utf8"); return true; }) as typeof process.stdout.write;
+  process.stdout.write = ((value: unknown, callback?: (error?: Error | null) => void) => { live += Buffer.from(value as Uint8Array).toString("utf8"); callback?.(); return true; }) as typeof process.stdout.write;
   try {
     const running = new CodexExecutor(executable, 5_000, 100_000, home, runtimeRoot, "/srv/source").run(planPath, workspace, transcript).finally(() => { settled = true; });
     while (!live.includes("command started")) await new Promise((resolve) => setTimeout(resolve, 5));
@@ -260,6 +261,37 @@ printf '%s\n' '{"type":"item.completed","item":{"id":"item_0","type":"command_ex
     assert.equal(live, await readFile(transcriptPath, "utf8"));
     assert.ok(live.indexOf("command started") < live.indexOf("stderr: diagnostic"));
     assert.ok(live.indexOf("stderr: diagnostic") < live.indexOf("command output"));
+  } finally {
+    process.stdout.write = original;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("CodexExecutor bounds a one-write child burst behind a slow live Writable", async () => {
+  const { root, workspace, home, runtimeRoot } = await createRoot("burst-backpressure");
+  const executable = join(root, "burst-codex");
+  await writeFile(executable, `#!/usr/bin/node
+const records = Array.from({ length: 600 }, (_, index) => JSON.stringify({
+  type: "item.completed",
+  item: { id: "burst-" + index, type: "agent_message", text: index + ":" + "x".repeat(600) },
+})).join("\\n") + "\\n";
+process.stdout.write(records);
+`, { mode: 0o700 });
+  await chmod(executable, 0o700);
+  const transcriptPath = join(root, "burst.log");
+  const transcript = await createTranscriptSink(root, transcriptPath);
+  const original = process.stdout.write;
+  let live = "";
+  process.stdout.write = ((...args: any[]) => {
+    live += Buffer.from(args[0] as Uint8Array).toString("utf8");
+    const callback = args[1] as ((error?: Error | null) => void) | undefined;
+    setTimeout(() => { callback?.(); process.stdout.emit("drain"); }, 1);
+    return false;
+  }) as typeof process.stdout.write;
+  try {
+    await new CodexExecutor(executable, 10_000, 1_000_000, home, runtimeRoot, "/srv/source").run(planPath, workspace, transcript);
+    assert.equal(live, await readFile(transcriptPath, "utf8"));
+    assert.ok(live.indexOf("0:") < live.indexOf("599:"));
   } finally {
     process.stdout.write = original;
     await rm(root, { recursive: true, force: true });
@@ -280,6 +312,19 @@ process.stdout.write(JSON.stringify({ type: "item.completed", item }) + "\\n");
     });
     assert.match(output, /command output:/u);
     assert.match(output, /EVENT CONTENT TRUNCATED/u);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("CodexExecutor accepts a valid final JSONL record without LF", async () => {
+  const { root, workspace, home, runtimeRoot } = await createRoot("final-record");
+  const executable = join(root, "final-codex");
+  await writeFile(executable, "#!/bin/sh\nprintf '%s' '{\"type\":\"turn.started\"}'\n", { mode: 0o700 });
+  await chmod(executable, 0o700);
+  try {
+    const output = await captureStdout(async () => {
+      await new CodexExecutor(executable, 5_000, 100_000, home, runtimeRoot, "/srv/source").run(planPath, workspace);
+    });
+    assert.equal(output, "[codex] turn started\n");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

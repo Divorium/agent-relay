@@ -4,7 +4,7 @@ import { buildCodexPrompt } from "./prompt.js";
 import { CodexExecutionError } from "./errors.js";
 import { CodexEventNormalizer } from "./codex-normalizer.js";
 import { DiagnosticLineParser, deriveJsonlRecordBytes, JsonlParser } from "./jsonl-parser.js";
-import { BoundedOutputPump } from "./output-pump.js";
+import { BoundedOutputPump, OrderedInputPump } from "./output-pump.js";
 import { RedactedFanout, type TranscriptSink } from "./transcript.js";
 
 export interface ExecutionOutcome { exitCode: number; }
@@ -104,35 +104,43 @@ export class CodexExecutor {
     let firstFailure: unknown;
     let discardOutput = false;
     let drainOnly = false;
+    let input: OrderedInputPump | undefined;
     const fail = (error: unknown): void => {
       firstFailure ??= error;
       discardOutput = true;
       drainOnly = true;
       pump.discard();
+      input?.discard();
       terminateProcess(child, "SIGTERM");
     };
     const pump = new BoundedOutputPump(
       fanout,
-      [child.stdout, child.stderr],
       fail,
       () => {
         discardOutput = true;
         normalizer.clearLifecycleState();
       },
     );
-    const stdout = new JsonlParser((event) => {
-      if (!discardOutput) for (const value of normalizer.normalize(event)) pump.enqueue([value]);
-    }, this.maxJsonlRecordBytes);
-    const stderr = new DiagnosticLineParser((diagnostic, continuation) => {
-      if (!discardOutput) pump.enqueue([normalizer.diagnostic(diagnostic, continuation)]);
-    });
+    const stdout = new JsonlParser(this.maxJsonlRecordBytes);
+    const stderr = new DiagnosticLineParser();
+    input = new OrderedInputPump(pump, async (source, chunk) => {
+      if (source === child.stdout) {
+        for (const event of stdout.write(chunk)) {
+          if (!discardOutput) await pump.enqueue(normalizer.normalize(event));
+        }
+      } else {
+        for (const diagnostic of stderr.write(chunk)) {
+          if (!discardOutput) await pump.enqueue([normalizer.diagnostic(diagnostic.value, diagnostic.continuation)]);
+        }
+      }
+    }, fail);
     child.stdout.on("data", (chunk: Uint8Array) => {
       if (drainOnly) return;
-      try { stdout.write(chunk); } catch (error) { fail(error); }
+      input?.accept(child.stdout, chunk);
     });
     child.stderr.on("data", (chunk: Uint8Array) => {
       if (drainOnly) return;
-      try { stderr.write(chunk); } catch (error) { fail(error); }
+      input?.accept(child.stderr, chunk);
     });
     child.stdout.on("error", fail);
     child.stderr.on("error", fail);
@@ -159,10 +167,15 @@ export class CodexExecutor {
       });
     });
 
+    await input.finish();
     if (firstFailure === undefined) {
       try {
-        stdout.end();
-        stderr.end();
+        for (const event of stdout.end()) {
+          if (!discardOutput) await pump.enqueue(normalizer.normalize(event));
+        }
+        for (const diagnostic of stderr.end()) {
+          if (!discardOutput) await pump.enqueue([normalizer.diagnostic(diagnostic.value, diagnostic.continuation)]);
+        }
       } catch (error) {
         fail(error);
       }

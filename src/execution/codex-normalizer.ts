@@ -42,7 +42,7 @@ function bounded(value: string): string {
 
 function line(label: string, value = ""): string {
   const suffix = value ? ` ${bounded(value)}` : "";
-  return `${renderRelayLines(`${label}${suffix}`)}\n`;
+  return renderRelayLines(`${label}${suffix}`);
 }
 
 function unsafe(detail: string): CodexExecutionError {
@@ -66,27 +66,27 @@ export class CodexEventNormalizer {
     return { activeItems: this.items.size, completedItems: this.completedItems.size, eventIds: this.eventIds.size, fileChanges };
   }
 
-  normalize(event: JsonRecord): string[] {
+  *normalize(event: JsonRecord): Generator<string> {
     const type = string(event.type, "event.type");
     switch (type) {
       case "thread.started":
-        return [line("thread started")];
+        yield line("thread started"); return;
       case "turn.started":
-        return [line("turn started")];
+        yield line("turn started"); return;
       case "turn.completed":
-        return [this.turnCompleted(event)];
+        yield this.turnCompleted(event); return;
       case "turn.failed":
-        return [line("turn failed:", string(record(event.error, "turn.failed.error").message, "turn.failed.error.message"))];
+        yield line("turn failed:", string(record(event.error, "turn.failed.error").message, "turn.failed.error.message")); return;
       case "error":
-        return this.eventMessage(type, event, "fatal error:");
+        yield* this.eventMessage(type, event, "fatal error:"); return;
       case "warning":
-        return this.eventMessage(type, event, "warning:");
+        yield* this.eventMessage(type, event, "warning:"); return;
       case "item.started":
       case "item.updated":
       case "item.completed":
-        return this.item(type.slice("item.".length) as "started" | "updated" | "completed", record(event.item, `${type}.item`));
+        yield* this.item(type.slice("item.".length) as "started" | "updated" | "completed", record(event.item, `${type}.item`)); return;
       default:
-        return [line("unknown event:", bounded(type.slice(0, 200)))];
+        yield line("unknown event:", bounded(type.slice(0, 200)));
     }
   }
 
@@ -108,18 +108,18 @@ export class CodexEventNormalizer {
     return value;
   }
 
-  private eventMessage(type: string, event: JsonRecord, label: string): string[] {
+  private *eventMessage(type: string, event: JsonRecord, label: string): Generator<string> {
     const message = string(event.message, `${type}.message`);
     const id = optionalString(event.id, `${type}.id`);
     if (id) {
       const identity = `${type}:${id}`;
-      if (this.eventIds.has(identity)) return [];
+      if (this.eventIds.has(identity)) return;
       this.eventIds.add(identity);
     }
-    return [line(label, message)];
+    yield line(label, message);
   }
 
-  private item(stage: "started" | "updated" | "completed", item: JsonRecord): string[] {
+  private *item(stage: "started" | "updated" | "completed", item: JsonRecord): Generator<string> {
     const id = string(item.id, "item.id");
     const itemKey = digest(id);
     const type = string(item.type, "item.type");
@@ -130,43 +130,38 @@ export class CodexEventNormalizer {
     if (!existing && this.items.size >= MAX_ACTIVE_ITEMS) throw unsafe(`active item limit of ${MAX_ACTIVE_ITEMS} exceeded`);
     const state = existing ?? { type, commandOutput: cumulative(""), text: cumulative(""), changes: new Map<string, CumulativeState>() };
     this.items.set(itemKey, state);
-    let output: string[];
     switch (type) {
-      case "command_execution": output = this.command(stage, item, state); break;
-      case "file_change": output = this.fileChange(stage, item, state); break;
-      case "agent_message": output = this.textItem(stage, item, state, "assistant:", true); break;
-      case "reasoning": output = this.textItem(stage, item, state, "progress:", false); break;
-      case "error": output = stage === "completed" ? this.itemError(id, item) : []; break;
-      case "todo_list": output = this.todo(stage, item); break;
-      default: output = [line("unknown item:", bounded(type.slice(0, 200)))];
+      case "command_execution": yield* this.command(stage, item, state); break;
+      case "file_change": yield* this.fileChange(stage, item, state); break;
+      case "agent_message": yield* this.textItem(stage, item, state, "assistant:", true); break;
+      case "reasoning": yield* this.textItem(stage, item, state, "progress:", false); break;
+      case "error": if (stage === "completed") yield this.itemError(id, item); break;
+      case "todo_list": yield this.todo(stage, item); break;
+      default: yield line("unknown item:", bounded(type.slice(0, 200)));
     }
     if (stage === "completed") {
       this.items.delete(itemKey);
       this.completedItems.add(id);
     }
-    return output;
   }
 
-  private command(stage: "started" | "updated" | "completed", item: JsonRecord, state: ItemState): string[] {
+  private *command(stage: "started" | "updated" | "completed", item: JsonRecord, state: ItemState): Generator<string> {
     const command = string(item.command, "command.command");
     const aggregate = optionalString(item.aggregated_output, "command.aggregated_output") ?? "";
-    const output: string[] = [];
-    if (stage === "started") output.push(line("command started:", command));
+    if (stage === "started") yield line("command started:", command);
     verifyCumulative(aggregate, state.commandOutput, `command ${string(item.id, "item.id")} output`);
-    const delta = aggregate.slice(state.commandOutput.length);
-    if (delta) output.push(line("command output:", delta));
+    const delta = aggregate.slice(state.commandOutput.length, state.commandOutput.length + MAX_TEXT + 1);
+    if (delta) yield line("command output:", delta);
     state.commandOutput = cumulative(aggregate);
     if (stage === "completed") {
       const status = string(item.status, "command.status");
       const exitCode = item.exit_code === null || item.exit_code === undefined ? "none" : String(this.number(item.exit_code, "command.exit_code"));
-      output.push(line("command completed:", `status=${status} exit=${exitCode}`));
+      yield line("command completed:", `status=${status} exit=${exitCode}`);
     }
-    return output;
   }
 
-  private fileChange(stage: "started" | "updated" | "completed", item: JsonRecord, state: ItemState): string[] {
+  private *fileChange(stage: "started" | "updated" | "completed", item: JsonRecord, state: ItemState): Generator<string> {
     if (!Array.isArray(item.changes)) throw unsafe("file_change.changes must be an array");
-    const output: string[] = [];
     for (const value of item.changes) {
       const change = record(value, "file_change.change");
       const path = string(change.path, "file_change.path");
@@ -176,37 +171,46 @@ export class CodexEventNormalizer {
       const previous = state.changes.get(key);
       if (previous === undefined) {
         if (state.changes.size >= MAX_FILE_CHANGES_PER_ITEM) throw unsafe(`file change limit of ${MAX_FILE_CHANGES_PER_ITEM} exceeded`);
-        output.push(line(`file ${kind}:`, path));
+        yield line(`file ${kind}:`, path);
       } else verifyCumulative(patch, previous, `file change ${path} patch`);
-      const delta = patch.slice(previous?.length ?? 0);
-      if (delta) output.push(line("patch:", delta));
+      const deltaStart = previous?.length ?? 0;
+      const delta = patch.slice(deltaStart, deltaStart + MAX_TEXT + 1);
+      if (delta) yield line("patch:", delta);
       state.changes.set(key, cumulative(patch));
     }
-    if (stage === "completed") output.push(line("file changes completed:", string(item.status, "file_change.status")));
-    return output;
+    if (stage === "completed") yield line("file changes completed:", string(item.status, "file_change.status"));
   }
 
-  private textItem(stage: "started" | "updated" | "completed", item: JsonRecord, state: ItemState, label: string, finalOnly: boolean): string[] {
+  private *textItem(stage: "started" | "updated" | "completed", item: JsonRecord, state: ItemState, label: string, finalOnly: boolean): Generator<string> {
     const text = string(item.text, `${item.type}.text`);
     verifyCumulative(text, state.text, `item ${string(item.id, "item.id")} text`);
-    const delta = text.slice(state.text.length);
+    const delta = text.slice(state.text.length, state.text.length + MAX_TEXT + 1);
     state.text = cumulative(text);
-    if (finalOnly) return stage === "completed" && text ? [line(label, text)] : [];
-    return delta ? [line(label, delta)] : [];
+    if (finalOnly) {
+      if (stage === "completed" && text) yield line(label, text);
+      return;
+    }
+    if (delta) yield line(label, delta);
   }
 
-  private itemError(id: string, item: JsonRecord): string[] {
+  private itemError(id: string, item: JsonRecord): string {
     this.eventIds.add(`item.error:${id}`);
-    return [line("warning:", string(item.message, "error.message"))];
+    return line("warning:", string(item.message, "error.message"));
   }
 
-  private todo(stage: "started" | "updated" | "completed", item: JsonRecord): string[] {
+  private todo(stage: "started" | "updated" | "completed", item: JsonRecord): string {
     if (!Array.isArray(item.items)) throw unsafe("todo_list.items must be an array");
-    const summary = item.items.map((value) => {
+    let summary = "";
+    for (const value of item.items) {
       const todo = record(value, "todo_list.item");
-      return `${todo.completed === true ? "[x]" : "[ ]"} ${string(todo.text, "todo_list.text")}`;
-    }).join("; ");
-    return [line(`todo ${stage}:`, summary)];
+      const text = string(todo.text, "todo_list.text");
+      if (summary.length <= MAX_TEXT) {
+        const prefix = `${summary ? "; " : ""}${todo.completed === true ? "[x]" : "[ ]"} `;
+        summary += prefix.slice(0, MAX_TEXT + 1 - summary.length);
+        summary += text.slice(0, MAX_TEXT + 1 - summary.length);
+      }
+    }
+    return line(`todo ${stage}:`, summary);
   }
 }
 

@@ -13,133 +13,152 @@ export function deriveJsonlRecordBytes(maxOutputBytes: number): number {
   return derived;
 }
 
+/** A byte-oriented JSONL framer. Each input byte is examined exactly once. */
 export class JsonlParser {
-  private readonly decoder = new TextDecoder("utf-8", { fatal: true });
-  private pending = "";
+  private chunks: Uint8Array[] = [];
+  private _pendingBytes = 0;
+  private _maximumPendingBytes = 0;
+  private _scannedBytes = 0;
 
-  constructor(
-    private readonly onRecord: (record: JsonRecord) => void,
-    private readonly maxRecordBytes = 16 * 1024 * 1024,
-  ) {
+  constructor(private readonly maxRecordBytes = 16 * 1024 * 1024) {
     if (!Number.isSafeInteger(maxRecordBytes) || maxRecordBytes < 1 || maxRecordBytes > MAX_JSONL_RECORD_BYTES_HARD_LIMIT) {
       throw new CodexExecutionError("INVALID_CONFIGURATION", `MAX_JSONL_RECORD_BYTES must be between 1 and ${MAX_JSONL_RECORD_BYTES_HARD_LIMIT}`);
     }
   }
 
-  write(chunk: Uint8Array): void {
+  get pendingBytes(): number { return this._pendingBytes; }
+  get pendingChunks(): number { return this.chunks.length; }
+  get maximumPendingBytes(): number { return this._maximumPendingBytes; }
+  get scannedBytes(): number { return this._scannedBytes; }
+
+  *write(input: Uint8Array): Generator<JsonRecord> {
+    let start = 0;
     try {
-      this.pending += this.decoder.decode(chunk, { stream: true });
+      for (let index = 0; index < input.length; index += 1) {
+        this._scannedBytes += 1;
+        const pendingRecordBytes = this._pendingBytes + index - start + (input[index] === 0x0a ? 0 : 1);
+        if (pendingRecordBytes > this.maxRecordBytes) {
+          throw this.failure(`unfinished record exceeds ${this.maxRecordBytes} bytes`);
+        }
+        if (input[index] !== 0x0a) continue;
+        this.append(input.subarray(start, index));
+        const record = this.takeRecord(true);
+        if (record) yield record;
+        start = index + 1;
+      }
+      this.append(input.subarray(start));
     } catch (error) {
-      throw this.failure(`invalid UTF-8: ${this.message(error)}`);
-    }
-    this.consumeLines();
-    if (Buffer.byteLength(this.pending) > this.maxRecordBytes) {
-      throw this.failure(`unfinished record exceeds ${this.maxRecordBytes} bytes`);
+      this.release();
+      throw error;
     }
   }
 
-  end(): void {
+  *end(): Generator<JsonRecord> {
     try {
-      this.pending += this.decoder.decode();
+      if (this._pendingBytes > 0) {
+        const record = this.takeRecord(false);
+        if (record) yield record;
+      }
     } catch (error) {
-      throw this.failure(`invalid UTF-8: ${this.message(error)}`);
+      this.release();
+      throw error;
     }
-    this.consumeLines();
-    if (this.pending.trim()) this.parse(this.pending);
-    this.pending = "";
+    this.release();
   }
 
-  private consumeLines(): void {
-    let newline = this.pending.indexOf("\n");
-    while (newline >= 0) {
-      const line = this.pending.slice(0, newline).replace(/\r$/u, "");
-      this.pending = this.pending.slice(newline + 1);
-      if (line.trim()) this.parse(line);
-      newline = this.pending.indexOf("\n");
-    }
+  private append(chunk: Uint8Array): void {
+    if (chunk.length === 0) return;
+    this.chunks.push(chunk);
+    this._pendingBytes += chunk.length;
+    this._maximumPendingBytes = Math.max(this._maximumPendingBytes, this._pendingBytes);
   }
 
-  private parse(line: string): void {
-    if (Buffer.byteLength(line) > this.maxRecordBytes) {
-      throw this.failure(`record exceeds ${this.maxRecordBytes} bytes`);
+  private takeRecord(stripCarriageReturn: boolean): JsonRecord | undefined {
+    let bytes = Buffer.concat(this.chunks, this._pendingBytes);
+    this.release();
+    if (stripCarriageReturn && bytes.at(-1) === 0x0d) bytes = bytes.subarray(0, -1);
+    let line: string;
+    try {
+      line = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch (error) {
+      throw this.failure(`invalid UTF-8: ${String(error)}`);
     }
+    if (!line.trim()) return undefined;
     let value: unknown;
     try {
       value = JSON.parse(line);
     } catch (error) {
-      throw this.failure(`malformed record: ${this.message(error)}`);
+      throw this.failure(`malformed record: ${String(error)}`);
     }
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw this.failure("record must be a JSON object");
     }
-    this.onRecord(value as JsonRecord);
+    return value as JsonRecord;
+  }
+
+  private release(): void {
+    this.chunks = [];
+    this._pendingBytes = 0;
   }
 
   private failure(detail: string): CodexExecutionError {
     return new CodexExecutionError("CODEX_FAILED", `Invalid Codex JSONL: ${detail}`);
   }
-
-  private message(error: unknown): string {
-    return String(error);
-  }
 }
+
+export interface DiagnosticChunk { value: string; continuation: boolean; }
 
 export class DiagnosticLineParser {
   private readonly decoder = new TextDecoder("utf-8", { fatal: true });
   private pending = "";
   private _maximumPendingBytes = 0;
 
-  constructor(
-    private readonly onLine: (line: string, continuation: boolean) => void,
-    private readonly maxLineBytes = DEFAULT_DIAGNOSTIC_LINE_BYTES,
-  ) {
+  constructor(private readonly maxLineBytes = DEFAULT_DIAGNOSTIC_LINE_BYTES) {
     if (!Number.isSafeInteger(maxLineBytes) || maxLineBytes < 4) throw new RangeError("maxLineBytes must be an integer of at least 4");
   }
 
   get pendingBytes(): number { return Buffer.byteLength(this.pending); }
   get maximumPendingBytes(): number { return this._maximumPendingBytes; }
 
-  write(chunk: Uint8Array): void {
+  *write(chunk: Uint8Array): Generator<DiagnosticChunk> {
     for (let offset = 0; offset < chunk.length; offset += this.maxLineBytes) {
       try {
         this.pending += this.decoder.decode(chunk.subarray(offset, offset + this.maxLineBytes), { stream: true });
         this._maximumPendingBytes = Math.max(this._maximumPendingBytes, Buffer.byteLength(this.pending));
       } catch (error) {
+        this.pending = "";
         throw new CodexExecutionError("CODEX_FAILED", `Invalid Codex stderr UTF-8: ${String(error)}`);
       }
-      this.consume(false);
+      yield* this.consume(false);
     }
   }
 
-  end(): void {
+  *end(): Generator<DiagnosticChunk> {
     try {
       this.pending += this.decoder.decode();
     } catch (error) {
+      this.pending = "";
       throw new CodexExecutionError("CODEX_FAILED", `Invalid Codex stderr UTF-8: ${String(error)}`);
     }
-    this.consume(true);
+    yield* this.consume(true);
   }
 
-  private consume(final: boolean): void {
+  private *consume(final: boolean): Generator<DiagnosticChunk> {
     let newline = this.pending.indexOf("\n");
     while (newline >= 0) {
-      this.emitBounded(this.pending.slice(0, newline).replace(/\r$/u, ""));
+      yield { value: this.pending.slice(0, newline).replace(/\r$/u, ""), continuation: false };
       this.pending = this.pending.slice(newline + 1);
       newline = this.pending.indexOf("\n");
     }
     while (Buffer.byteLength(this.pending) > this.maxLineBytes) {
       const prefix = utf8StringPrefix(this.pending, this.maxLineBytes);
-      this.onLine(prefix, true);
+      yield { value: prefix, continuation: true };
       this.pending = this.pending.slice(prefix.length);
     }
     if (final && this.pending) {
-      this.emitBounded(this.pending);
+      yield { value: this.pending, continuation: false };
       this.pending = "";
     }
-  }
-
-  private emitBounded(value: string): void {
-    this.onLine(value, false);
   }
 }
 

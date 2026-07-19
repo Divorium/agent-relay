@@ -23,20 +23,17 @@ export function createCodexEnvironment(home: string, runtimeRoot: string): Recor
 export function createCodexArgs(
   workspace: string,
   prompt: string,
-  workspaceRoot: string,
   home: string,
   runtimeRoot: string,
-  trustedSourceRoot: string,
+  trustedRuntimeRoot: string,
 ): string[] {
   const resolvedWorkspace = resolve(workspace);
-  const resolvedRoot = resolve(workspaceRoot);
   const entries = [
     permission(resolve(home), "deny"),
-    permission(resolve(trustedSourceRoot), "deny"),
+    permission(resolve(trustedRuntimeRoot), "deny"),
     permission("/opt/rust", "read"),
     permission("/tmp", "deny"),
     permission("/var/tmp", "deny"),
-    permission(resolvedRoot, "deny"),
     permission(resolve(runtimeRoot), "write"),
     permission(resolvedWorkspace, "write"),
     permission(join(resolvedWorkspace, ".git"), "read"),
@@ -74,10 +71,9 @@ export class CodexExecutor {
     private readonly command: string,
     private readonly timeoutMs: number,
     private readonly maxOutputBytes: number,
-    private readonly workspaceRoot: string,
     private readonly home: string,
     private readonly runtimeRoot: string,
-    private readonly trustedSourceRoot: string,
+    private readonly trustedRuntimeRoot: string,
     private readonly forceKillDelayMs = 5_000,
   ) {}
 
@@ -85,7 +81,7 @@ export class CodexExecutor {
     const prompt = buildCodexPrompt(planPath);
     const child = spawn(
       this.command,
-      createCodexArgs(workspace, prompt, this.workspaceRoot, this.home, this.runtimeRoot, this.trustedSourceRoot),
+      createCodexArgs(workspace, prompt, this.home, this.runtimeRoot, this.trustedRuntimeRoot),
       {
         cwd: workspace,
         env: createCodexEnvironment(this.home, this.runtimeRoot),

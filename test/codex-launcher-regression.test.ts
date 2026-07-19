@@ -29,7 +29,6 @@ test("spawn failures retain the operating-system diagnostic", async () => {
     missingCommand,
     5_000,
     100_000,
-    workspaceRoot,
     home,
     runtimeRoot,
     "/srv/github-runner/storage/agent-relay",

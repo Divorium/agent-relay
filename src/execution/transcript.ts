@@ -29,7 +29,11 @@ export interface LiveSink { write(data: Uint8Array): unknown; }
 function utf8Prefix(bytes: Uint8Array, limit: number): Uint8Array {
   let end = Math.min(Math.max(limit, 0), bytes.length);
   if (end === bytes.length) return bytes;
-  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end -= 1;
+  while (end > 0) {
+    const next = bytes[end];
+    if (next === undefined || (next & 0xc0) !== 0x80) break;
+    end -= 1;
+  }
   return bytes.subarray(0, end);
 }
 

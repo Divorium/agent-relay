@@ -191,15 +191,34 @@ No unresolved plan-level blocker remains. The plan is ready for Codex implementa
 - [x] Reviewed the plan and corrected the impossible pre-merge actual-runtime smoke assumption.
 - [x] Defined queue watermarks, segment bounds, and exact cumulative digest semantics.
 - [x] Completed independent plan review; no plan-level blocker remains.
-- [ ] Add regression tests for all findings.
-- [ ] Implement actions-safe multiline rendering.
-- [ ] Implement bounded backpressure-aware pumping.
-- [ ] Implement protocol-derived JSONL record bounds.
-- [ ] Implement bounded stderr framing.
-- [ ] Implement bounded lifecycle state.
+- [x] Added production and integration regressions for all five findings, including hostile multiline content, controlled Writable backpressure, a record above 1 MiB, multi-megabyte stderr, and lifecycle stress.
+- [x] Implemented centralized actions-safe multiline rendering with visible controls and UTF-8-bounded segments.
+- [x] Implemented one bounded backpressure-aware pump with high/low watermarks, callback-and-drain Writable handling, first-failure termination, and drain-only failure behavior.
+- [x] Implemented the separately configured escaping-derived JSONL record budget and hard ceiling.
+- [x] Implemented bounded incremental stderr continuation framing.
+- [x] Implemented length/SHA-256 cumulative verification, immediate completion release, active-state bounds, and deterministic replay eviction.
+- [x] Passed strict typechecking, all 107 Node tests with 100% line/branch/function coverage, the production runtime build, shell syntax checks, and Node entrypoint syntax checks.
+- [ ] [blocked] Complete the literal `npm run check` toolchain and system-harness phases. Cause: this execution profile denies `/tmp`, while `scripts/toolchain-smoke.sh` and both system harnesses intentionally use hard-coded `/tmp` `mktemp` templates. Impact: the final toolchain smoke fixture and install/update system harnesses cannot start here. Evidence: `check:toolchain` validated every pinned tool through `rsync` and then failed at `/tmp/agent-relay-smoke.XXXXXX`; `check:system` failed at `/tmp/agent-relay-install.XXXXXX`. Unblock condition: exact-SHA self-hosted CI or another repository-supported environment with writable `/tmp` runs `npm run check` unchanged.
 - [ ] Run exact-SHA CI.
 - [ ] Complete independent code review.
-- [ ] Document post-deployment smoke procedure.
+- [x] Documented the post-deployment smoke boundary and procedure in the technical specification and operations guide.
+
+## Surprises and discoveries
+
+- The selected checkout is detached at `215b1a2`, so there is no new implementation SHA until the changes are intentionally committed. Exact-SHA CI cannot honestly be recorded from the dirty checkout.
+- The existing 100% branch threshold exposed defensive branches that could not occur under the single-consumer event-loop model. The pump was simplified so its state transitions match the reachable execution model rather than excluding dead branches from coverage.
+- No completed ExecPlan contains the current structured-normalizer claim that needs correction. Historical completed plans remain unchanged in accordance with repository policy.
+
+## Decision log
+
+- Decision: retain JSONL syntax, UTF-8, and record-budget validation after transcript truncation while clearing the normalizer and dropping ordinary rendered output.
+  Rationale: this gives a precise bounded post-truncation rule and preserves deterministic transport failure without retaining lifecycle payloads.
+- Decision: use a 16 KiB stderr unfinished-line bound, 1,024 active-item and per-file-identity caps, and 4,096-entry completed/event replay sets.
+  Rationale: each limit is comfortably above expected Codex 0.144.4 behavior, deterministic under hostile output, and directly stress-tested.
+- Decision: make `MAX_JSONL_RECORD_BYTES` explicit only within 1 MiB through 256 MiB and derive the default as `max(16 MiB, 8 * MAX_OUTPUT_BYTES + 1 MiB)`.
+  Rationale: JSON can expand controls to six bytes per input character; eightfold headroom plus an envelope allowance remains bounded and accepts installed-version cumulative records above 1 MiB.
+- Decision: do not modify workflows, public APIs, request contracts, installation arguments, routing, result semantics, commit ownership, or finalization decisions.
+  Rationale: existing generic execution, logging, artifact, and CI paths provide the required interfaces.
 
 ## Outcomes and retrospective
 

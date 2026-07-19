@@ -19,7 +19,7 @@ All Agent Relay and GitHub Runner application data is grouped under `/srv/github
 
 The current ownership and runtime contracts are specified in `docs/native-github-runner-specification.md`. Operator procedures are in `docs/operations/README.md`.
 
-Codex execution progress is normalized from its internal JSONL protocol, redacted once, and streamed live while Relay writes the same accepted bytes to the later `agent-relay-output` artifact transcript. The artifact becomes available after upload; `GITHUB_OUTPUT` remains reserved for workflow values rather than logs.
+Codex execution progress is normalized from its internal JSONL protocol into Actions-safe physical lines, redacted once, and streamed through a bounded backpressure-aware queue while Relay writes the same accepted bytes to the later `agent-relay-output` artifact transcript. The artifact becomes available after upload; `GITHUB_OUTPUT` remains reserved for workflow values rather than logs.
 
 The source checkout is owned by the host administrator. The `github-runner` service account can read it but cannot modify it and has no sudo access. Runtime compilation runs as the separate no-sudo `agent-relay-builder` account. The activated `dist` tree is owned by root.
 

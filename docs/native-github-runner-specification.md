@@ -137,7 +137,7 @@ The workflow is `.github/workflows/codex.yml` and processes one request as follo
 5. The validation job runs `npm ci` and `npm run check` before Codex execution.
 6. `run-codex.mjs` calls the compiled direct runtime.
 7. `CodexExecutor` canonicalizes the selected workspace and invokes `scripts/codex-run` with `codex exec --json`, timeout, process-group termination, normalized-output limits, streaming redaction, and filesystem/network permissions.
-8. Relay incrementally parses JSONL stdout, labels separate stderr diagnostics, and queues events in the order their pipe callbacks are observed. This is an arrival-order rule, not a claim of total kernel ordering between the two pipes.
+8. Relay incrementally parses JSONL stdout, bounds and labels separate stderr diagnostics, and queues normalized segments in the order their pipe callbacks are observed. This is an arrival-order rule, not a claim of total kernel ordering between the two pipes. One byte-bounded consumer pauses both pipes at 256 KiB and resumes them below 128 KiB.
 9. Relay writes every accepted redacted segment to both the live Actions log and `${RUNNER_TEMP}/agent-relay-console.log`. The workflow uploads that file as the existing `agent-relay-output` artifact after the Codex step, including when execution fails.
 10. `finalize.sh` validates the branch and commit message, checks the diff, commits, and pushes through a temporary askpass helper. Codex receives no GitHub token.
 
@@ -161,13 +161,21 @@ The launcher and runtime:
 
 ## Codex output contract
 
-Raw Codex JSONL is an internal protocol and is never copied directly to the job log or artifact. Relay validates complete JSON records across arbitrary byte chunks, normalizes supported item lifecycles by item identifier, bounds unknown-event notices, and labels stderr as process diagnostics. Events from stdout and stderr enter one queue in callback arrival order.
+Raw Codex JSONL is an internal protocol and is never copied directly to the job log or artifact. Relay validates complete JSON records across arbitrary byte chunks, normalizes supported item lifecycles by item identifier, bounds unknown-event notices, and labels stderr as process diagnostics. The separate JSONL protocol budget defaults to `max(16 MiB, 8 * MAX_OUTPUT_BYTES + 1 MiB)`: the factor of eight covers worst-case JSON string escaping plus envelope headroom. `MAX_JSONL_RECORD_BYTES` may explicitly set a value from 1 MiB through the 256 MiB hard ceiling. Complete and unfinished records over that budget fail independently from transcript truncation.
 
-Normalization happens before streaming redaction and `MAX_OUTPUT_BYTES` accounting. Relay owns one fan-out, so successful live output and the uploaded transcript contain byte-identical normalized content. When the normalized redacted byte budget is exhausted, Relay writes the accepted prefix and one `[OUTPUT TRUNCATED]` marker to both sinks, continues draining both child pipes, and represents a later timeout or nonzero exit through the step status. The fixed marker is a reserved terminal notice outside the configured ordinary-output budget.
+Every normalized physical line begins with the fixed Relay-owned `[codex] ` prefix. CRLF, bare CR, and LF are canonicalized as line boundaries, including empty continuation lines, and unsafe C0 controls and DEL are visibly encoded. This structural rule applies uniformly to model messages, reasoning, commands, patches, todos, warnings, errors, unknown notices, and stderr; Relay does not depend on a list of known GitHub workflow commands.
+
+Normalization happens before streaming redaction and `MAX_OUTPUT_BYTES` accounting. Normalized queue segments are at most 32 KiB on UTF-8 boundaries. The single consumer pauses both child pipes when pending normalized bytes reach 256 KiB, resumes only below 128 KiB, waits for the live Writable callback and `drain` after backpressure, and does not consume a segment until both live and transcript writes settle. On parser, normalizer, or sink failure, Relay retains the first failure, terminates the process group, and drains/discards both pipes through close.
+
+Relay owns one fan-out, so successful live output and the uploaded transcript contain byte-identical normalized content. When the normalized redacted byte budget is exhausted, Relay writes the accepted prefix and one `[OUTPUT TRUNCATED]` marker to both sinks, clears lifecycle state, and stops normalizing ordinary events. It continues bounded stderr line framing and syntax/size/UTF-8 validation of JSONL records while draining both pipes, so malformed transport still fails without retaining lifecycle content. A later timeout or nonzero exit remains authoritative. The fixed marker is a reserved terminal notice outside the configured ordinary-output budget.
+
+An unfinished stderr line is emitted in labeled continuation chunks with a 16 KiB framing bound. Active cumulative command, reasoning, message, and patch state retains only JavaScript string length and a SHA-256 digest of the prior UTF-8 prefix. Active items are capped at 1,024, file identities per active file-change item are capped at 1,024, and completed-item and event replay identities use deterministic 4,096-entry eviction. Completion releases active state immediately.
 
 The Actions job log remains live while Codex runs. The `agent-relay-output` artifact becomes available only after the later upload step and contains the same Relay transcript. Relay validates that the workflow-provided transcript is a new non-symlink path below `RUNNER_TEMP`, then flushes and closes it before returning. Transcript create, write, flush, or close failures fail the Codex step, including when Codex itself exits successfully.
 
 `GITHUB_OUTPUT` remains restricted to workflow values such as `commit_message`; execution logs never use that channel. No public API, request contract, installation argument, routing, result-semantic, commit-ownership, or finalization-decision change is part of this output contract.
+
+Pre-merge tests execute the branch implementation with real Node streams and controlled child processes. The pull-request Codex workflow itself invokes the trusted deployed runtime, so it cannot prove that an unmerged checkout supplies the active transport. A real Codex transport smoke is post-merge and post-deployment evidence only.
 
 ## Validation contract
 

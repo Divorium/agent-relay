@@ -4,9 +4,11 @@ import { chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CodexEventNormalizer } from "../src/execution/codex-normalizer.js";
-import { DiagnosticLineParser, JsonlParser, type JsonRecord } from "../src/execution/jsonl-parser.js";
+import { DiagnosticLineParser, deriveJsonlRecordBytes, JsonlParser, type JsonRecord } from "../src/execution/jsonl-parser.js";
 import { createTranscriptSink, RedactedFanout, TRUNCATION_MARKER, type TranscriptSink } from "../src/execution/transcript.js";
 import { CodexExecutionError } from "../src/execution/errors.js";
+import { renderRelayLines, splitNormalizedSegments } from "../src/execution/output-renderer.js";
+import { BoundedOutputPump } from "../src/execution/output-pump.js";
 
 function parseChunks(chunks: Uint8Array[], max?: number): JsonRecord[] {
   const records: JsonRecord[] = [];
@@ -43,6 +45,16 @@ test("JSONL parser validates final records, sizes, objects and UTF-8", () => {
   assert.throws(() => invalidEnd.end(), /invalid UTF-8/u);
 });
 
+test("JSONL protocol budget accepts installed-version cumulative records above 1 MiB", () => {
+  const aggregate = "x".repeat(1_200_000);
+  const record = `${JSON.stringify({ type: "item.updated", item: { id: "large", type: "command_execution", command: "large", aggregated_output: aggregate, status: "in_progress", exit_code: null } })}\n`;
+  assert.equal(parseChunks(bytes(record))[0]?.type, "item.updated");
+  assert.ok(deriveJsonlRecordBytes(10_000_000) > Buffer.byteLength(record));
+  assert.throws(() => parseChunks(bytes(record), 1_100_000), /record exceeds 1100000 bytes/u);
+  assert.throws(() => deriveJsonlRecordBytes(40_000_000), /JSONL budget/u);
+  for (const invalid of [0, Number.NaN, 268_435_457]) assert.throws(() => new JsonlParser(() => undefined, invalid), /MAX_JSONL_RECORD_BYTES/u);
+});
+
 test("stderr diagnostics preserve line framing and reject invalid UTF-8", () => {
   const lines: string[] = [];
   const parser = new DiagnosticLineParser((line) => lines.push(line));
@@ -54,6 +66,36 @@ test("stderr diagnostics preserve line framing and reject invalid UTF-8", () => 
   const invalidEnd = new DiagnosticLineParser(() => undefined);
   invalidEnd.write(Uint8Array.from([0xe2]));
   assert.throws(() => invalidEnd.end(), /stderr UTF-8/u);
+  for (const invalid of [-1, 3, Number.NaN]) assert.throws(() => new DiagnosticLineParser(() => undefined, invalid), /maxLineBytes/u);
+});
+
+test("stderr diagnostics incrementally frame a multi-megabyte unfinished UTF-8 line", () => {
+  const chunks: Array<{ value: string; continuation: boolean }> = [];
+  const parser = new DiagnosticLineParser((value, continuation) => chunks.push({ value, continuation }), 1024);
+  const input = Buffer.from(`start-${"🧪".repeat(600_000)}-end`);
+  for (let offset = 0; offset < input.length; offset += 997) parser.write(input.subarray(offset, offset + 997));
+  parser.end();
+  assert.equal(chunks.map(({ value }) => value).join(""), input.toString("utf8"));
+  assert.ok(chunks.some(({ continuation }) => continuation));
+  assert.ok(chunks.every(({ value }) => Buffer.byteLength(value) <= 1024));
+  assert.ok(parser.maximumPendingBytes <= 2048);
+  assert.equal(parser.pendingBytes, 0);
+});
+
+test("renderer structurally neutralizes workflow commands on every physical line", () => {
+  const rendered = renderRelayLines("first\r\n::add-mask::secret\r::warning::bad\n\n::error::bad\n::stop-commands::token\u0000\t\u007f");
+  const lines = rendered.split("\n");
+  assert.ok(lines.every((line) => line.startsWith("[codex] ")));
+  assert.ok(lines.every((line) => !line.startsWith("::")));
+  assert.match(rendered, /\\u0000\\u0009\\u007f/u);
+  assert.doesNotMatch(rendered, /\r/u);
+  assert.ok(splitNormalizedSegments(`[codex] ${"🧪".repeat(20_000)}`).every((segment) => Buffer.byteLength(segment) <= 32 * 1024));
+  assert.deepEqual(splitNormalizedSegments(""), []);
+  assert.deepEqual(splitNormalizedSegments("ascii", 5), ["ascii"]);
+  assert.deepEqual(splitNormalizedSegments("A🧪", 4), ["A", "🧪"]);
+  assert.throws(() => splitNormalizedSegments("value", 3), /at least 4/u);
+  assert.throws(() => splitNormalizedSegments("value", Number.NaN), /at least 4/u);
+  for (const boundary of ["\n", "\r", "\r\n"]) assert.equal(renderRelayLines(`trailing${boundary}`), "[codex] trailing\n");
 });
 
 test("normalizer renders installed event lifecycles incrementally", async () => {
@@ -123,6 +165,42 @@ test("normalizer renders errors, todos, terminal failure and bounded unknown var
   assert.match(bounded, /EVENT CONTENT TRUNCATED/u);
 });
 
+test("all untrusted normalizer categories use Actions-safe physical lines", () => {
+  const injection = "safe\n::add-mask::x\r::warning::x\r\n::error::x\n::stop-commands::x";
+  const events: JsonRecord[] = [
+    { type: "warning", message: injection },
+    { type: "error", message: injection },
+    { type: "turn.failed", error: { message: injection } },
+    { type: "item.completed", item: { id: "command", type: "command_execution", command: injection, aggregated_output: injection, status: injection, exit_code: 0 } },
+    { type: "item.completed", item: { id: "file", type: "file_change", changes: [{ path: injection, kind: "update", patch: injection }], status: injection } },
+    { type: "item.completed", item: { id: "message", type: "agent_message", text: injection } },
+    { type: "item.completed", item: { id: "reasoning", type: "reasoning", text: injection } },
+    { type: "item.completed", item: { id: "todo", type: "todo_list", items: [{ text: injection, completed: false }] } },
+    { type: `unknown-${injection}` },
+  ];
+  const normalizer = new CodexEventNormalizer();
+  const output = [...events.flatMap((event) => normalizer.normalize(event)), normalizer.diagnostic(injection), normalizer.diagnostic(injection, true)].join("");
+  assert.ok(output.split("\n").filter(Boolean).every((line) => line.startsWith("[codex] ")));
+  assert.ok(output.split("\n").every((line) => !line.startsWith("::")));
+});
+
+test("normalizer bounds lifecycle replay state and releases cumulative payloads", () => {
+  const normalizer = new CodexEventNormalizer();
+  for (let index = 0; index < 5_000; index += 1) {
+    const id = String(index);
+    normalizer.normalize({ type: "item.completed", item: { id: `c-${id}`, type: "command_execution", command: "cmd", aggregated_output: `payload-${id}`, status: "completed", exit_code: 0 } });
+    normalizer.normalize({ type: "item.completed", item: { id: `m-${id}`, type: "agent_message", text: `same-${id}` } });
+    normalizer.normalize({ type: "item.completed", item: { id: `r-${id}`, type: "reasoning", text: `reason-${id}` } });
+    normalizer.normalize({ type: "item.completed", item: { id: `f-${id}`, type: "file_change", changes: [{ path: `${id}.txt`, kind: "add", patch: `patch-${id}` }], status: "completed" } });
+    normalizer.normalize({ type: "warning", id: `w-${id}`, message: "warning" });
+  }
+  assert.deepEqual(normalizer.retainedState(), { activeItems: 0, completedItems: 4096, eventIds: 4096, fileChanges: 0 });
+  normalizer.normalize({ type: "item.started", item: { id: "active", type: "file_change", changes: [{ path: "active.txt", kind: "add", patch: "x" }], status: "in_progress" } });
+  assert.deepEqual(normalizer.retainedState(), { activeItems: 1, completedItems: 4096, eventIds: 4096, fileChanges: 1 });
+  normalizer.clearLifecycleState();
+  assert.deepEqual(normalizer.retainedState(), { activeItems: 0, completedItems: 0, eventIds: 0, fileChanges: 0 });
+});
+
 test("normalizer rejects unsafe lifecycle and malformed known events", () => {
   const normalize = (events: JsonRecord[]): void => { const n = new CodexEventNormalizer(); for (const event of events) n.normalize(event); };
   const item = (stage: string, value: JsonRecord): JsonRecord => ({ type: `item.${stage}`, item: value });
@@ -130,11 +208,21 @@ test("normalizer rejects unsafe lifecycle and malformed known events", () => {
   for (const events of [
     [item("updated", command("x"))],
     [item("started", command("x")), item("updated", command("different"))],
+    [item("started", command("longer")), item("updated", command("x"))],
     [item("completed", command("")), item("completed", command(""))],
     [item("started", command("")), item("updated", { ...command(""), type: "reasoning", text: "" })],
     [item("started", { id: "f", type: "file_change", changes: [{ path: "x", kind: "update", patch: "abc" }], status: "in_progress" }), item("updated", { id: "f", type: "file_change", changes: [{ path: "x", kind: "update", patch: "zzz" }], status: "in_progress" })],
     [item("started", { id: "r", type: "reasoning", text: "abc" }), item("updated", { id: "r", type: "reasoning", text: "zzz" })],
   ]) assert.throws(() => normalize(events), /Unsafe Codex event lifecycle/u);
+  const diffNormalizer = new CodexEventNormalizer();
+  assert.match(diffNormalizer.normalize(item("completed", { id: "diff", type: "file_change", changes: [{ path: "x", kind: "update", diff: "diff text" }], status: "completed" })).join(""), /diff text/u);
+  assert.deepEqual(new CodexEventNormalizer().normalize(item("completed", { id: "empty", type: "agent_message", text: "" })), []);
+  const tooManyActive = new CodexEventNormalizer();
+  for (let index = 0; index < 1_024; index += 1) tooManyActive.normalize(item("started", { id: String(index), type: "reasoning", text: "" }));
+  assert.throws(() => tooManyActive.normalize(item("started", { id: "overflow", type: "reasoning", text: "" })), /active item limit/u);
+  const tooManyFiles = new CodexEventNormalizer();
+  const changes = Array.from({ length: 1_025 }, (_, index) => ({ path: `${index}.txt`, kind: "add", patch: "" }));
+  assert.throws(() => tooManyFiles.normalize(item("started", { id: "files", type: "file_change", changes, status: "in_progress" })), /file change limit/u);
   for (const event of [
     {}, { type: "turn.failed", error: [] }, { type: "turn.completed", usage: { input_tokens: "bad", cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 } },
     { type: "turn.completed", usage: { input_tokens: Number.NaN, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 } },
@@ -155,6 +243,40 @@ class MemoryTranscript implements TranscriptSink {
   text(): string { return Buffer.concat(this.chunks).toString("utf8"); }
 }
 
+class ControlledWritable {
+  readonly chunks: Uint8Array[] = [];
+  private readonly listeners = new Map<string, Array<(...args: any[]) => void>>();
+  private callbacks: Array<(error?: Error | null) => void> = [];
+  queuedBytes = 0;
+  maximumQueuedBytes = 0;
+  write(data: Uint8Array, callback?: (error?: Error | null) => void): boolean {
+    const copy = Buffer.from(data);
+    this.chunks.push(copy);
+    this.queuedBytes += copy.length;
+    this.maximumQueuedBytes = Math.max(this.maximumQueuedBytes, this.queuedBytes);
+    if (callback) this.callbacks.push(callback);
+    return false;
+  }
+  once(event: string, listener: (...args: any[]) => void): void {
+    this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
+  }
+  removeListener(event: string, listener: (...args: any[]) => void): void {
+    this.listeners.set(event, (this.listeners.get(event) ?? []).filter((candidate) => candidate !== listener));
+  }
+  release(): void {
+    const callbacks = this.callbacks;
+    this.callbacks = [];
+    this.queuedBytes = 0;
+    for (const callback of callbacks) callback();
+    this.emit("drain");
+  }
+  emit(event: string, ...args: any[]): void {
+    const listeners = this.listeners.get(event) ?? [];
+    this.listeners.delete(event);
+    for (const listener of listeners) listener(...args);
+  }
+}
+
 test("fanout redacts once and writes byte-identical live and transcript bytes", async () => {
   const live: Uint8Array[] = [];
   const transcript = new MemoryTranscript();
@@ -168,6 +290,97 @@ test("fanout redacts once and writes byte-identical live and transcript bytes", 
   assert.match(liveText, /\[REDACTED\]/u);
   assert.equal(transcript.synced, true);
   assert.equal(transcript.closed, true);
+});
+
+test("bounded pump pauses fast sources and waits for Writable callback and drain", async () => {
+  const live = new ControlledWritable();
+  const transcript = new MemoryTranscript();
+  const fanout = new RedactedFanout(live, transcript, 100_000);
+  let paused = false;
+  let pauseCount = 0;
+  let resumeCount = 0;
+  const source = { pause() { paused = true; pauseCount += 1; }, resume() { paused = false; resumeCount += 1; } };
+  const failures: unknown[] = [];
+  const pump = new BoundedOutputPump(fanout, [source], (error) => failures.push(error), () => undefined, 1024, 512, 256);
+  for (let index = 0; index < 20 && !paused; index += 1) pump.enqueue([`${"x".repeat(250)}\n`]);
+  assert.equal(paused, true);
+  assert.equal(pauseCount, 1);
+  assert.ok(pump.maximumQueuedBytes <= 1024 + 256);
+  assert.equal(transcript.text().length, 251, "transcript write starts, but the segment is not consumed");
+  while (live.queuedBytes > 0 || pump.pendingBytes > 0) {
+    live.release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  await pump.finish();
+  await fanout.finish();
+  assert.deepEqual(failures, []);
+  assert.ok(resumeCount >= 1);
+  assert.equal(Buffer.concat(live.chunks).toString("utf8"), transcript.text());
+  assert.ok(live.maximumQueuedBytes <= 256);
+});
+
+test("live Writable error and premature close fail fan-out", async () => {
+  for (const event of ["error", "close"] as const) {
+    const live = new ControlledWritable();
+    const fanout = new RedactedFanout(live, new MemoryTranscript(), 1000);
+    const writing = fanout.write("value\n");
+    live.emit(event, ...(event === "error" ? [new Error("live failed")] : []));
+    await assert.rejects(() => writing, event === "error" ? /live failed/u : /closed/u);
+    live.release();
+    await assert.rejects(() => fanout.finish(), /transcript failed/u);
+  }
+});
+
+test("live Writable close after a completed write still fails finish", async () => {
+  const live = new ControlledWritable();
+  const fanout = new RedactedFanout(live, new MemoryTranscript(), 1000);
+  const writing = fanout.write("value\n");
+  live.release();
+  await writing;
+  live.emit("close");
+  await assert.rejects(() => fanout.finish(), /closed prematurely/u);
+});
+
+test("live Writable synchronous, callback and unsupported-backpressure failures are retained", async () => {
+  const liveSinks = [
+    { write() { throw new Error("sync live failure"); } },
+    { write(_data: Uint8Array, callback?: (error?: Error | null) => void) { callback?.(new Error("callback live failure")); return true; } },
+    { write() { return false; } },
+    { destroyed: true, write() { return true; } },
+    { writableEnded: true, write() { return true; } },
+  ];
+  for (const live of liveSinks) {
+    const fanout = new RedactedFanout(live, new MemoryTranscript(), 1000);
+    await assert.rejects(() => fanout.write("value\n"));
+    await assert.rejects(() => fanout.finish(), /transcript failed/u);
+  }
+});
+
+test("bounded pump retains its first sink failure and discards queued output", async () => {
+  const failures: unknown[] = [];
+  const fanout = new RedactedFanout({ write: () => true }, new MemoryTranscript("write"), 1000);
+  const pump = new BoundedOutputPump(fanout, [], (error) => failures.push(error), () => undefined, 128, 64, 32);
+  pump.enqueue(["first\n", "second\n"]);
+  await pump.finish();
+  assert.equal(failures.length, 1);
+  assert.equal(pump.pendingBytes, 0);
+  pump.enqueue(["ignored\n"]);
+  pump.discard();
+  await assert.rejects(() => fanout.finish(), /write failed/u);
+});
+
+test("bounded pump validates both watermarks and splits queued values", async () => {
+  const fanout = new RedactedFanout({ write: () => true }, new MemoryTranscript(), 1000);
+  for (const watermarks of [[128, -1], [64, 64]] as const) {
+    assert.throws(() => new BoundedOutputPump(fanout, [], () => undefined, () => undefined, watermarks[0], watermarks[1], 32), /watermarks/u);
+  }
+  let pauses = 0;
+  const source = { pause() { pauses += 1; }, resume() {} };
+  const pump = new BoundedOutputPump(fanout, [source], () => undefined, () => undefined, 40, 20, 16);
+  pump.enqueue(["x".repeat(100) + "\n"]);
+  await pump.finish();
+  assert.equal(pauses, 1);
+  await fanout.finish();
 });
 
 test("fanout emits one identical truncation marker and still closes", async () => {
@@ -192,7 +405,8 @@ test("fanout reports transcript write, flush and close failures", async () => {
   for (const failure of ["write", "sync", "close"] as const) {
     const transcript = new MemoryTranscript(failure);
     const fanout = new RedactedFanout({ write: () => true }, transcript, 100);
-    await fanout.write("value\n");
+    if (failure === "write") await assert.rejects(() => fanout.write("value\n"), /write failed/u);
+    else await fanout.write("value\n");
     await assert.rejects(() => fanout.finish(), (error: unknown) => error instanceof CodexExecutionError && /transcript failed/u.test(error.message));
     assert.equal(transcript.closed, failure !== "close");
   }
@@ -202,11 +416,11 @@ test("fanout reports transcript write, flush and close failures", async () => {
     async close() { throw new Error("close failed"); },
   };
   const fanout = new RedactedFanout({ write: () => true }, allFailures, 100);
-  await fanout.write("value\n");
-  await fanout.write("ignored\n");
+  await assert.rejects(() => fanout.write("value\n"), /write string/u);
+  await assert.rejects(() => fanout.write("ignored\n"), /write string/u);
   await assert.rejects(() => fanout.finish(), /write string/u);
   const partialFailure = new RedactedFanout({ write: () => true }, new MemoryTranscript("write"), 2);
-  await partialFailure.write("long\n");
+  await assert.rejects(() => partialFailure.write("long\n"), /write failed/u);
   await assert.rejects(() => partialFailure.finish(), /write failed/u);
 });
 

@@ -3,7 +3,8 @@ import { join, resolve } from "node:path";
 import { buildCodexPrompt } from "./prompt.js";
 import { CodexExecutionError } from "./errors.js";
 import { CodexEventNormalizer } from "./codex-normalizer.js";
-import { DiagnosticLineParser, JsonlParser } from "./jsonl-parser.js";
+import { DiagnosticLineParser, deriveJsonlRecordBytes, JsonlParser } from "./jsonl-parser.js";
+import { BoundedOutputPump } from "./output-pump.js";
 import { RedactedFanout, type TranscriptSink } from "./transcript.js";
 
 export interface ExecutionOutcome { exitCode: number; }
@@ -83,6 +84,7 @@ export class CodexExecutor {
     private readonly runtimeRoot: string,
     private readonly trustedRuntimeRoot: string,
     private readonly forceKillDelayMs = 5_000,
+    private readonly maxJsonlRecordBytes = deriveJsonlRecordBytes(maxOutputBytes),
   ) {}
 
   async run(planPath: string, workspace: string, transcript: TranscriptSink = discardingTranscript): Promise<ExecutionOutcome> {
@@ -99,21 +101,41 @@ export class CodexExecutor {
     );
     const normalizer = new CodexEventNormalizer();
     const fanout = new RedactedFanout(process.stdout, transcript, this.maxOutputBytes);
-    let queue = Promise.resolve();
-    let streamError: unknown;
-    const enqueue = (segments: string[]): void => {
-      for (const segment of segments) queue = queue.then(() => fanout.write(segment));
+    let firstFailure: unknown;
+    let discardOutput = false;
+    let drainOnly = false;
+    const fail = (error: unknown): void => {
+      firstFailure ??= error;
+      discardOutput = true;
+      drainOnly = true;
+      pump.discard();
+      terminateProcess(child, "SIGTERM");
     };
-    const stdout = new JsonlParser((event) => enqueue(normalizer.normalize(event)));
-    const stderr = new DiagnosticLineParser((diagnostic) => enqueue([normalizer.diagnostic(diagnostic)]));
+    const pump = new BoundedOutputPump(
+      fanout,
+      [child.stdout, child.stderr],
+      fail,
+      () => {
+        discardOutput = true;
+        normalizer.clearLifecycleState();
+      },
+    );
+    const stdout = new JsonlParser((event) => {
+      if (!discardOutput) for (const value of normalizer.normalize(event)) pump.enqueue([value]);
+    }, this.maxJsonlRecordBytes);
+    const stderr = new DiagnosticLineParser((diagnostic, continuation) => {
+      if (!discardOutput) pump.enqueue([normalizer.diagnostic(diagnostic, continuation)]);
+    });
     child.stdout.on("data", (chunk: Uint8Array) => {
-      if (streamError) return;
-      try { stdout.write(chunk); } catch (error) { streamError = error; }
+      if (drainOnly) return;
+      try { stdout.write(chunk); } catch (error) { fail(error); }
     });
     child.stderr.on("data", (chunk: Uint8Array) => {
-      if (streamError) return;
-      try { stderr.write(chunk); } catch (error) { streamError = error; }
+      if (drainOnly) return;
+      try { stderr.write(chunk); } catch (error) { fail(error); }
     });
+    child.stdout.on("error", fail);
+    child.stderr.on("error", fail);
 
     let timedOut = false;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
@@ -137,18 +159,18 @@ export class CodexExecutor {
       });
     });
 
-    if (!streamError) {
+    if (firstFailure === undefined) {
       try {
         stdout.end();
         stderr.end();
       } catch (error) {
-        streamError = error;
+        fail(error);
       }
     }
-    await queue;
-    await fanout.finish();
+    await pump.finish();
+    try { await fanout.finish(); } catch (error) { firstFailure ??= error; }
     if (startupError) throw startupError;
-    if (streamError) throw streamError;
+    if (firstFailure !== undefined) throw firstFailure;
     if (timedOut) throw new CodexExecutionError("CODEX_TIMEOUT", "Codex execution timed out");
     if (exitCode !== 0) throw new CodexExecutionError("CODEX_FAILED", `Codex exited with code ${exitCode}`);
     return { exitCode };

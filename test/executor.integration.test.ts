@@ -203,6 +203,7 @@ test("CodexExecutor discards chunks received after the output limit", async () =
   await writeFile(executable, `#!/bin/sh
 printf '%s\\n' '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"abcdefghijklmnopqrstuvwxyz"}}'
 /bin/sleep 0.05
+printf '%s\\n' '{"type":"turn.started"}'
 printf overflow >&2
 printf drained > "${drained}"
 `, { mode: 0o700 });
@@ -216,6 +217,22 @@ printf drained > "${drained}"
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("CodexExecutor retains bounded syntax framing after transcript truncation", async () => {
+  const { root, workspace, home, runtimeRoot } = await createRoot("syntax-after-limit");
+  const executable = join(root, "invalid-after-limit");
+  await writeFile(executable, `#!/bin/sh
+printf '%s\\n' '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"abcdefghijklmnopqrstuvwxyz"}}'
+printf '%s\\n' '{invalid'
+`, { mode: 0o700 });
+  await chmod(executable, 0o700);
+  try {
+    await assert.rejects(
+      () => new CodexExecutor(executable, 5_000, 8, home, runtimeRoot, "/srv/source").run(planPath, workspace),
+      /Invalid Codex JSONL/u,
+    );
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("CodexExecutor exposes live ordered progress before exit and persists identical bytes", async () => {
@@ -249,9 +266,47 @@ printf '%s\n' '{"type":"item.completed","item":{"id":"item_0","type":"command_ex
   }
 });
 
+test("CodexExecutor accepts a cumulative Codex record larger than 1 MiB", async () => {
+  const { root, workspace, home, runtimeRoot } = await createRoot("large-record");
+  const executable = join(root, "large-codex");
+  await writeFile(executable, `#!/usr/bin/node
+const item = { id: "large", type: "command_execution", command: "large", aggregated_output: "x".repeat(1_200_000), status: "completed", exit_code: 0 };
+process.stdout.write(JSON.stringify({ type: "item.completed", item }) + "\\n");
+`, { mode: 0o700 });
+  await chmod(executable, 0o700);
+  try {
+    const output = await captureStdout(async () => {
+      await new CodexExecutor(executable, 5_000, 100_000, home, runtimeRoot, "/srv/source").run(planPath, workspace);
+    });
+    assert.match(output, /command output:/u);
+    assert.match(output, /EVENT CONTENT TRUNCATED/u);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("CodexExecutor bounds and labels multi-megabyte no-newline stderr", async () => {
+  const { root, workspace, home, runtimeRoot } = await createRoot("large-stderr");
+  const executable = join(root, "diagnostic-codex");
+  await writeFile(executable, `#!/usr/bin/node
+process.stderr.write("🧪".repeat(600_000));
+`, { mode: 0o700 });
+  await chmod(executable, 0o700);
+  const transcriptPath = join(root, "large-stderr.log");
+  const transcript = await createTranscriptSink(root, transcriptPath);
+  try {
+    const output = await captureStdout(async () => {
+      await new CodexExecutor(executable, 5_000, 4_000_000, home, runtimeRoot, "/srv/source").run(planPath, workspace, transcript);
+    });
+    assert.equal(output, await readFile(transcriptPath, "utf8"));
+    assert.match(output, /stderr continuation:/u);
+    assert.doesNotMatch(output, /�/u);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("CodexExecutor fails malformed stdout, invalid stderr and invalid final UTF-8", async () => {
   for (const [name, body, message] of [
-    ["malformed", "printf '%s\\n' '{'; /bin/sleep 0.02; printf '%s\\n' '{}'; printf diagnostic >&2", "Invalid Codex JSONL"],
+    ["malformed", `trap 'printf '%s\\n' '{"type":"turn.started"}'; printf later >&2; exit 0' TERM
+printf '%s\\n' '{'
+while true; do /bin/sleep 1; done`, "Invalid Codex JSONL"],
     ["stderr", "printf '\\377' >&2", "stderr UTF-8"],
     ["final-utf8", "printf '\\342'", "Invalid Codex JSONL"],
   ] as const) {
@@ -272,5 +327,41 @@ test("CodexExecutor preserves nonzero failure after truncation", async () => {
   await chmod(executable, 0o700);
   try {
     await assert.rejects(() => new CodexExecutor(executable, 5_000, 4, home, runtimeRoot, "/srv/source").run(planPath, workspace), /exited with code 7/u);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("CodexExecutor terminates after a transcript sink failure", async () => {
+  const { root, workspace, home, runtimeRoot } = await createRoot("sink-failure");
+  const executable = join(root, "streaming-codex");
+  await writeFile(executable, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"turn.started\"}'\n/bin/sleep 5\n", { mode: 0o700 });
+  await chmod(executable, 0o700);
+  const transcript = {
+    async write() { throw new Error("sink failed"); },
+    async sync() {},
+    async close() {},
+  };
+  try {
+    await assert.rejects(
+      () => new CodexExecutor(executable, 5_000, 100_000, home, runtimeRoot, "/srv/source").run(planPath, workspace, transcript),
+      /Codex transcript failed: sink failed/u,
+    );
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("CodexExecutor reports a transcript finalization failure", async () => {
+  const { root, workspace, home, runtimeRoot } = await createRoot("sink-finalization");
+  const executable = join(root, "quiet-codex");
+  await writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  await chmod(executable, 0o700);
+  const transcript = {
+    async write() {},
+    async sync() { throw new Error("sync failed"); },
+    async close() {},
+  };
+  try {
+    await assert.rejects(
+      () => new CodexExecutor(executable, 5_000, 100_000, home, runtimeRoot, "/srv/source").run(planPath, workspace, transcript),
+      /Codex transcript failed: sync failed/u,
+    );
   } finally { await rm(root, { recursive: true, force: true }); }
 });

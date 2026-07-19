@@ -10,7 +10,7 @@ import { CodexExecutionError } from "../src/execution/errors.js";
 
 const ENVIRONMENT_NAMES = [
   "GITHUB_WORKSPACE", "GITHUB_OUTPUT", "CODEX_PLAN_PATH", "CODEX_WORKSPACE_ROOT",
-  "CODEX_TIMEOUT_MS", "MAX_OUTPUT_BYTES", "HOME", "RUNNER_TEMP", "CODEX_TRANSCRIPT_PATH",
+  "CODEX_TIMEOUT_MS", "MAX_OUTPUT_BYTES", "MAX_JSONL_RECORD_BYTES", "HOME", "RUNNER_TEMP", "CODEX_TRANSCRIPT_PATH",
 ] as const;
 
 async function createFixture(name: string) {
@@ -120,6 +120,12 @@ test("direct CLI rejects invalid limits and symlink plans before execution", asy
       await assert.rejects(() => main(executable),
         (error: unknown) => error instanceof CodexExecutionError && error.code === "INVALID_CONFIGURATION");
     });
+    for (const MAX_JSONL_RECORD_BYTES of ["100", "268435457"]) {
+      await withEnvironment({ ...fixtureEnvironment(fixture), MAX_JSONL_RECORD_BYTES }, async () => {
+        await assert.rejects(() => main(executable),
+          (error: unknown) => error instanceof CodexExecutionError && error.code === "INVALID_CONFIGURATION");
+      });
+    }
     await rm(join(fixture.workspace, fixture.planPath));
     await symlink(join(fixture.completed, "missing.md"), join(fixture.workspace, fixture.planPath));
     await withEnvironment(fixtureEnvironment(fixture), async () => {

@@ -1,15 +1,24 @@
 import { CodexExecutionError } from "./errors.js";
 import type { JsonRecord } from "./jsonl-parser.js";
+import { createHash } from "node:crypto";
+import { renderRelayLines } from "./output-renderer.js";
+
+interface CumulativeState {
+  length: number;
+  digest: string;
+}
 
 interface ItemState {
   type: string;
-  commandOutput: string;
-  text: string;
-  changes: Map<string, string>;
-  completed: boolean;
+  commandOutput: CumulativeState;
+  text: CumulativeState;
+  changes: Map<string, CumulativeState>;
 }
 
 const MAX_TEXT = 16_384;
+const MAX_ACTIVE_ITEMS = 1_024;
+const MAX_FILE_CHANGES_PER_ITEM = 1_024;
+const MAX_REPLAY_IDENTITIES = 4_096;
 
 function record(value: unknown, name: string): JsonRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw unsafe(`${name} must be an object`);
@@ -33,7 +42,7 @@ function bounded(value: string): string {
 
 function line(label: string, value = ""): string {
   const suffix = value ? ` ${bounded(value)}` : "";
-  return `[codex] ${label}${suffix}\n`;
+  return `${renderRelayLines(`${label}${suffix}`)}\n`;
 }
 
 function unsafe(detail: string): CodexExecutionError {
@@ -42,7 +51,20 @@ function unsafe(detail: string): CodexExecutionError {
 
 export class CodexEventNormalizer {
   private readonly items = new Map<string, ItemState>();
-  private readonly eventIds = new Set<string>();
+  private readonly completedItems = new BoundedIdentitySet(MAX_REPLAY_IDENTITIES);
+  private readonly eventIds = new BoundedIdentitySet(MAX_REPLAY_IDENTITIES);
+
+  clearLifecycleState(): void {
+    this.items.clear();
+    this.completedItems.clear();
+    this.eventIds.clear();
+  }
+
+  retainedState(): { activeItems: number; completedItems: number; eventIds: number; fileChanges: number } {
+    let fileChanges = 0;
+    for (const state of this.items.values()) fileChanges += state.changes.size;
+    return { activeItems: this.items.size, completedItems: this.completedItems.size, eventIds: this.eventIds.size, fileChanges };
+  }
 
   normalize(event: JsonRecord): string[] {
     const type = string(event.type, "event.type");
@@ -68,8 +90,8 @@ export class CodexEventNormalizer {
     }
   }
 
-  diagnostic(value: string): string {
-    return line("stderr:", value);
+  diagnostic(value: string, continuation = false): string {
+    return line(continuation ? "stderr continuation:" : "stderr:", value);
   }
 
   private turnCompleted(event: JsonRecord): string {
@@ -99,13 +121,15 @@ export class CodexEventNormalizer {
 
   private item(stage: "started" | "updated" | "completed", item: JsonRecord): string[] {
     const id = string(item.id, "item.id");
+    const itemKey = digest(id);
     const type = string(item.type, "item.type");
-    const existing = this.items.get(id);
+    const existing = this.items.get(itemKey);
     if (existing && existing.type !== type) throw unsafe(`item ${id} changed type`);
-    if (existing?.completed) throw unsafe(`item ${id} received ${stage} after completion`);
+    if (this.completedItems.has(id)) throw unsafe(`item ${id} received ${stage} after completion`);
     if (!existing && stage === "updated") throw unsafe(`item ${id} was updated before start`);
-    const state = existing ?? { type, commandOutput: "", text: "", changes: new Map<string, string>(), completed: false };
-    this.items.set(id, state);
+    if (!existing && this.items.size >= MAX_ACTIVE_ITEMS) throw unsafe(`active item limit of ${MAX_ACTIVE_ITEMS} exceeded`);
+    const state = existing ?? { type, commandOutput: cumulative(""), text: cumulative(""), changes: new Map<string, CumulativeState>() };
+    this.items.set(itemKey, state);
     let output: string[];
     switch (type) {
       case "command_execution": output = this.command(stage, item, state); break;
@@ -116,7 +140,10 @@ export class CodexEventNormalizer {
       case "todo_list": output = this.todo(stage, item); break;
       default: output = [line("unknown item:", bounded(type.slice(0, 200)))];
     }
-    if (stage === "completed") state.completed = true;
+    if (stage === "completed") {
+      this.items.delete(itemKey);
+      this.completedItems.add(id);
+    }
     return output;
   }
 
@@ -125,10 +152,10 @@ export class CodexEventNormalizer {
     const aggregate = optionalString(item.aggregated_output, "command.aggregated_output") ?? "";
     const output: string[] = [];
     if (stage === "started") output.push(line("command started:", command));
-    if (!aggregate.startsWith(state.commandOutput)) throw unsafe(`command ${string(item.id, "item.id")} output was not cumulative`);
+    verifyCumulative(aggregate, state.commandOutput, `command ${string(item.id, "item.id")} output`);
     const delta = aggregate.slice(state.commandOutput.length);
     if (delta) output.push(line("command output:", delta));
-    state.commandOutput = aggregate;
+    state.commandOutput = cumulative(aggregate);
     if (stage === "completed") {
       const status = string(item.status, "command.status");
       const exitCode = item.exit_code === null || item.exit_code === undefined ? "none" : String(this.number(item.exit_code, "command.exit_code"));
@@ -144,14 +171,16 @@ export class CodexEventNormalizer {
       const change = record(value, "file_change.change");
       const path = string(change.path, "file_change.path");
       const kind = string(change.kind, "file_change.kind");
-      const key = `${kind}\u0000${path}`;
+      const key = digest(`${kind}\u0000${path}`);
       const patch = optionalString(change.patch ?? change.diff, "file_change.patch") ?? "";
       const previous = state.changes.get(key);
-      if (previous === undefined) output.push(line(`file ${kind}:`, path));
-      else if (!patch.startsWith(previous)) throw unsafe(`file change ${path} patch was not cumulative`);
+      if (previous === undefined) {
+        if (state.changes.size >= MAX_FILE_CHANGES_PER_ITEM) throw unsafe(`file change limit of ${MAX_FILE_CHANGES_PER_ITEM} exceeded`);
+        output.push(line(`file ${kind}:`, path));
+      } else verifyCumulative(patch, previous, `file change ${path} patch`);
       const delta = patch.slice(previous?.length ?? 0);
       if (delta) output.push(line("patch:", delta));
-      state.changes.set(key, patch);
+      state.changes.set(key, cumulative(patch));
     }
     if (stage === "completed") output.push(line("file changes completed:", string(item.status, "file_change.status")));
     return output;
@@ -159,9 +188,9 @@ export class CodexEventNormalizer {
 
   private textItem(stage: "started" | "updated" | "completed", item: JsonRecord, state: ItemState, label: string, finalOnly: boolean): string[] {
     const text = string(item.text, `${item.type}.text`);
-    if (!text.startsWith(state.text)) throw unsafe(`item ${string(item.id, "item.id")} text was not cumulative`);
+    verifyCumulative(text, state.text, `item ${string(item.id, "item.id")} text`);
     const delta = text.slice(state.text.length);
-    state.text = text;
+    state.text = cumulative(text);
     if (finalOnly) return stage === "completed" && text ? [line(label, text)] : [];
     return delta ? [line(label, delta)] : [];
   }
@@ -179,4 +208,29 @@ export class CodexEventNormalizer {
     }).join("; ");
     return [line(`todo ${stage}:`, summary)];
   }
+}
+
+function cumulative(value: string): CumulativeState {
+  return { length: value.length, digest: digest(value) };
+}
+
+function digest(value: string): string { return createHash("sha256").update(value, "utf8").digest("hex"); }
+
+function verifyCumulative(value: string, previous: CumulativeState, name: string): void {
+  if (value.length < previous.length || cumulative(value.slice(0, previous.length)).digest !== previous.digest) {
+    throw unsafe(`${name} was not cumulative`);
+  }
+}
+
+class BoundedIdentitySet {
+  private readonly values = new Set<string>();
+  constructor(private readonly limit: number) {}
+  get size(): number { return this.values.size; }
+  has(value: string): boolean { return this.values.has(digest(value)); }
+  add(value: string): void {
+    const key = digest(value);
+    this.values.add(key);
+    if (this.values.size > this.limit) this.values.delete(this.values.values().next().value as string);
+  }
+  clear(): void { this.values.clear(); }
 }

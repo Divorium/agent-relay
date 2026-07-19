@@ -153,12 +153,33 @@ No plan-level blocker remains. The plan is ready for implementation.
 - [x] Performed third independent review against current Node.js process and stream contracts.
 - [x] Identified the paused-current-source and missing forced-escalation defect.
 - [x] Completed plan review; no plan-level blocker remains.
-- [ ] Add terminal-path regression tests.
-- [ ] Implement shared idempotent termination escalation.
-- [ ] Release current and queued paused sources exactly once.
-- [ ] Preserve first-failure and finalization ordering.
-- [ ] Pass exact-SHA full CI.
-- [ ] Complete final independent code review.
+- [x] Add terminal-path regression tests.
+- [x] Implement shared idempotent termination escalation.
+- [x] Release current and queued paused sources exactly once.
+- [x] Preserve first-failure and finalization ordering.
+- [ ] [blocked] Pass exact-SHA full CI. The implementation is still an uncommitted runner worktree by design, so no final SHA exists yet; PR #35 CI success is for baseline `1746fbc6564aeb10e08cc6cf41313d490556f842`, not these changes. Local `npm run check` also cannot complete in this sandbox because `scripts/toolchain-smoke.sh` and the system integration scripts create directories under policy-denied `/tmp`. Unblock when the existing finalizer commits and pushes these changes and the normal self-hosted `test` job succeeds on that exact SHA.
+- [x] Complete final independent code review.
+
+## Surprises & discoveries
+
+- Independent review found that a post-spawn child `error` was still treated as a startup failure and closure. The executor now distinguishes the `spawn` event from later errors and waits for `close` before cancelling escalation.
+- Independent review also found that malformed trailing JSON discovered after forced timeout could replace `CODEX_TIMEOUT`. Timeout now enters the same first-terminal-failure path, so chronological precedence is retained.
+- The local sandbox denies `/tmp`. `npm run check` reaches `check:runtime` and fails at its hard-coded `/tmp` default; setting `RUNNER_TEMP` allows runtime validation, but the toolchain smoke and system integration scripts themselves use `/tmp` explicitly.
+
+## Decision log
+
+- Use a private termination controller in `codex-executor.ts` rather than adding a constructor injection or public API. Regression tests observe and forward real process-group signals around production executor paths.
+- Schedule forced escalation before requesting graceful termination, contain signalling exceptions, and clear escalation only on genuine startup failure or child `close`. This preserves the semantic failure even when signalling synchronously errors.
+- Treat timeout as a first terminal failure through the shared failure path. Later parser, stream, sink, and finalization failures cannot replace it.
+
+## Validation evidence
+
+- `npm run typecheck && npm run build && node --test --test-concurrency=1 dist/test/executor.integration.test.js dist/test/codex-output.test.js`: 56 tests passed.
+- `npm test`: 124 tests passed with 100% line, branch, and function coverage.
+- `RUNNER_TEMP=... npm run check:runtime`, `npm run check:shell`, and `npm run check:node-scripts`: passed.
+- `RUNNER_TEMP=... npm run check:toolchain`: verified the configured toolchain, then failed when `scripts/toolchain-smoke.sh` attempted `mktemp -d /tmp/agent-relay-smoke.XXXXXX`; this is the recorded sandbox blocker, not acceptance evidence.
+- Final independent re-review: no unresolved P1/P2 issue in source release, drain mode, escalation, timeout/error precedence, or finalization ordering.
+- GitHub PR #35 baseline SHA `1746fbc6564aeb10e08cc6cf41313d490556f842`: self-hosted `test` and `validate` concluded `success`; excluded from final acceptance because the implementation is not in that SHA.
 
 ## Outcomes and retrospective
 

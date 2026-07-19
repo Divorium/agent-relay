@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CodexExecutor, createCodexArgs, createCodexEnvironment, terminateProcess } from "../src/execution/codex-executor.js";
 import { CodexExecutionError } from "../src/execution/errors.js";
-import { createTranscriptSink } from "../src/execution/transcript.js";
+import { createTranscriptSink, type TranscriptSink } from "../src/execution/transcript.js";
 
 const planPath = "docs/exec-plans/active/plan.md";
 
@@ -35,6 +35,44 @@ async function captureStdout(run: () => Promise<void>): Promise<string> {
     return output;
   } finally {
     process.stdout.write = original;
+  }
+}
+
+async function captureGroupSignals(run: () => Promise<void>): Promise<Array<[number, string]>> {
+  const originalKill = process.kill;
+  const signals: Array<[number, string]> = [];
+  process.kill = ((pid: number, signal?: string | number) => {
+    if (typeof signal === "string") signals.push([pid, signal]);
+    return originalKill(pid, signal);
+  }) as typeof process.kill;
+  try {
+    await run();
+    return signals;
+  } finally {
+    process.kill = originalKill;
+  }
+}
+
+async function withThrowingTermination(run: () => Promise<void>): Promise<void> {
+  const childProcess = await import("node:child_process") as unknown as {
+    ChildProcess: { prototype: { kill(signal?: string | number): boolean; emit(event: string, error: Error): boolean } };
+  };
+  const originalGroupKill = process.kill;
+  const originalDirectKill = childProcess.ChildProcess.prototype.kill;
+  process.kill = ((pid: number, signal?: string | number) => {
+    originalGroupKill(pid, signal);
+    throw new Error("group termination reported failure");
+  }) as typeof process.kill;
+  childProcess.ChildProcess.prototype.kill = function (signal?: string | number): boolean {
+    originalDirectKill.call(this, signal);
+    this.emit("error", new Error("post-spawn termination error"));
+    throw new Error("direct termination reported failure");
+  };
+  try {
+    await run();
+  } finally {
+    process.kill = originalGroupKill;
+    childProcess.ChildProcess.prototype.kill = originalDirectKill;
   }
 }
 
@@ -175,7 +213,7 @@ test("terminateProcess handles direct, grouped and fallback termination", () => 
 test("CodexExecutor force-kills a process that ignores termination", async () => {
   const { root, workspace, home, runtimeRoot } = await createRoot("force-kill");
   const executable = join(root, "stubborn-codex");
-  await writeFile(executable, "#!/bin/sh\ntrap '' TERM\nwhile true; do /bin/sleep 1; done\n", { mode: 0o700 });
+  await writeFile(executable, "#!/bin/sh\ntrap '' TERM\nprintf '{'\nwhile true; do /bin/sleep 1; done\n", { mode: 0o700 });
   await chmod(executable, 0o700);
 
   const executor = new CodexExecutor(
@@ -188,13 +226,140 @@ test("CodexExecutor force-kills a process that ignores termination", async () =>
     30,
   );
   try {
-    await assert.rejects(
-      () => executor.run(planPath, workspace),
-      (error: unknown) => error instanceof CodexExecutionError && error.code === "CODEX_TIMEOUT",
-    );
+    const signals = await captureGroupSignals(async () => {
+      await assert.rejects(
+        () => executor.run(planPath, workspace),
+        (error: unknown) => error instanceof CodexExecutionError && error.code === "CODEX_TIMEOUT",
+      );
+    });
+    assert.deepEqual(signals.map(([, signal]) => signal), ["SIGTERM", "SIGKILL"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("CodexExecutor escalates malformed JSONL and retains the parser failure", { timeout: 2_000 }, async () => {
+  const { root, workspace, home, runtimeRoot } = await createRoot("invalid-force-kill");
+  const executable = join(root, "stubborn-invalid-codex");
+  await writeFile(executable, `#!/usr/bin/node
+process.on("SIGTERM", () => {});
+process.stdout.write("{invalid\\n");
+setInterval(() => {}, 1000);
+`, { mode: 0o700 });
+  await chmod(executable, 0o700);
+  try {
+    const signals = await captureGroupSignals(async () => {
+      await assert.rejects(
+        () => new CodexExecutor(executable, 5_000, 100_000, home, runtimeRoot, "/srv/source", 30).run(planPath, workspace),
+        /Invalid Codex JSONL/u,
+      );
+    });
+    assert.deepEqual(signals.map(([, signal]) => signal), ["SIGTERM", "SIGKILL"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("CodexExecutor escalates transcript failure and retains the transcript error", { timeout: 2_000 }, async () => {
+  const { root, workspace, home, runtimeRoot } = await createRoot("transcript-force-kill");
+  const executable = join(root, "stubborn-transcript-codex");
+  await writeFile(executable, `#!/usr/bin/node
+process.on("SIGTERM", () => {});
+process.stdout.write('{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"value"}}\\n');
+setInterval(() => {}, 1000);
+`, { mode: 0o700 });
+  await chmod(executable, 0o700);
+  let syncs = 0;
+  let closes = 0;
+  const transcript: TranscriptSink = {
+    async write() { throw new Error("planned transcript write failure"); },
+    async sync() { syncs += 1; },
+    async close() { closes += 1; },
+  };
+  try {
+    const signals = await captureGroupSignals(async () => {
+      await assert.rejects(
+        () => new CodexExecutor(executable, 5_000, 100_000, home, runtimeRoot, "/srv/source", 30).run(planPath, workspace, transcript),
+        /planned transcript write failure/u,
+      );
+    });
+    assert.deepEqual(signals.map(([, signal]) => signal), ["SIGTERM", "SIGKILL"]);
+    assert.equal(syncs, 1);
+    assert.equal(closes, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("CodexExecutor coalesces concurrent terminal failures into one escalation", { timeout: 2_000 }, async () => {
+  const { root, workspace, home, runtimeRoot } = await createRoot("coalesced-failures");
+  const executable = join(root, "many-failures-codex");
+  await writeFile(executable, `#!/usr/bin/node
+process.on("SIGTERM", () => {});
+process.stdout.write('{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"value"}}\\n');
+setTimeout(() => {
+  process.stdout.write("{invalid\\n");
+  process.stderr.write(Buffer.from([0xff]));
+}, 10);
+setInterval(() => {}, 1000);
+`, { mode: 0o700 });
+  await chmod(executable, 0o700);
+  let writes = 0;
+  const transcript: TranscriptSink = {
+    async write() {
+      writes += 1;
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+      throw new Error("concurrent sink failure");
+    },
+    async sync() { throw new Error("later sync failure"); },
+    async close() { throw new Error("later close failure"); },
+  };
+  try {
+    const signals = await captureGroupSignals(async () => {
+      await assert.rejects(
+        () => new CodexExecutor(executable, 5_000, 100_000, home, runtimeRoot, "/srv/source", 30).run(planPath, workspace, transcript),
+        /Invalid Codex JSONL|stderr is not valid UTF-8/u,
+      );
+    });
+    assert.deepEqual(signals.map(([, signal]) => signal), ["SIGTERM", "SIGKILL"]);
+    assert.equal(writes, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("CodexExecutor cancels escalation when the child closes after graceful termination", { timeout: 2_000 }, async () => {
+  const { root, workspace, home, runtimeRoot } = await createRoot("graceful-close");
+  const executable = join(root, "graceful-invalid-codex");
+  await writeFile(executable, `#!/usr/bin/node
+process.on("SIGTERM", () => process.exit(0));
+process.stdout.write("{invalid\\n");
+setInterval(() => {}, 1000);
+`, { mode: 0o700 });
+  await chmod(executable, 0o700);
+  try {
+    const signals = await captureGroupSignals(async () => {
+      await assert.rejects(
+        () => new CodexExecutor(executable, 5_000, 100_000, home, runtimeRoot, "/srv/source", 100).run(planPath, workspace),
+        /Invalid Codex JSONL/u,
+      );
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 150));
+    });
+    assert.deepEqual(signals.map(([, signal]) => signal), ["SIGTERM"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("CodexExecutor does not replace a parser failure with termination errors", { timeout: 2_000 }, async () => {
+  const { root, workspace, home, runtimeRoot } = await createRoot("termination-errors");
+  const executable = join(root, "invalid-codex");
+  await writeFile(executable, `#!/usr/bin/node
+process.on("SIGTERM", () => process.exit(0));
+process.stdout.write("{invalid\\n");
+setInterval(() => {}, 1000);
+`, { mode: 0o700 });
+  await chmod(executable, 0o700);
+  try {
+    await withThrowingTermination(async () => {
+      await assert.rejects(
+        () => new CodexExecutor(executable, 5_000, 100_000, home, runtimeRoot, "/srv/source", 100).run(planPath, workspace),
+        /Invalid Codex JSONL/u,
+      );
+    });
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("CodexExecutor discards chunks received after the output limit", async () => {

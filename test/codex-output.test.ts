@@ -495,6 +495,7 @@ test("tagged raw admission releases queued sources and retains its processing fa
   const finishing = input.finish();
   release();
   await finishing;
+  assert.equal(first.resumes, 1);
   assert.equal(second.resumes, 1);
   assert.match(String(failures[0]), /raw processing failed/u);
   input.accept(first, Buffer.from("ignored"));
@@ -502,6 +503,22 @@ test("tagged raw admission releases queued sources and retains its processing fa
   await input.finish();
   output.discard();
   await output.waitUntilLow();
+  await fanout.finish();
+});
+
+test("tagged raw admission releases its current source exactly once after processing fails", async () => {
+  const fanout = new RedactedFanout(immediateLive(), new MemoryTranscript(), 1000);
+  const output = new BoundedOutputPump(fanout, () => undefined, () => undefined, 128, 64, 32);
+  const failures: unknown[] = [];
+  const source = { pauses: 0, resumes: 0, pause() { this.pauses += 1; }, resume() { this.resumes += 1; } };
+  const input = new OrderedInputPump(output, async () => { throw new Error("current processing failed"); }, (error) => failures.push(error));
+  input.accept(source, Buffer.from("current"));
+  await input.finish();
+  input.discard();
+  assert.equal(source.pauses, 1);
+  assert.equal(source.resumes, 1);
+  assert.match(String(failures[0]), /current processing failed/u);
+  output.discard();
   await fanout.finish();
 });
 

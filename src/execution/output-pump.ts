@@ -124,11 +124,12 @@ export class BoundedOutputPump {
   }
 }
 
-interface RawInput { source: PausableSource; chunk: Uint8Array; }
+interface RawInput { source: PausableSource; chunk: Uint8Array; released: boolean; }
 
 /** Serializes stdout/stderr callback arrival while retaining at most one chunk per paused source. */
 export class OrderedInputPump {
   private readonly queue: RawInput[] = [];
+  private current: RawInput | undefined;
   private consuming = false;
   private stopped = false;
   private waiters: Array<() => void> = [];
@@ -142,13 +143,14 @@ export class OrderedInputPump {
   accept(source: PausableSource, chunk: Uint8Array): void {
     if (this.stopped) return;
     source.pause();
-    this.queue.push({ source, chunk });
+    this.queue.push({ source, chunk, released: false });
     this.startConsumer();
   }
 
   discard(): void {
     this.stopped = true;
-    for (const input of this.queue) input.source.resume();
+    if (this.current) this.release(this.current);
+    for (const input of this.queue) this.release(input);
     this.queue.length = 0;
     this.resolveIfIdle();
   }
@@ -169,17 +171,26 @@ export class OrderedInputPump {
       while (!this.stopped) {
         const input = this.queue.shift();
         if (!input) break;
+        this.current = input;
         await this.processChunk(input.source, input.chunk);
         await this.output.waitUntilLow();
-        input.source.resume();
+        this.release(input);
+        this.current = undefined;
       }
     } catch (error) {
       this.discard();
       this.onFailure(error);
     } finally {
+      this.current = undefined;
       this.consuming = false;
       this.resolveIfIdle();
     }
+  }
+
+  private release(input: RawInput): void {
+    if (input.released) return;
+    input.released = true;
+    input.source.resume();
   }
 
   private resolveIfIdle(): void {

@@ -148,7 +148,7 @@ docker_debian_secure_path() {
   if [[ "${kind}" == directory ]]; then
     [[ -d "${path}" && ! -L "${path}" ]] || return 1
   else
-    [[ -f "${path}" && ! -L "${path}" && -r "${path}" ]] || return 1
+    [[ -f "${path}" && ! -L "${path}" ]] || return 1
   fi
   [[ "$(/usr/bin/readlink -f -- "${path}")" == "${path}" ]] || return 1
   metadata="$(/usr/bin/stat -c '%u:%g|%a' -- "${path}")" || return 1
@@ -163,15 +163,22 @@ docker_debian_mode_has_other_bit() {
   (( (8#${mode} & bit) == bit ))
 }
 
-docker_debian_apt_key_secure() {
-  local key="$1" directory
-  [[ "${key}" == /etc/apt/keyrings/docker.asc || "${key}" == /etc/apt/keyrings/docker.gpg ]] || return 1
-  docker_debian_secure_path "${key}" file || return 1
-  docker_debian_mode_has_other_bit "${key}" 4 || return 1
-  for directory in /etc /etc/apt /etc/apt/keyrings; do
+docker_debian_readable_file_secure() {
+  local path="$1" directory
+  docker_debian_secure_path "${path}" file || return 1
+  docker_debian_mode_has_other_bit "${path}" 4 || return 1
+  directory="$(/usr/bin/dirname -- "${path}")"
+  while [[ "${directory}" != / ]]; do
     docker_debian_secure_path "${directory}" directory || return 1
     docker_debian_mode_has_other_bit "${directory}" 1 || return 1
+    directory="$(/usr/bin/dirname -- "${directory}")"
   done
+}
+
+docker_debian_apt_key_secure() {
+  local key="$1"
+  [[ "${key}" == /etc/apt/keyrings/docker.asc || "${key}" == /etc/apt/keyrings/docker.gpg ]] || return 1
+  docker_debian_readable_file_secure "${key}"
 }
 
 docker_debian_repository_records_acceptable() {
@@ -190,7 +197,7 @@ docker_debian_repository_records_acceptable() {
 }
 
 docker_debian_inspect_repository_definitions() {
-  local records=${DOCKER_HOST_STATE_ROOT}/repository-definitions.txt path output listing status
+  local records=${DOCKER_HOST_STATE_ROOT}/repository-definitions.txt path output listing status record
   local -a sources=()
   : > "${records}"
   for path in /etc /etc/apt /etc/apt/sources.list.d; do
@@ -208,7 +215,7 @@ docker_debian_inspect_repository_definitions() {
     while IFS= read -r -d '' path; do sources+=("${path}"); done < "${listing}"
   fi
   for path in "${sources[@]}"; do
-    docker_debian_secure_path "${path}" file || docker_host_fail repository "Unsafe apt source file: ${path}"
+    docker_debian_readable_file_secure "${path}" || docker_host_fail repository "Unsafe or unreadable apt source file: ${path}"
     if [[ "${path}" == *.sources ]]; then
       output="$(docker_debian_parse_deb822_source "${path}")"
     else
@@ -234,8 +241,8 @@ docker_debian_primary_fingerprint_from_colons() {
     $1=="sub" {if(pubs!=1 || waiting!="" || primary=="") bad=1; waiting="sub"; next}
     $1=="fpr" {
       value=toupper($10)
-      if(value=="" || value !~ /^[0-9A-F]+$/) bad=1
-      if(waiting=="pub") {if(primary!="" || length(value)!=40) bad=1; primary=value; waiting=""; next}
+      if(length(value)!=40 || value !~ /^[0-9A-F]+$/) bad=1
+      if(waiting=="pub") {if(primary!="") bad=1; primary=value; waiting=""; next}
       if(waiting=="sub") {waiting=""; next}
       bad=1; next
     }
@@ -265,28 +272,68 @@ docker_debian_published_key_valid() {
   docker_debian_apt_key_secure "${key}" && docker_debian_key_bytes_valid "${key}"
 }
 
+docker_debian_staged_key_valid() {
+  local key="$1"
+  [[ "${key}" == "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" ]] || return 1
+  docker_debian_readable_file_secure "${key}" && docker_debian_key_bytes_valid "${key}"
+}
+
 docker_debian_managed_source_valid() {
   local source="$1" expected=${DOCKER_HOST_STATE_ROOT}/expected-docker.sources
-  docker_debian_secure_path "${source}" file || return 1
-  docker_debian_mode_has_other_bit "${source}" 4 || return 1
+  [[ "${source}" == "${DOCKER_DEBIAN_MANAGED_SOURCE}" || "${source}" == "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}" ]] || return 1
+  docker_debian_readable_file_secure "${source}" || return 1
   docker_debian_repository_content > "${expected}"
   /usr/bin/cmp -s -- "${expected}" "${source}"
 }
 
-docker_debian_reserved_stage_reset() {
-  local path="$1"
-  [[ ! -e "${path}" ]] && return 0
-  docker_debian_secure_path "${path}" file \
-    || docker_host_fail repository "Unsafe content occupies managed temporary path: ${path}"
-  /usr/bin/rm -f -- "${path}"
+docker_debian_prepare_repository_directories() {
+  local directory
+  for directory in /etc/apt/keyrings /etc/apt/sources.list.d; do
+    if [[ -e "${directory}" ]]; then
+      docker_debian_secure_path "${directory}" directory \
+        || docker_host_fail repository "Unsafe managed apt directory: ${directory}"
+      docker_debian_mode_has_other_bit "${directory}" 1 \
+        || docker_host_fail repository "Managed apt directory is not traversable by apt: ${directory}"
+    else
+      /usr/bin/install -d -o root -g root -m 0755 "${directory}"
+    fi
+  done
+}
+
+docker_debian_recover_key_stage() {
+  [[ ! -e "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" ]] && return 0
+  docker_debian_staged_key_valid "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" \
+    || docker_host_fail repository "Managed Docker key staging file is unsafe or unexpected"
+  if [[ -e "${DOCKER_DEBIAN_MANAGED_KEY}" ]]; then
+    docker_debian_published_key_valid "${DOCKER_DEBIAN_MANAGED_KEY}" \
+      || docker_host_fail repository "Managed Docker signing key is unsafe or unexpected"
+    /usr/bin/rm -f -- "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}"
+  else
+    /usr/bin/mv -T -- "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" "${DOCKER_DEBIAN_MANAGED_KEY}"
+    DOCKER_DEBIAN_REPOSITORY_CHANGED=1
+  fi
+}
+
+docker_debian_recover_source_stage() {
+  [[ ! -e "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}" ]] && return 0
+  docker_debian_managed_source_valid "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}" \
+    || docker_host_fail repository "Managed Docker source staging file is unsafe or unexpected"
+  if [[ -e "${DOCKER_DEBIAN_MANAGED_SOURCE}" ]]; then
+    docker_debian_managed_source_valid "${DOCKER_DEBIAN_MANAGED_SOURCE}" \
+      || docker_host_fail repository "Managed Docker source definition is unsafe or unexpected"
+    /usr/bin/rm -f -- "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}"
+  else
+    /usr/bin/mv -T -- "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}" "${DOCKER_DEBIAN_MANAGED_SOURCE}"
+    DOCKER_DEBIAN_REPOSITORY_CHANGED=1
+  fi
 }
 
 docker_debian_publish_key() {
   local source="$1"
-  [[ ! -e "${DOCKER_DEBIAN_MANAGED_KEY}" ]] || docker_host_fail repository "Managed Docker key path is already occupied"
-  docker_debian_reserved_stage_reset "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}"
+  [[ ! -e "${DOCKER_DEBIAN_MANAGED_KEY}" && ! -e "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" ]] \
+    || docker_host_fail repository "Managed Docker key paths are already occupied"
   /usr/bin/install -o root -g root -m 0644 "${source}" "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}"
-  docker_debian_published_key_valid "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" \
+  docker_debian_staged_key_valid "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" \
     || docker_host_fail repository "Staged Docker signing key is invalid"
   /usr/bin/mv -T -- "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" "${DOCKER_DEBIAN_MANAGED_KEY}"
   DOCKER_DEBIAN_REPOSITORY_CHANGED=1
@@ -294,9 +341,9 @@ docker_debian_publish_key() {
 
 docker_debian_publish_source() {
   local source=${DOCKER_HOST_STATE_ROOT}/docker.sources
-  [[ ! -e "${DOCKER_DEBIAN_MANAGED_SOURCE}" ]] || docker_host_fail repository "Managed Docker source path is already occupied"
+  [[ ! -e "${DOCKER_DEBIAN_MANAGED_SOURCE}" && ! -e "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}" ]] \
+    || docker_host_fail repository "Managed Docker source paths are already occupied"
   docker_debian_repository_content > "${source}"
-  docker_debian_reserved_stage_reset "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}"
   /usr/bin/install -o root -g root -m 0644 "${source}" "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}"
   docker_debian_managed_source_valid "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}" \
     || docker_host_fail repository "Staged Docker source definition is invalid"
@@ -314,13 +361,34 @@ docker_debian_download_key() {
 }
 
 docker_debian_ensure_repository() {
-  local managed_key=0 managed_source=0 downloaded_key
+  local managed_key=0 managed_source=0 downloaded_key external_source=0
   DOCKER_DEBIAN_REPOSITORY_CHANGED=0
-  /usr/bin/install -d -o root -g root -m 0755 /etc/apt/keyrings /etc/apt/sources.list.d
   docker_debian_inspect_repository_definitions
+  if (( DOCKER_DEBIAN_REPOSITORY_DEFINITION_COUNT == 1 )) \
+    && [[ "${DOCKER_DEBIAN_REPOSITORY_SOURCE_PATH}" != "${DOCKER_DEBIAN_MANAGED_SOURCE}" ]]; then
+    external_source=1
+  fi
+
+  if (( external_source == 1 )); then
+    [[ ! -e "${DOCKER_DEBIAN_MANAGED_SOURCE}" \
+      && ! -e "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" \
+      && ! -e "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}" ]] \
+      || docker_host_fail repository "Managed Docker paths are occupied beside an external Docker source"
+    if [[ -e "${DOCKER_DEBIAN_MANAGED_KEY}" && "${DOCKER_DEBIAN_REPOSITORY_KEY_PATH}" != "${DOCKER_DEBIAN_MANAGED_KEY}" ]]; then
+      docker_host_fail repository "An unreferenced managed Docker key path is occupied beside an external source"
+    fi
+    docker_debian_published_key_valid "${DOCKER_DEBIAN_REPOSITORY_KEY_PATH}" \
+      || docker_host_fail repository "The configured Docker signing key is missing, unreadable, unsafe, or unexpected"
+    return
+  fi
+
+  docker_debian_prepare_repository_directories
+  docker_debian_recover_key_stage
+  docker_debian_recover_source_stage
+  docker_debian_inspect_repository_definitions
+
   [[ ! -e "${DOCKER_DEBIAN_MANAGED_KEY}" ]] || managed_key=1
   [[ ! -e "${DOCKER_DEBIAN_MANAGED_SOURCE}" ]] || managed_source=1
-
   if (( managed_key == 1 )); then
     docker_debian_published_key_valid "${DOCKER_DEBIAN_MANAGED_KEY}" \
       || docker_host_fail repository "Managed Docker signing key is unsafe or unexpected"
@@ -329,25 +397,13 @@ docker_debian_ensure_repository() {
     docker_debian_managed_source_valid "${DOCKER_DEBIAN_MANAGED_SOURCE}" \
       || docker_host_fail repository "Managed Docker source definition is unsafe or unexpected"
   fi
-
-  if (( DOCKER_DEBIAN_REPOSITORY_DEFINITION_COUNT == 1 )) && [[ "${DOCKER_DEBIAN_REPOSITORY_SOURCE_PATH}" != "${DOCKER_DEBIAN_MANAGED_SOURCE}" ]]; then
-    (( managed_source == 0 )) || docker_host_fail repository "A managed source conflicts with an external Docker source"
-    [[ ! -e "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" && ! -e "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}" ]] \
-      || docker_host_fail repository "Managed temporary paths are occupied beside an external Docker source"
-    docker_debian_published_key_valid "${DOCKER_DEBIAN_REPOSITORY_KEY_PATH}" \
-      || docker_host_fail repository "The configured Docker signing key is missing, unreadable, unsafe, or unexpected"
-    return
-  fi
-
   if (( DOCKER_DEBIAN_REPOSITORY_DEFINITION_COUNT == 1 )); then
-    [[ "${DOCKER_DEBIAN_REPOSITORY_SOURCE_PATH}" == "${DOCKER_DEBIAN_MANAGED_SOURCE}" && "${DOCKER_DEBIAN_REPOSITORY_KEY_PATH}" == "${DOCKER_DEBIAN_MANAGED_KEY}" ]] \
+    [[ "${DOCKER_DEBIAN_REPOSITORY_SOURCE_PATH}" == "${DOCKER_DEBIAN_MANAGED_SOURCE}" \
+      && "${DOCKER_DEBIAN_REPOSITORY_KEY_PATH}" == "${DOCKER_DEBIAN_MANAGED_KEY}" ]] \
       || docker_host_fail repository "The managed Docker source is ambiguous"
   elif (( managed_source == 1 )); then
     docker_host_fail repository "Managed Docker source was not recognized as the exact active definition"
   fi
-
-  docker_debian_reserved_stage_reset "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}"
-  docker_debian_reserved_stage_reset "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}"
 
   if (( managed_key == 0 )); then
     downloaded_key="$(docker_debian_download_key)"
@@ -358,7 +414,8 @@ docker_debian_ensure_repository() {
     docker_debian_publish_source
     managed_source=1
   fi
-  (( managed_key == 1 && managed_source == 1 )) || docker_host_fail repository "Managed Docker repository publication is incomplete"
+  (( managed_key == 1 && managed_source == 1 )) \
+    || docker_host_fail repository "Managed Docker repository publication is incomplete"
 }
 
 docker_debian_candidate_is_unambiguously_official() {

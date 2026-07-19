@@ -67,9 +67,11 @@ Three independent review passes identified and corrected:
 
 No unresolved P1 or P2 defect remains in the reviewed branch implementation.
 
-## Operational boundary
+## Merge and operational gates
 
-The pull-request Codex workflow executes the trusted deployed runtime under `/srv/github-runner/storage/agent-relay/runner`, not executor code from the PR checkout. Pre-merge acceptance is therefore based on exact-SHA self-hosted CI and production integration tests.
+The pull-request Codex workflow executes the trusted deployed runtime under `/srv/github-runner/storage/agent-relay/runner`, not executor code from the PR checkout. Pre-merge acceptance therefore depends on the repository's normal self-hosted CI check succeeding on the exact PR head that contains this completed plan.
+
+The PR must not merge while that check is absent, pending, or failing. This transient check state is intentionally recorded by GitHub rather than by another documentation commit that would create a new unvalidated head.
 
 After merge, run the standard `./update.sh` deployment and then perform one operational Codex smoke run to confirm live normalized output and the bounded artifact on the deployed runtime.
 
@@ -84,5 +86,5 @@ After merge, run the standard `./update.sh` deployment and then perform one oper
 - [x] Idempotent terminal escalation and paused-source release implemented.
 - [x] Production-path regression tests added.
 - [x] Independent review found no unresolved P1/P2 issue.
-- [ ] Exact final squashed SHA CI must pass before merge.
-- [ ] Post-deployment real Codex smoke must run after merge and `./update.sh`.
+- Pre-merge gate: GitHub CI on the exact PR head must be `success`.
+- Post-merge gate: deploy with `./update.sh` and run one real Codex smoke workflow.

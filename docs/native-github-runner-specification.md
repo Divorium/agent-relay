@@ -136,9 +136,10 @@ The workflow is `.github/workflows/codex.yml` and processes one request as follo
 4. `resolve-plan.mjs` requires exactly one added or modified active ExecPlan for a pull request, or validates the explicit dispatch path.
 5. The validation job runs `npm ci` and `npm run check` before Codex execution.
 6. `run-codex.mjs` calls the compiled direct runtime.
-7. `CodexExecutor` canonicalizes the selected workspace and invokes `scripts/codex-run` with timeout, process-group termination, output limits, streaming redaction, and filesystem/network permissions.
-8. Standard output and standard error pass through `tee` into `${RUNNER_TEMP}/agent-relay-console.log`, which is uploaded as the existing `agent-relay-output` artifact.
-9. `finalize.sh` validates the branch and commit message, checks the diff, commits, and pushes through a temporary askpass helper. Codex receives no GitHub token.
+7. `CodexExecutor` canonicalizes the selected workspace and invokes `scripts/codex-run` with `codex exec --json`, timeout, process-group termination, normalized-output limits, streaming redaction, and filesystem/network permissions.
+8. Relay incrementally parses JSONL stdout, labels separate stderr diagnostics, and queues events in the order their pipe callbacks are observed. This is an arrival-order rule, not a claim of total kernel ordering between the two pipes.
+9. Relay writes every accepted redacted segment to both the live Actions log and `${RUNNER_TEMP}/agent-relay-console.log`. The workflow uploads that file as the existing `agent-relay-output` artifact after the Codex step, including when execution fails.
+10. `finalize.sh` validates the branch and commit message, checks the diff, commits, and pushes through a temporary askpass helper. Codex receives no GitHub token.
 
 The workflow runs only same-repository pull requests and uses `runs-on: [self-hosted]` without custom labels.
 
@@ -157,6 +158,16 @@ The launcher and runtime:
 - keep the selected repository's `.git` directory read-only;
 - enable network access and disable memories;
 - remove only their own private runtime directory.
+
+## Codex output contract
+
+Raw Codex JSONL is an internal protocol and is never copied directly to the job log or artifact. Relay validates complete JSON records across arbitrary byte chunks, normalizes supported item lifecycles by item identifier, bounds unknown-event notices, and labels stderr as process diagnostics. Events from stdout and stderr enter one queue in callback arrival order.
+
+Normalization happens before streaming redaction and `MAX_OUTPUT_BYTES` accounting. Relay owns one fan-out, so successful live output and the uploaded transcript contain byte-identical normalized content. When the normalized redacted byte budget is exhausted, Relay writes the accepted prefix and one `[OUTPUT TRUNCATED]` marker to both sinks, continues draining both child pipes, and represents a later timeout or nonzero exit through the step status. The fixed marker is a reserved terminal notice outside the configured ordinary-output budget.
+
+The Actions job log remains live while Codex runs. The `agent-relay-output` artifact becomes available only after the later upload step and contains the same Relay transcript. Relay validates that the workflow-provided transcript is a new non-symlink path below `RUNNER_TEMP`, then flushes and closes it before returning. Transcript create, write, flush, or close failures fail the Codex step, including when Codex itself exits successfully.
+
+`GITHUB_OUTPUT` remains restricted to workflow values such as `commit_message`; execution logs never use that channel. No public API, request contract, installation argument, routing, result-semantic, commit-ownership, or finalization-decision change is part of this output contract.
 
 ## Validation contract
 

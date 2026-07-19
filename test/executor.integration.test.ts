@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CodexExecutor, createCodexArgs, createCodexEnvironment, terminateProcess } from "../src/execution/codex-executor.js";
 import { CodexExecutionError } from "../src/execution/errors.js";
+import { createTranscriptSink } from "../src/execution/transcript.js";
 
 const planPath = "docs/exec-plans/active/plan.md";
 
@@ -71,6 +72,7 @@ test("Codex arguments keep the selected repository reachable while isolating nat
   assert.doesNotMatch(filesystem, /"\/work\/root"="deny"/);
   assert.ok(args.includes("permissions.agent.network.enabled=true"));
   assert.ok(!args.includes("danger-full-access"));
+  assert.deepEqual(args.slice(-5), ["exec", "--json", "--cd", "/work/root/repository", "prompt"]);
 });
 
 test("CodexExecutor streams redacted output and edits the workspace", async () => {
@@ -80,8 +82,8 @@ test("CodexExecutor streams redacted output and edits the workspace", async () =
 set -eu
 [ "\${HOME}" = "${home}" ]
 [ "\${CODEX_RUNTIME_ROOT}" = "${runtimeRoot}" ]
-printf '%s' 'authorization: Bearer github_pat_abcdefghijkl'
-printf '%s\n' 'mnopqrstuvwxyz1234567890'
+printf '%s' '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"authorization: Bearer github_pat_abcdefghijkl'
+printf '%s\n' 'mnopqrstuvwxyz1234567890"}}'
 printf 'warning\n' >&2
 printf 'changed\n' > "${workspace}/changed.txt"
 `, { mode: 0o700 });
@@ -121,6 +123,7 @@ test("CodexExecutor reports timeout after terminating the process group", async 
   await writeFile(executable, `#!/bin/sh
 set -eu
 trap 'printf terminated > "${marker}"; exit 0' TERM
+printf '%s\n' '{"type":"turn.started"}'
 while true; do /bin/sleep 1; done
 `, { mode: 0o700 });
   await chmod(executable, 0o700);
@@ -140,7 +143,7 @@ while true; do /bin/sleep 1; done
 test("CodexExecutor caps output and emits one truncation marker", async () => {
   const { root, workspace, home, runtimeRoot } = await createRoot("truncate");
   const executable = join(root, "verbose-codex");
-  await writeFile(executable, "#!/bin/sh\nprintf 'abcdefghijklmnopqrstuvwxyz\\n'\n", { mode: 0o700 });
+  await writeFile(executable, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"abcdefghijklmnopqrstuvwxyz\"}}'\n", { mode: 0o700 });
   await chmod(executable, 0o700);
 
   const executor = new CodexExecutor(executable, 5_000, 8, home, runtimeRoot, "/srv/github-runner/storage/agent-relay");
@@ -148,7 +151,7 @@ test("CodexExecutor caps output and emits one truncation marker", async () => {
     const output = await captureStdout(async () => {
       await executor.run(planPath, workspace);
     });
-    assert.equal(output, "\n[OUTPUT TRUNCATED]\n");
+    assert.equal(output, "[codex] \n[OUTPUT TRUNCATED]\n");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -196,14 +199,78 @@ test("CodexExecutor force-kills a process that ignores termination", async () =>
 test("CodexExecutor discards chunks received after the output limit", async () => {
   const { root, workspace, home, runtimeRoot } = await createRoot("limit-reached");
   const executable = join(root, "chunked-codex");
-  await writeFile(executable, "#!/bin/sh\nprintf 12345678\n/bin/sleep 0.05\nprintf overflow >&2\n", { mode: 0o700 });
+  const drained = join(root, "drained");
+  await writeFile(executable, `#!/bin/sh
+printf '%s\\n' '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"abcdefghijklmnopqrstuvwxyz"}}'
+/bin/sleep 0.05
+printf overflow >&2
+printf drained > "${drained}"
+`, { mode: 0o700 });
   await chmod(executable, 0o700);
 
   const executor = new CodexExecutor(executable, 5_000, 8, home, runtimeRoot, "/srv/github-runner/storage/agent-relay");
   try {
     const output = await captureStdout(async () => executor.run(planPath, workspace).then(() => undefined));
-    assert.equal(output, "\n[OUTPUT TRUNCATED]\n");
+    assert.equal(output, "[codex] \n[OUTPUT TRUNCATED]\n");
+    assert.equal(await readFile(drained, "utf8"), "drained");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("CodexExecutor exposes live ordered progress before exit and persists identical bytes", async () => {
+  const { root, workspace, home, runtimeRoot } = await createRoot("live");
+  const executable = join(root, "live-codex");
+  await writeFile(executable, `#!/bin/sh
+printf '%s\n' '{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"echo live","aggregated_output":"","exit_code":null,"status":"in_progress"}}'
+/bin/sleep 0.1
+printf '%s\n' 'diagnostic' >&2
+/bin/sleep 0.05
+printf '%s\n' '{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"echo live","aggregated_output":"done\\n","exit_code":0,"status":"completed"}}'
+`, { mode: 0o700 });
+  await chmod(executable, 0o700);
+  const transcriptPath = join(root, "transcript.log");
+  const transcript = await createTranscriptSink(root, transcriptPath);
+  const original = process.stdout.write;
+  let live = "";
+  let settled = false;
+  process.stdout.write = ((value: unknown) => { live += Buffer.from(value as Uint8Array).toString("utf8"); return true; }) as typeof process.stdout.write;
+  try {
+    const running = new CodexExecutor(executable, 5_000, 100_000, home, runtimeRoot, "/srv/source").run(planPath, workspace, transcript).finally(() => { settled = true; });
+    while (!live.includes("command started")) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(settled, false);
+    await running;
+    assert.equal(live, await readFile(transcriptPath, "utf8"));
+    assert.ok(live.indexOf("command started") < live.indexOf("stderr: diagnostic"));
+    assert.ok(live.indexOf("stderr: diagnostic") < live.indexOf("command output"));
+  } finally {
+    process.stdout.write = original;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("CodexExecutor fails malformed stdout, invalid stderr and invalid final UTF-8", async () => {
+  for (const [name, body, message] of [
+    ["malformed", "printf '%s\\n' '{'; /bin/sleep 0.02; printf '%s\\n' '{}'; printf diagnostic >&2", "Invalid Codex JSONL"],
+    ["stderr", "printf '\\377' >&2", "stderr UTF-8"],
+    ["final-utf8", "printf '\\342'", "Invalid Codex JSONL"],
+  ] as const) {
+    const { root, workspace, home, runtimeRoot } = await createRoot(name);
+    const executable = join(root, "bad-codex");
+    await writeFile(executable, `#!/bin/sh\n${body}\n`, { mode: 0o700 });
+    await chmod(executable, 0o700);
+    try {
+      await assert.rejects(() => new CodexExecutor(executable, 5_000, 100_000, home, runtimeRoot, "/srv/source").run(planPath, workspace), new RegExp(message, "u"));
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
+test("CodexExecutor preserves nonzero failure after truncation", async () => {
+  const { root, workspace, home, runtimeRoot } = await createRoot("nonzero-truncated");
+  const executable = join(root, "failed-codex");
+  await writeFile(executable, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"long output\"}}'\nexit 7\n", { mode: 0o700 });
+  await chmod(executable, 0o700);
+  try {
+    await assert.rejects(() => new CodexExecutor(executable, 5_000, 4, home, runtimeRoot, "/srv/source").run(planPath, workspace), /exited with code 7/u);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

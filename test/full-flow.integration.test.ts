@@ -150,7 +150,7 @@ test("a ready GitHub pull request traverses the complete runtime and invokes moc
 set -euo pipefail
 printf '%s\n' "$*" > "${codexLog}"
 printf 'after\n' > "${join(workspace, "tracked.txt")}"
-printf 'mock codex completed\n'
+printf '%s\n' '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"mock codex completed"}}'
 `, { mode: 0o700 });
     await chmod(fakeCodex, 0o700);
 
@@ -162,6 +162,8 @@ printf 'mock codex completed\n'
       HOME: runnerHome,
       CODEX_TIMEOUT_MS: "5000",
       MAX_OUTPUT_BYTES: "100000",
+      RUNNER_TEMP: root,
+      CODEX_TRANSCRIPT_PATH: join(root, "agent-relay-console.log"),
     }, async () => runCodex(fakeCodex));
 
     const codex = outputs(await readFile(codexOutput, "utf8"));

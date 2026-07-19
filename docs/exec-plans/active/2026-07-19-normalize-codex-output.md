@@ -204,15 +204,29 @@ Document that GitHub Actions logs remain live, artifacts become available after 
 - [x] Confirmed the current human-output and workflow persistence architecture.
 - [x] Confirmed Codex JSON mode emits JSONL and default mode separates final stdout from other stderr output.
 - [x] Defined normalization, lifecycle, live streaming, artifact, redaction, ordering, and truncation contracts.
-- [ ] Capture installed-version fixtures and verify event shapes.
-- [ ] Implement incremental parsing and lifecycle-aware normalization.
-- [ ] Implement one redacted live/artifact fan-out.
-- [ ] Remove workflow `tee` persistence and wire the transcript path.
-- [ ] Add repository and workflow integration tests.
-- [ ] Update documentation.
-- [ ] Run final `npm run check` after the last production edit.
-- [ ] Obtain normal CI success on the exact implementation SHA.
+- [x] Captured a sanitized representative Codex CLI 0.144.4 JSONL fixture and verified it against the exact-version `exec_events.rs` and JSONL event processor.
+- [x] Implemented incremental parsing and lifecycle-aware normalization in `src/execution/jsonl-parser.ts` and `src/execution/codex-normalizer.ts`.
+- [x] Implemented one redacted live/artifact fan-out in `src/execution/transcript.ts`.
+- [x] Removed workflow `tee` persistence and wired the validated transcript path in both workflow copies.
+- [x] Added repository and workflow integration tests, including real stream chunking, live-before-exit progress, production transcript persistence, failure paths, draining, and byte equality.
+- [x] Updated the README, technical specification, and operations guide.
+- [ ] [blocked] Run final `npm run check` after the last production edit. The command was run and all 90 tests passed with 100% line, branch, and function coverage, but this execution sandbox denies the repository checks' existing hard-coded `/tmp` directories. `RUNNER_TEMP=/srv/github-runner/storage/home/.cache/agent-relay-runtime npm run check:runtime` passes; `npm run check:shell` and `npm run check:node-scripts` pass. Impact: the complete aggregate command cannot pass in this sandbox. Unblock: run unchanged `npm run check` on the normal repository runner, where `/tmp` is writable.
+- [ ] [blocked] Obtain independent review and normal CI success on the exact implementation SHA. This workspace is on the pre-finalization detached SHA and the workflow finalizer has not yet created the implementation commit, so no exact implementation SHA exists for CI or review. Impact: the plan cannot be moved to `completed/`. Unblock: finalize the implementation commit and let the normal pull-request CI and review run on that exact SHA.
+
+## Surprises & Discoveries
+
+- The installed binary is `codex-cli 0.144.4`. A direct sample invocation from this task sandbox failed before JSONL startup because the in-process app-server could not initialize against the read-only home boundary. The checked-in sanitized fixture was therefore verified against the exact `rust-v0.144.4` exec event definitions and JSONL processor rather than copied from a successful authenticated run in this sandbox.
+- Codex CLI 0.144.4 file-change events expose `path`, `kind`, and status, but no patch body. Relay renders those exact installed fields and also handles optional cumulative `patch` or `diff` fields lifecycle-safely without treating a future upstream-main shape as an installed guarantee.
+- The repository's runtime, toolchain, and system checks normally use `/tmp`; this task's permission profile denies `/tmp`. The unit/integration suite now gives its copied toolchain smoke fixture a test-owned temporary path, while production scripts and their contracts remain unchanged.
+
+## Decision Log
+
+- Structured stdout is strict fatal-UTF-8 JSONL with a 1 MiB unfinished-record bound. Stderr is independently UTF-8 framed and labeled; neither pipe is parsed as the other.
+- Item identifiers are the only lifecycle correlation keys. Command output, optional patches, reasoning, and the final message use per-item cumulative-prefix rules; independent equal text is never globally suppressed.
+- Data callbacks enqueue normalized segments synchronously, and one promise queue preserves Relay's observed callback arrival order. This deliberately makes no total-kernel-order claim across stdout and stderr.
+- The fixed truncation marker is a reserved terminal notice outside `MAX_OUTPUT_BYTES`. Later timeout and nonzero-exit failures are represented by step status while both pipes continue draining.
+- No workflow API, public request contract, installation argument, routing, result semantics, commit ownership, finalization decision, or GitHub Actions workflow interface beyond transcript ownership changed.
 
 ## Outcomes & Retrospective
 
-Complete only after implementation, independent review, and exact-SHA CI evidence pass.
+Implementation, workflow wiring, documentation, and automated acceptance coverage are complete. `npm test` passes all 90 tests at 100% line, branch, and function coverage; the production-only runtime compile also passes when pointed at the sandbox's allowed runner-temp root. The plan remains active because the aggregate `npm run check`, independent review, and exact-implementation-SHA CI evidence are blocked as recorded above.

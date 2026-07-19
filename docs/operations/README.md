@@ -49,6 +49,12 @@ The updater does not require a clean checkout and does not run dependency instal
 sudo systemctl status actions.runner.Divorium.gh-runner.service
 ```
 
+## Codex execution output
+
+Codex progress is normalized, redacted, and streamed live in the Actions job log. After the Codex step, the workflow uploads `agent-relay-output`; its transcript contains the same bytes Relay accepted for the live log. Raw `codex exec --json` records are internal and are not an operator-facing log format. If `MAX_OUTPUT_BYTES` is reached after normalization and redaction, both views contain one `[OUTPUT TRUNCATED]` marker while Relay continues draining Codex and preserves the eventual step status.
+
+The artifact is not available until its upload step runs. `${GITHUB_OUTPUT}` carries workflow outputs such as the commit message and is not a logging channel.
+
 ## Documentation authority
 
 - `README.md`, this operations guide, the technical specification, and the current source describe implemented behavior.

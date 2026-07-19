@@ -2,11 +2,19 @@ import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 import { buildCodexPrompt } from "./prompt.js";
 import { CodexExecutionError } from "./errors.js";
-import { StreamingRedactor } from "../security/redaction.js";
+import { CodexEventNormalizer } from "./codex-normalizer.js";
+import { DiagnosticLineParser, JsonlParser } from "./jsonl-parser.js";
+import { RedactedFanout, type TranscriptSink } from "./transcript.js";
 
 export interface ExecutionOutcome { exitCode: number; }
 export interface KillableProcess { pid?: number; kill(signal: "SIGTERM" | "SIGKILL"): unknown; }
 export type ProcessGroupKiller = (pid: number, signal: "SIGTERM" | "SIGKILL") => unknown;
+
+const discardingTranscript: TranscriptSink = {
+  async write() {},
+  async sync() {},
+  async close() {},
+};
 
 function permission(path: string, access: "deny" | "read" | "write"): string {
   return `${JSON.stringify(path)}=${JSON.stringify(access)}`;
@@ -46,7 +54,7 @@ export function createCodexArgs(
     "-c", "permissions.agent.extends=\":workspace\"",
     "-c", `permissions.agent.filesystem={${entries.join(",")}}`,
     "-c", "permissions.agent.network.enabled=true",
-    "exec", "--cd", resolvedWorkspace, prompt,
+    "exec", "--json", "--cd", resolvedWorkspace, prompt,
   ];
 }
 
@@ -77,7 +85,7 @@ export class CodexExecutor {
     private readonly forceKillDelayMs = 5_000,
   ) {}
 
-  async run(planPath: string, workspace: string): Promise<ExecutionOutcome> {
+  async run(planPath: string, workspace: string, transcript: TranscriptSink = discardingTranscript): Promise<ExecutionOutcome> {
     const prompt = buildCodexPrompt(planPath);
     const child = spawn(
       this.command,
@@ -89,30 +97,28 @@ export class CodexExecutor {
         detached: true,
       },
     );
-    let outputBytes = 0;
-    let outputTruncated = false;
-    const stdoutRedactor = new StreamingRedactor();
-    const stderrRedactor = new StreamingRedactor();
-    const writeRedacted = (value: string): void => {
-      if (value) process.stdout.write(value);
+    const normalizer = new CodexEventNormalizer();
+    const fanout = new RedactedFanout(process.stdout, transcript, this.maxOutputBytes);
+    let queue = Promise.resolve();
+    let streamError: unknown;
+    const enqueue = (segments: string[]): void => {
+      for (const segment of segments) queue = queue.then(() => fanout.write(segment));
     };
-    const collect = (redactor: StreamingRedactor) => (chunk: any): void => {
-      if (outputBytes >= this.maxOutputBytes) {
-        outputTruncated = true;
-        return;
-      }
-      const remaining = this.maxOutputBytes - outputBytes;
-      const accepted = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
-      outputBytes += accepted.length;
-      if (accepted.length < chunk.length) outputTruncated = true;
-      writeRedacted(redactor.write(accepted));
-    };
-    child.stdout.on("data", collect(stdoutRedactor));
-    child.stderr.on("data", collect(stderrRedactor));
+    const stdout = new JsonlParser((event) => enqueue(normalizer.normalize(event)));
+    const stderr = new DiagnosticLineParser((diagnostic) => enqueue([normalizer.diagnostic(diagnostic)]));
+    child.stdout.on("data", (chunk: Uint8Array) => {
+      if (streamError) return;
+      try { stdout.write(chunk); } catch (error) { streamError = error; }
+    });
+    child.stderr.on("data", (chunk: Uint8Array) => {
+      if (streamError) return;
+      try { stderr.write(chunk); } catch (error) { streamError = error; }
+    });
 
     let timedOut = false;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
-    const exitCode = await new Promise<number>((resolvePromise, reject) => {
+    let startupError: CodexExecutionError | undefined;
+    const exitCode = await new Promise<number>((resolvePromise) => {
       const timeoutTimer = setTimeout(() => {
         timedOut = true;
         terminateProcess(child, "SIGTERM");
@@ -121,7 +127,8 @@ export class CodexExecutor {
       child.on("error", (error: Error) => {
         clearTimeout(timeoutTimer);
         clearTimeout(forceKillTimer);
-        reject(new CodexExecutionError("CODEX_FAILED", `Codex process could not be started: ${error.message}`));
+        startupError = new CodexExecutionError("CODEX_FAILED", `Codex process could not be started: ${error.message}`);
+        resolvePromise(1);
       });
       child.on("close", (code: number | null) => {
         clearTimeout(timeoutTimer);
@@ -130,14 +137,18 @@ export class CodexExecutor {
       });
     });
 
-    if (outputTruncated) {
-      stdoutRedactor.discard();
-      stderrRedactor.discard();
-      writeRedacted("\n[OUTPUT TRUNCATED]\n");
-    } else {
-      writeRedacted(stdoutRedactor.end());
-      writeRedacted(stderrRedactor.end());
+    if (!streamError) {
+      try {
+        stdout.end();
+        stderr.end();
+      } catch (error) {
+        streamError = error;
+      }
     }
+    await queue;
+    await fanout.finish();
+    if (startupError) throw startupError;
+    if (streamError) throw streamError;
     if (timedOut) throw new CodexExecutionError("CODEX_TIMEOUT", "Codex execution timed out");
     if (exitCode !== 0) throw new CodexExecutionError("CODEX_FAILED", `Codex exited with code ${exitCode}`);
     return { exitCode };

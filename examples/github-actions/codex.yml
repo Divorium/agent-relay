@@ -115,9 +115,8 @@ jobs:
         env:
           CODEX_PLAN_PATH: ${{ steps.plan.outputs.plan_path }}
           CODEX_WORKSPACE_ROOT: ${{ runner.workspace }}
-        run: |
-          set -o pipefail
-          node /srv/github-runner/storage/agent-relay/runner/run-codex.mjs 2>&1 | tee "${RUNNER_TEMP}/agent-relay-console.log"
+          CODEX_TRANSCRIPT_PATH: ${{ runner.temp }}/agent-relay-console.log
+        run: node /srv/github-runner/storage/agent-relay/runner/run-codex.mjs
 
       - name: Upload Agent Relay output
         if: always()

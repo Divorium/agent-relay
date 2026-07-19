@@ -38,7 +38,6 @@ test("executor exposes only native launcher context without denying the workspac
   const args = createCodexArgs(
     "/runner/_work/repository/repository",
     "task prompt",
-    "/runner/_work",
     "/home/user",
     "/home/user/.cache/runtime",
     "/srv/github-runner/storage/agent-relay",

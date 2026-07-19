@@ -180,7 +180,7 @@ The reviewed plan is implementable and internally consistent:
 - pre-merge validation does not falsely claim that the trusted deployed runtime executes branch code;
 - scope remains limited to output transport and directly related tests/documentation.
 
-No unresolved plan-level blocker remains.
+No unresolved plan-level blocker remains. The plan is ready for Codex implementation.
 
 ## Progress
 

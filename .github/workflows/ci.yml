@@ -91,10 +91,22 @@ jobs:
         shell: bash
         run: |
           set +e
-          npm run check:system > "${RUNNER_TEMP}/agent-relay-system-output.log" 2>&1
-          status=$?
+          : > "${RUNNER_TEMP}/agent-relay-system-output.log"
+          status=0
+          for script in \
+            test-system/install-script.integration.sh \
+            test-system/update-script.integration.sh \
+            test-system/docker-host.repository-safe.sh
+          do
+            printf '\n===== %s =====\n' "${script}" >> "${RUNNER_TEMP}/agent-relay-system-output.log"
+            bash -x "${script}" >> "${RUNNER_TEMP}/agent-relay-system-output.log" 2>&1
+            status=$?
+            if (( status != 0 )); then
+              break
+            fi
+          done
           if (( status != 0 )); then
-            tail -n 120 "${RUNNER_TEMP}/agent-relay-system-output.log"
+            tail -n 180 "${RUNNER_TEMP}/agent-relay-system-output.log"
           fi
           exit "${status}"
 

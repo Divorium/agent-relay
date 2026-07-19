@@ -23,20 +23,18 @@ export function createCodexEnvironment(home: string, runtimeRoot: string): Recor
 export function createCodexArgs(
   workspace: string,
   prompt: string,
-  workspaceRoot: string,
+  _workspaceRoot: string,
   home: string,
   runtimeRoot: string,
   trustedSourceRoot: string,
 ): string[] {
   const resolvedWorkspace = resolve(workspace);
-  const resolvedRoot = resolve(workspaceRoot);
   const entries = [
     permission(resolve(home), "deny"),
     permission(resolve(trustedSourceRoot), "deny"),
     permission("/opt/rust", "read"),
     permission("/tmp", "deny"),
     permission("/var/tmp", "deny"),
-    permission(resolvedRoot, "deny"),
     permission(resolve(runtimeRoot), "write"),
     permission(resolvedWorkspace, "write"),
     permission(join(resolvedWorkspace, ".git"), "read"),

@@ -208,7 +208,16 @@ chmod 0755 "${FAKE_BIN}"/* "${FAKE_CODEX}"
 
 export HOME="${ADMIN_HOME}"
 export PATH="${FAKE_BIN}:${PATH}"
+set +e
 printf 'mock-input\n' | bash "${TRANSFORMED_INSTALL}" > "${ROOT}/install.out" 2> "${ROOT}/install.err"
+install_status=$?
+set -e
+if (( install_status != 0 )); then
+  cat "${ROOT}/install.out" >&2
+  cat "${ROOT}/install.err" >&2
+  printf 'transformed install.sh exited with status %s\n' "${install_status}" >&2
+  exit "${install_status}"
+fi
 
 for path in agent-relay work runner home build build-home; do
   test -d "${STORAGE_ROOT}/${path}"

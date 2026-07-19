@@ -10,17 +10,18 @@ The implementation must preserve existing Docker and containerd data, configurat
 
 ## Current Review Baseline
 
-The branch implementation removed the rejected storage-migration design, but the pull request is not ready to merge.
+The branch is now cleanly based on current `main` commit `7c148c242feb421b59647f144ab6b78fe691af28`, including the completed normalized Codex output work from pull request #35. Preserve its JSONL execution, normalized live output, transcript artifact, bounded queues, termination controller, workflow transcript environment, tests, and documentation. Apply only the Docker-specific delta.
 
-Current `main` is commit `7c148c242feb421b59647f144ab6b78fe691af28` and contains the completed normalized Codex output work from pull request #35. This branch is one commit behind and conflicts with that implementation. Reconcile the branch against current `main` without regressing its JSONL execution, normalized live output, transcript artifact, bounded queues, termination controller, workflow transcript environment, tests, or documentation. The Codex workspace does not permit modifying `.git`; use the fetched `origin/main` content as the baseline and edit working-tree files so the resulting tree preserves current `main` plus the Docker-specific changes.
+The branch contains the earlier `scripts/docker-host.sh` and `scripts/docker-host-debian.sh` implementation as review material. It is incomplete and must not be integrated unchanged. Independent review found these blocking defects:
 
-The review also found these blocking defects:
-
-1. `docker_host_validate` creates the runner-owned Docker client directory below a root-owned `0700` temporary parent. `github-runner` cannot traverse that parent, so the validation contract is not actually executable.
-2. Docker signing-key validation requires exactly one `fpr` record from GnuPG. A valid OpenPGP key may contain subkey fingerprints. The implementation must identify exactly one primary public key and validate its immediate primary fingerprint while permitting subkey fingerprint records; multiple primary keys, missing fingerprints, and malformed output must fail.
-3. Publishing the Agent Relay-managed apt key and source as two independent writes is not restartable. An interruption after either managed file is installed can leave a safe partial state that the next run rejects forever. Define and implement deterministic recovery for exact, secure Agent Relay-managed partial states without accepting unrelated or ambiguous files.
-4. Repository-safe tests currently assert strings and helper outputs but do not reproduce the directory traversal failure, primary/subkey fingerprint parsing, or interrupted managed apt publication.
-5. The pull request previously added a second active ExecPlan. The workflow requires exactly one added or modified active plan. Real-host acceptance remains recorded in this plan and `test-host/README.md`; do not recreate a second active plan.
+1. `docker_host_validate` creates the runner-owned Docker client directory below a root-owned `0700` temporary parent. `github-runner` cannot traverse that parent, so the validation contract is not executable.
+2. Docker signing-key validation requires exactly one `fpr` record from GnuPG. A valid OpenPGP key may contain subkey fingerprints. Identify exactly one primary `pub` record and its immediate primary fingerprint while permitting subkey records. Reject multiple primary keys, missing or duplicate primary fingerprints, malformed ordering, and an unexpected primary fingerprint.
+3. Publishing the Agent Relay-managed apt key and source as two independent writes is not restartable. An interruption after either write can leave a safe partial state that the next run rejects forever. Recover only exact, secure Agent Relay-managed partial states; reject unrelated, ambiguous, or unsafe occupation.
+4. The CLI compatibility probe uses `docker version --client`, which is not a supported Docker CLI form. Use a daemon-independent supported probe such as `docker --version`, then validate the daemon separately through the explicit local socket.
+5. Existing key validation runs as root and accepts any non-writable mode. An apt keyring must also be readable by apt's unprivileged acquisition path. Validate suitable read permissions instead of accepting a root-only key.
+6. GnuPG inspection must use an isolated private `GNUPGHOME` below the provisioner state root and a clean explicit environment. It must not create or depend on `/root/.gnupg` or ambient GnuPG configuration.
+7. Repository-safe tests currently do not reproduce the directory traversal failure, primary/subkey fingerprint parsing, interrupted managed apt publication, invalid CLI probe, key readability, or isolated GnuPG state.
+8. The pull request must keep exactly one active ExecPlan. Real-host acceptance remains recorded in this plan and `test-host/README.md`; do not create another active plan.
 
 ## Binding Decisions
 
@@ -29,56 +30,58 @@ The review also found these blocking defects:
 - A fresh supported host may receive `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, and `docker-compose-plugin`.
 - Reuse a complete compatible official installation. Install only a missing Buildx or Compose plugin when the core installation is compatible.
 - Preserve working component versions. Do not upgrade existing Docker core packages merely because newer candidates exist.
-- Fail before Docker package mutation on conflicting distribution packages, partial package state, broken executables, unknown command ownership, ambiguous or insecure apt definitions, unsafe unit files, or globally non-clean dpkg state.
+- Fail before Docker package mutation on conflicting distribution packages, partial package state, broken executables, unknown command ownership, ambiguous or insecure apt definitions, unsafe unit files, unreadable keyrings, or globally non-clean dpkg state.
 - Do not implement global dpkg repair or a general package transaction framework.
 - Preserve existing Docker/containerd configuration and data byte-for-byte.
 - Ensure `github-runner` belongs to `docker`; ensure `agent-relay-builder` does not.
 - Enable and start the required services when needed.
-- Validate the ordinary `/usr/bin/docker` CLI, local daemon connection, Buildx, and Compose as `github-runner` with an actually reachable private temporary `DOCKER_CONFIG` and an explicit local Unix endpoint.
+- Validate the ordinary `/usr/bin/docker` CLI without requiring the daemon, then validate local daemon connection, Buildx, and Compose as `github-runner` with an actually reachable private temporary `DOCKER_CONFIG` and an explicit local Unix endpoint.
 - A fresh installation or privileged acceptance may run `hello-world`. Repeated compatible updates must not require registry access.
 - Docker group access is intentionally root-equivalent host access on the dedicated runner host.
 - Preserve the Codex workspace filesystem boundary and add only the two conventional local Docker socket paths required by the current permission model.
-- Docker/Compose application lifecycle remains Codex's responsibility.
+- Docker and Compose application lifecycle remains Codex's responsibility.
 - Make no public API, request schema, routing, result-semantic, or commit-decision change.
-- Do not redesign Codex output capture. Merge the current `main` output implementation unchanged except for the minimal Docker socket permissions and Docker-specific prompt/environment additions.
-- Do not change the workflow merely to expose Docker. Preserve the current `main` workflow behavior, including `CODEX_TRANSCRIPT_PATH` and direct `run-codex.mjs` invocation.
+- Do not redesign Codex output capture. Preserve current `main` unchanged except for the minimal Docker socket permissions and Docker-specific prompt/environment additions.
+- Do not change the workflow merely to expose Docker. Preserve the current workflow behavior, including `CODEX_TRANSCRIPT_PATH` and direct `run-codex.mjs` invocation.
 
 ## Implementation Work
 
-1. Reconcile every conflicting file with current `main`. At minimum inspect `.github/workflows/codex.yml`, `README.md`, `docs/native-github-runner-specification.md`, `docs/operations/README.md`, `src/execution/codex-executor.ts`, execution tests, workflow tests, and runtime documentation. Preserve all current-main output-hardening behavior and apply only the Docker-specific delta.
-2. Review the complete pull-request diff after reconciliation. Remove stale migration, package-journal, automatic dpkg-recovery, custom-root, `rsync`, and obsolete output-rendering code or documentation.
-3. Fix Docker client validation so the runner can traverse to and use the private client directory while no broader root-owned temporary state becomes readable. Cleanup must remain deterministic on success and failure.
-4. Extract a production helper for parsing GnuPG `--with-colons` output. Require one primary `pub` record with one associated primary `fpr`; ignore valid subkey fingerprints for primary-key matching; reject multiple primary keys, missing/duplicate primary fingerprints, malformed ordering, or an unexpected primary fingerprint. Use the same helper for existing and newly downloaded keys.
-5. Make Agent Relay-managed apt repository publication restartable from observed filesystem state. Recognize only exact secure managed states: neither file present, both valid files present, or an exact valid partial managed state that can be completed safely. Reject symlinks, unsafe ownership or mode, unexpected content, conflicting definitions, unrelated occupation, and ambiguous keys before package mutation. Add interruption tests after each publication step.
-6. Keep package simulation conservative: explicit candidate versions from the official Docker repository, requested packages plus dependency closure only, no removal, purge, downgrade, unauthenticated package, or modification of an already installed package.
-7. Preserve updater semantics: compile and fully finalize the new runtime before Docker provisioning; leave the runner stopped for incomplete runtime; after a Docker failure restore and verify the finalized runtime and runner, then return the Docker failure.
-8. Retain direct Docker access through `/usr/bin/docker`, private per-run `DOCKER_CONFIG`, and write permission for `/var/run/docker.sock` and `/run/docker.sock` in the current-main executor implementation.
-9. Update documentation to the final implemented state without claiming privileged acceptance.
-10. Run one complete repository validation only after the last production edit, then review the final diff against current `main` and this plan.
+1. Starting from current `main`, integrate only the required Docker changes into `install.sh`, `update.sh`, toolchain environment, executor/prompt, repository validation, tests, and current documentation. Do not copy obsolete output or workflow code from earlier branch history.
+2. Review the complete final diff. Remove migration, package-journal, automatic dpkg-recovery, custom-root, `rsync`, and Agent Relay-managed application lifecycle code or documentation.
+3. Fix Docker client validation so the runner can traverse to and use the private client directory while unrelated provisioner state remains inaccessible. Cleanup must be deterministic on success, failure, and signals.
+4. Implement one production helper for parsing GnuPG `--with-colons` output. Use it for existing and downloaded keys. Run GnuPG under an isolated private `GNUPGHOME` and explicit environment.
+5. Require the selected apt keyring to be a canonical, regular, root-owned, non-writable file with permissions that allow apt's unprivileged reader to read it.
+6. Make Agent Relay-managed apt repository publication restartable from observed filesystem state. Recognize only exact secure managed states: neither file present, both valid files present, valid managed key only, or valid managed source only. Complete safe partial states deterministically. Reject symlinks, unsafe ownership or mode, unexpected content, conflicting definitions, unrelated occupation, and ambiguous keys before package mutation.
+7. Keep package simulation conservative: explicit candidate versions from Docker's official repository, requested packages plus dependency closure only, no removal, purge, downgrade, unauthenticated package, or modification of an already installed package.
+8. Preserve updater semantics: compile and fully finalize the new runtime before Docker provisioning; leave the runner stopped for incomplete runtime; after Docker failure restore and verify the finalized runtime and runner, then return the Docker failure. Forward TERM, INT, and HUP to the active provisioner process group and wait for it before restoration.
+9. Retain direct Docker access through `/usr/bin/docker`, private per-run `DOCKER_CONFIG`, and write permission for `/var/run/docker.sock` and `/run/docker.sock` in the current-main executor implementation.
+10. Update documentation to the final implemented state without claiming privileged acceptance.
+11. Run one complete `npm run check` only after the last production edit, then review the final diff against current `main` and this plan.
 
 ## Repository-Safe Tests
 
-Tests must exercise production helpers or real temporary filesystem/process behavior. Static assertions may guard architectural boundaries but do not substitute for behavioral evidence.
+Tests must exercise production helpers or real temporary filesystem/process behavior. Static source assertions may guard architecture but do not substitute for behavioral evidence.
 
 Required coverage:
 
-- current-main normalized output, transcript, termination, workflow, and executor tests remain passing;
+- all current-main normalized output, transcript, termination, workflow, executor, finalizer, and sandbox tests remain passing;
 - fresh host classification requests exactly the five official packages;
 - a complete compatible installation performs no package, configuration, or data mutation;
 - missing Buildx or Compose selects only that plugin;
-- conflicts, partial packages, broken commands, unknown ownership, unsafe units, and dirty dpkg fail before package mutation;
-- compatible apt definitions are preserved and duplicate, ambiguous, insecure, or unrelated definitions fail;
-- GnuPG parsing accepts one primary key with subkeys and rejects multiple primary keys, missing primary fingerprints, duplicate primary fingerprints, malformed ordering, and an unexpected fingerprint;
-- exact managed apt publication can resume after interruption following key publication or source publication, while unsafe or unrelated partial states fail;
-- an unprivileged identity can traverse to and use the private Docker client directory created by the production helper, while sibling/root-private state remains inaccessible;
+- conflicts, partial packages, broken commands, unknown ownership, unsafe units, unreadable keyrings, and dirty dpkg fail before package mutation;
+- the CLI probe uses a supported daemon-independent invocation, and daemon validation remains separate;
+- compatible apt definitions are preserved and duplicate, ambiguous, insecure, disabled-managed, or unrelated definitions fail safely;
+- GnuPG parsing accepts one primary key with subkeys and rejects multiple primary keys, missing or duplicate primary fingerprints, malformed ordering, and an unexpected fingerprint;
+- GnuPG inspection uses only the isolated provisioner home and does not touch ambient root state;
+- exact managed apt publication resumes after interruption following either publication step, while unsafe or unrelated partial states fail;
+- an unprivileged identity can traverse to and use the private Docker client directory created by the production helper while unrelated private state remains inaccessible;
 - existing Docker and containerd configuration files remain unchanged;
 - no production source invokes `rsync` or contains Docker storage-migration logic;
 - `github-runner` gains Docker group membership and `agent-relay-builder` is excluded;
 - validation uses a clean environment, explicit local Unix socket, and private client state;
 - repeated compatible updates do not require Docker Hub;
 - runner restoration occurs only after runtime finalization;
-- finalizer ownership and existing sandbox regressions remain passing;
-- exactly one active ExecPlan is changed by this pull request.
+- exactly one active ExecPlan belongs to this pull request.
 
 ## Real-Host Acceptance Blocker
 
@@ -89,30 +92,31 @@ The eventual automated disposable or explicitly designated Debian 13 x86-64 syst
 - fresh official installation and `hello-world`;
 - compatible existing official installation with images, containers, volumes, networks, configuration, listeners, versions, and storage locations preserved;
 - Buildx-only and Compose-only missing-plugin installation;
-- conflicting packages, unknown command ownership, ambiguous/insecure apt definitions, unsafe units, and non-clean dpkg rejection before mutation;
+- conflicting packages, unknown command ownership, ambiguous or insecure apt definitions, unsafe units, unreadable keyrings, and non-clean dpkg rejection before mutation;
 - interruption and rerun across managed repository publication and package installation;
 - service startup, group membership, socket access, Buildx, Compose, and repeated update with registry egress disabled;
-- runtime compile/finalization failure leaving the runner stopped;
+- runtime compile or finalization failure leaving the runner stopped;
 - Docker provisioning failure restoring the finalized runtime and runner;
 - TERM, INT, and HUP forwarding and bounded provisioner shutdown;
 - a real Agent Relay request in which Codex starts a Compose project, reads logs, executes a command, and shuts the project down.
 
-The harness must compare package versions, unit definitions/state, configuration digests, Docker inventory, storage paths, identities, command output, runner runtime identity, and process results, with sensitive host-specific values redacted before evidence publication.
+The harness must compare package versions, unit definitions and state, configuration digests, Docker inventory, storage paths, identities, command output, runner runtime identity, and process results, with sensitive host-specific values redacted before evidence publication.
 
-Current blocker: no automated disposable/designated Debian systemd host lifecycle is available to this repository task. Impact: privileged apt, dpkg, systemd, group, socket, daemon, registry, signal, and end-to-end acceptance cannot yet execute. Unblock: provide an automated host lifecycle and job interface that creates or resets required initial states and returns captured evidence to the agent or CI.
+Current blocker: no automated disposable or designated Debian systemd host lifecycle is available to this repository task. Impact: privileged apt, dpkg, systemd, group, socket, daemon, registry, signal, and end-to-end acceptance cannot execute. Unblock: provide an automated host lifecycle and job interface that creates or resets required initial states and returns captured evidence to the agent or CI.
 
 ## Acceptance Criteria
 
-- The branch tree preserves current `main` output/workflow behavior and applies the Docker delta without merge conflicts.
+- The branch remains cleanly based on current `main` and preserves its output and workflow behavior.
 - `update.sh` makes the ordinary Docker CLI, Buildx, Compose, and local daemon available to Codex on the supported host.
-- Docker and containerd keep existing/default configuration, listeners, versions, data, and storage roots.
-- No Docker/containerd data is copied, moved, staged, checksummed, or migrated.
+- Docker and containerd keep existing or package-default configuration, listeners, versions, data, and storage roots.
+- No Docker or containerd data is copied, moved, staged, checksummed, or migrated.
 - A compatible existing installation is reused and only missing supported components are installed.
 - Conflicting or globally non-clean package state fails before Docker package mutation.
 - Managed repository setup is secure and restartable from exact supported partial states.
-- `github-runner` can actually use the private Docker client state and local socket; `agent-relay-builder` remains excluded.
+- Key parsing, permissions, and GnuPG state isolation are correct.
+- `github-runner` can use private Docker client state and the local socket; `agent-relay-builder` remains excluded.
 - The runner is never restored against an incomplete runtime.
-- Docker/Compose lifecycle decisions remain Codex's responsibility.
+- Docker and Compose lifecycle decisions remain Codex's responsibility.
 - Exactly one active ExecPlan belongs to this pull request.
 - `npm run check` passes after the final edit.
 - normal CI passes on the exact final commit.
@@ -121,43 +125,46 @@ Current blocker: no automated disposable/designated Debian systemd host lifecycl
 ## Progress
 
 - [x] Rejected custom Docker/containerd roots, state migration, `rsync`, automatic global dpkg recovery, and Agent Relay-managed Compose lifecycle.
-- [x] Reduced the intended architecture to direct host CLI/socket access with update-only provisioning.
-- [x] Identified current-main integration conflict after pull request #35.
-- [x] Identified the inaccessible private Docker client directory.
-- [x] Identified ambiguous primary/subkey fingerprint parsing.
-- [x] Identified non-restartable two-file managed apt publication.
+- [x] Reduced the architecture to direct host CLI and socket access with update-only provisioning.
+- [x] Rebuilt the branch cleanly on current `main` without output or workflow regressions.
 - [x] Consolidated real-host acceptance into this single active plan.
-- [ ] Reconcile the implementation and documentation with current `main` without output/workflow regressions.
-- [ ] Correct client-directory traversal and add behavioral coverage.
-- [ ] Correct primary-key fingerprint parsing and add adversarial fixtures.
-- [ ] Make managed apt publication restartable and add interruption coverage.
+- [x] Identified inaccessible private Docker client state.
+- [x] Identified ambiguous primary and subkey fingerprint parsing.
+- [x] Identified non-restartable managed apt publication.
+- [x] Identified unsupported CLI compatibility probe.
+- [x] Identified apt-key readability and ambient GnuPG-state defects.
+- [ ] Integrate the Docker feature into the current-main runtime and updater.
+- [ ] Correct all blocking defects and add behavioral coverage.
 - [ ] Complete an independent final diff review against this plan.
 - [ ] Run final repository validation on the final working tree.
-- [blocked] Obtain successful normal CI on the exact finalized commit. Cause: the exact commit does not exist until workflow finalization commits and pushes the Codex result. Impact: no final-head CI evidence exists yet. Unblock: finalize and push the implementation, then require normal CI success on that exact head.
+- [blocked] Obtain successful normal CI on the exact finalized commit. Cause: Codex has not yet finalized and pushed the implementation. Impact: no final-head CI evidence exists. Unblock: finalize and push the implementation, then require normal CI success on that exact head.
 - [blocked] Execute privileged real-host acceptance. Cause, impact, and unblock condition are recorded above.
 
 ## Surprises & Discoveries
 
-- The original branch solved an unrequested storage-relocation problem; direct Docker access does not require it.
+- Direct Docker access does not require storage relocation or a Docker command broker.
 - Repository-safe validation cannot establish privileged host acceptance.
-- Current `main` replaced the branch's older executor output implementation, so a content-level integration is required before Docker review can be meaningful.
 - A runner-owned leaf directory is unusable when its root-owned parent lacks execute permission for the runner.
 - OpenPGP subkey fingerprints must not be confused with multiple primary keys.
-- Secure setup also requires deterministic re-entry after interruption between managed apt file publications.
+- Secure setup requires deterministic re-entry after interruption between managed apt file publications.
+- A root-readable key is not necessarily readable by apt's unprivileged acquisition path.
+- Docker CLI presence and Docker daemon reachability are separate checks.
 
 ## Decision Log
 
-- Decision: preserve Docker's existing/default configuration, state, and storage.
-  Rationale: direct CLI/socket access does not require data relocation or daemon configuration changes.
-- Decision: use one active plan and keep privileged acceptance as a blocker section rather than a second workflow-selectable plan.
+- Decision: preserve Docker's existing or package-default configuration, state, and storage.
+  Rationale: direct CLI and socket access does not require data relocation or daemon configuration changes.
+- Decision: use one active plan and keep privileged acceptance as a blocker section.
   Rationale: the workflow intentionally requires exactly one changed active ExecPlan.
 - Decision: preserve current-main Codex output and workflow architecture.
-  Rationale: output normalization was completed independently in pull request #35 and is outside this Docker feature.
+  Rationale: output normalization is complete and outside this Docker feature.
 - Decision: fail on non-clean global dpkg state rather than repair unrelated administrator package work.
   Rationale: Docker provisioning must not own arbitrary global package recovery.
+- Decision: isolate GnuPG state and validate apt-reader permissions.
+  Rationale: provisioning must not mutate root's ambient state or publish a key apt cannot read.
 - Decision: leave Docker and Compose application lifecycle to Codex.
-  Rationale: Agent Relay only exposes the ordinary host capability.
+  Rationale: Agent Relay exposes the ordinary host capability only.
 
 ## Outcomes & Retrospective
 
-Not complete. The implementation requires current-main reconciliation and correction of the validation, key-parsing, and managed-repository restartability defects. Do not move this plan to `completed/` or claim merge readiness until all non-privileged acceptance criteria, final review, and exact-head CI are satisfied.
+Not complete. Do not move this plan to `completed/` or claim merge readiness until all non-privileged acceptance criteria, independent review, and exact-head CI are satisfied.

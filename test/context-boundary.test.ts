@@ -28,7 +28,7 @@ test("repository instructions remain durable and plan-driven", async () => {
   assert.match(rules, /cause, impact, evidence, and concrete unblock condition/);
 });
 
-test("executor exposes only native launcher context", () => {
+test("executor exposes only native launcher context without denying the workspace ancestor", () => {
   assert.deepEqual(createCodexEnvironment("/home/user", "/home/user/.cache/runtime"), {
     HOME: "/home/user",
     CODEX_RUNTIME_ROOT: "/home/user/.cache/runtime",
@@ -48,7 +48,7 @@ test("executor exposes only native launcher context", () => {
   assert.match(filesystem, /"\/home\/user"="deny"/);
   assert.match(filesystem, /"\/srv\/github-runner\/storage\/agent-relay"="deny"/);
   assert.match(filesystem, /"\/opt\/rust"="read"/);
-  assert.match(filesystem, /"\/runner\/_work"="deny"/);
+  assert.doesNotMatch(filesystem, /"\/runner\/_work"="deny"/);
   assert.match(filesystem, /"\/runner\/_work\/repository\/repository"="write"/);
   assert.match(filesystem, /"\/runner\/_work\/repository\/repository\/\.git"="read"/);
   assert.ok(args.includes("permissions.agent.network.enabled=true"));

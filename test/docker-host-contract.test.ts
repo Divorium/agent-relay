@@ -2,64 +2,116 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-test("Docker provisioning remains update-only and restores runner availability", async () => {
-  const update = await readFile("update.sh", "utf8");
-  const install = await readFile("install.sh", "utf8");
-  const provision = update.indexOf('sudo "${DOCKER_PROVISIONER}"');
-  const adopt = update.indexOf('sudo find -P "${RUNTIME_ROOT}" -xdev -exec chown -h root:root');
-  const restore = update.indexOf('systemctl start "${SERVICE_NAME}"', provision);
-  assert.ok(adopt > 0 && provision > adopt && restore > provision);
-  assert.match(update, /docker_status=\$\?/u);
-  assert.match(update, /runner_needs_restore=1/u);
-  assert.match(update, /runtime_finalized=1/u);
-  assert.match(update, /runner remains stopped because the runtime is incomplete/u);
-  assert.match(update, /runner restoration failed \(Docker provisioning status:/u);
-  assert.match(update, /runtime is active, but Docker provisioning failed with status/u);
-  const runnerStop = update.indexOf('systemctl stop "${SERVICE_NAME}"');
-  assert.ok(runnerStop > 0);
-  assert.match(update, /setsid --wait sudo "\$\{DOCKER_PROVISIONER\}"/u);
-  assert.match(update, /kill -TERM -- "-\$\{active_child_pgid\}"/u);
-  assert.match(update, /wait "\$\{active_child_pid\}"/u);
-  assert.doesNotMatch(install, /apt-get[^\n]*(?:docker-ce|containerd\.io)|groupadd docker|systemctl[^\n]*docker/iu);
+async function source(path: string): Promise<string> {
+  return readFile(path, "utf8");
+}
+
+test("Docker provisioning is serialized after runtime finalization and before runner restoration", async () => {
+  const update = await source("update.sh");
+  const lock = update.indexOf('exec 9<"${ADMIN_FILE}"');
+  const stop = update.indexOf('sudo systemctl stop "${SERVICE_NAME}"', lock);
+  const compile = update.indexOf('/usr/local/bin/tsc -p "${SOURCE_ROOT}/tsconfig.runtime.json"', stop);
+  const finalized = update.indexOf("runtime_finalized=1", compile);
+  const provision = update.indexOf("/usr/bin/setsid --wait", finalized);
+  const dockerStatus = update.indexOf("docker_status=$?", provision);
+  const restore = update.indexOf("\nrestore_runner\nrunner_status=", dockerStatus);
+  assert.ok(lock >= 0 && stop > lock && compile > stop && finalized > compile);
+  assert.ok(provision > finalized && dockerStatus > provision && restore > dockerStatus);
+  assert.match(update, /Docker provisioning failed with status .* the runner was restored with the finalized runtime/u);
+  assert.match(update, /runtime_finalized == 1/u);
+  assert.doesNotMatch(update, /data-root|containerd.*root|rsync|daemon\.json|config\.toml/iu);
 });
 
-test("Docker host scripts implement direct-access package contracts without storage mutation", async () => {
-  const host = await readFile("scripts/docker-host.sh", "utf8");
-  const debian = await readFile("scripts/docker-host-debian.sh", "utf8");
-  for (const state of ["complete-compatible", "fresh", "missing-plugin"]) {
-    assert.ok(host.includes(state), `missing host classification ${state}`);
-  }
-  for (const check of ["/usr/bin/dockerd", "/usr/bin/docker", "/usr/bin/containerd", "buildx", "compose"]) {
-    assert.ok(host.includes(check), `missing command check ${check}`);
-  }
-  assert.match(debian, /apt-get --simulate --no-install-recommends install/u);
-  assert.match(debian, /docker_debian_assert_clean_dpkg/u);
-  assert.match(debian, /Global dpkg state is not clean/u);
-  assert.doesNotMatch(debian, /docker-ce=[0-9]|containerd\.io=[0-9]/u);
-  assert.doesNotMatch(host + debian, /rsync|migration-stage|data-root|\/var\/lib\/docker|\/var\/lib\/containerd|daemon\.json|config\.toml/u);
-  assert.doesNotMatch(host, /systemctl stop (?:docker|containerd)/u);
-  assert.match(host, /docker_host_client_environment/u);
-  assert.match(debian, /docker_debian_parse_simulation/u);
-  assert.match(debian, /docker_debian_inspect_repository_definitions/u);
-  assert.match(debian, /LC_ALL=C LANG=C \/usr\/bin\/(?:apt-get|apt-cache|dpkg|dpkg-query)/u);
-  assert.match(host, /docker_host_inspect_unit/u);
-  const installComponents = debian.match(/docker_debian_install_components\(\)[\s\S]*?\n\}/u)?.[0] ?? "";
-  const ensureRepository = debian.match(/docker_debian_ensure_repository\(\)[\s\S]*?\n\}/u)?.[0] ?? "";
-  assert.match(installComponents, /docker_debian_ensure_repository/u);
-  assert.match(ensureRepository, /docker_debian_inspect_repository_definitions/u);
-  assert.doesNotMatch(host, /DOCKER_HOST_ENGINE_ROOT|DOCKER_HOST_CONTAINERD_ROOT/u);
+test("installer protects Docker entrypoints without provisioning Docker", async () => {
+  const install = await source("install.sh");
+  assert.match(install, /scripts\/docker-host\.sh/u);
+  assert.match(install, /scripts\/docker-host-debian\.sh/u);
+  assert.match(install, /chmod 0755/u);
+  assert.doesNotMatch(install, /docker-ce|containerd\.io|groupadd docker|usermod[^\n]*docker|systemctl[^\n]*docker/iu);
+  assert.doesNotMatch(install, /\brsync\b/u);
 });
 
-test("Docker access is direct, exact, and excludes the builder", async () => {
-  const host = await readFile("scripts/docker-host.sh", "utf8");
-  const profile = await readFile("scripts/toolchain-environment.sh", "utf8");
-  const executor = await readFile("src/execution/codex-executor.ts", "utf8");
-  assert.match(host, /usermod -aG docker "\$\{DOCKER_HOST_RUNNER_USER\}"/u);
-  assert.match(host, /\/usr\/bin\/gpasswd --delete "\$\{DOCKER_HOST_BUILD_USER\}" docker/u);
-  assert.match(host, /\/usr\/bin\/docker --host unix:\/\/\/var\/run\/docker\.sock/u);
-  assert.match(profile, /TOOLCHAIN_STATE_SUBDIRECTORIES=.*docker/u);
-  assert.match(profile, /"DOCKER_CONFIG=\$\{state_root\}\/docker"/u);
-  assert.match(executor, /permission\("\/var\/run\/docker\.sock", "write"\)/u);
-  assert.match(executor, /permission\("\/run\/docker\.sock", "write"\)/u);
-  assert.doesNotMatch(executor, /storage\/docker/u);
+test("host orchestrator classifies official components without requiring daemon access", async () => {
+  const host = await source("scripts/docker-host.sh");
+  for (const packageName of [
+    "docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin",
+  ]) {
+    assert.ok(host.includes(packageName), `missing package contract for ${packageName}`);
+  }
+  assert.match(host, /docker-ce-cli\) printf '\/usr\/bin\/docker\|--version\|\\n'/u);
+  assert.doesNotMatch(host, /docker version --client|\/usr\/bin\/docker\|version\|--client/u);
+  assert.match(host, /DOCKER_HOST_CLASSIFICATION=fresh/u);
+  assert.match(host, /DOCKER_HOST_CLASSIFICATION=complete-compatible/u);
+  assert.match(host, /DOCKER_HOST_CLASSIFICATION=missing-plugin/u);
+  assert.match(host, /plugin package exists without the official Docker core/i);
+});
+
+test("runner client state is reachable while provisioner state remains private", async () => {
+  const host = await source("scripts/docker-host.sh");
+  assert.match(host, /chmod 0711 "\$\{DOCKER_HOST_STATE_CONTAINER\}"/u);
+  assert.match(host, /DOCKER_HOST_STATE_ROOT=\$\{DOCKER_HOST_STATE_CONTAINER\}\/private/u);
+  assert.match(host, /install -d -o root -g root -m 0700/u);
+  assert.match(host, /mktemp -d "\$\{DOCKER_HOST_STATE_CONTAINER\}\/client\.XXXXXXXX"/u);
+  assert.match(host, /chown "\$\{DOCKER_HOST_RUNNER_USER\}:\$\{DOCKER_HOST_RUNNER_USER\}" "\$\{client\}"/u);
+  assert.match(host, /chmod 0700 "\$\{client\}"/u);
+  assert.match(host, /DOCKER_CONFIG=\$\{client\}/u);
+  assert.match(host, /--host unix:\/\/\/var\/run\/docker\.sock/u);
+});
+
+test("systemd units and pre-existing administrator drop-ins are inspected before package work", async () => {
+  const host = await source("scripts/docker-host.sh");
+  const classify = host.indexOf("docker_host_classify");
+  const inspect = host.lastIndexOf("docker_host_inspect_services", host.indexOf("docker_debian_install_components"));
+  const install = host.indexOf("docker_debian_install_components");
+  assert.ok(classify >= 0 && inspect > classify && install > inspect);
+  assert.match(host, /docker_host_inspect_admin_dropins/u);
+  assert.match(host, /\/etc\/systemd\/system\/\$\{unit\}\.d/u);
+  assert.match(host, /\/run\/systemd\/system\/\$\{unit\}\.d/u);
+  assert.match(host, /unowned unit file before package installation/u);
+  assert.match(host, /does not use its secure official package unit file/u);
+});
+
+test("repository handling isolates GnuPG and validates exactly one primary fingerprint", async () => {
+  const adapter = await source("scripts/docker-host-debian.sh");
+  assert.match(adapter, /docker_debian_primary_fingerprint_from_colons/u);
+  assert.match(adapter, /pubs==1 && primary!="" && waiting==""/u);
+  assert.match(adapter, /\$1=="sub"/u);
+  assert.match(adapter, /length\(value\)!=40/u);
+  assert.match(adapter, /GNUPGHOME="\$\{home\}"/u);
+  assert.match(adapter, /\/usr\/bin\/env -i HOME="\$\{home\}"/u);
+  assert.match(adapter, /--no-options --no-default-keyring --show-keys --with-colons/u);
+  assert.doesNotMatch(adapter, /\/root\/\.gnupg/u);
+});
+
+test("managed apt publication is atomic, restartable and apt-readable", async () => {
+  const adapter = await source("scripts/docker-host-debian.sh");
+  assert.match(adapter, /DOCKER_DEBIAN_MANAGED_KEY_STAGE=.*\.agent-relay-docker\.asc\.new/u);
+  assert.match(adapter, /DOCKER_DEBIAN_MANAGED_SOURCE_STAGE=.*\.agent-relay-docker\.sources\.new/u);
+  assert.match(adapter, /docker_debian_recover_key_stage/u);
+  assert.match(adapter, /docker_debian_recover_source_stage/u);
+  assert.match(adapter, /docker_debian_staged_key_valid/u);
+  assert.match(adapter, /docker_debian_mode_has_other_bit "\$\{path\}" 4/u);
+  assert.match(adapter, /\/usr\/bin\/mv -T -- "\$\{DOCKER_DEBIAN_MANAGED_KEY_STAGE\}" "\$\{DOCKER_DEBIAN_MANAGED_KEY\}"/u);
+  assert.match(adapter, /\/usr\/bin\/mv -T -- "\$\{DOCKER_DEBIAN_MANAGED_SOURCE_STAGE\}" "\$\{DOCKER_DEBIAN_MANAGED_SOURCE\}"/u);
+  assert.match(adapter, /unreferenced managed Docker key path is occupied beside an external source/u);
+});
+
+test("package candidate and simulation policies reject ambiguous or unrelated changes", async () => {
+  const adapter = await source("scripts/docker-host-debian.sh");
+  assert.match(adapter, /docker_debian_candidate_is_unambiguously_official/u);
+  assert.match(adapter, /rows>=1 && !bad/u);
+  assert.match(adapter, /source !~ \/download\\\.docker\\\.com\\\/linux\\\/debian\//u);
+  assert.match(adapter, /\^\(Remv\|Purg\) \|DOWNGRADED\|unauthenticated/u);
+  assert.match(adapter, /Docker package simulation contains an unapproved change/u);
+  assert.match(adapter, /--no-install-recommends/u);
+  assert.doesNotMatch(adapter, /--allow-downgrades|--allow-unauthenticated/u);
+});
+
+test("provisioner never manages Docker data, configuration or application lifecycle", async () => {
+  const host = await source("scripts/docker-host.sh");
+  const adapter = await source("scripts/docker-host-debian.sh");
+  for (const text of [host, adapter]) {
+    assert.doesNotMatch(text, /data-root|\/var\/lib\/docker|\/var\/lib\/containerd|daemon\.json|containerd\/config\.toml/iu);
+    assert.doesNotMatch(text, /\brsync\b|docker compose (?:up|down|restart)|docker (?:rm|rmi|volume prune|system prune)/iu);
+  }
 });

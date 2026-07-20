@@ -197,11 +197,11 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - [x] Revision `ce9e3cc6` made residual-config package records visible and added phase tests, but implemented rejection rather than cleanup.
 - [x] Revision `f38f03e9` implemented exact package cleanup, bounded purge, process/data safety checks, and full post-purge reclassification with 137 passing tests and 100% source coverage.
 - [x] Independently reviewed `f38f03e9`; package cleanup is correct but the configuration-remnant scope is incomplete and cannot resume after the final `rc` record disappears.
-- [ ] Implement restartable cleanup of allowlisted Docker-specific configuration remnants independent of dpkg ownership.
-- [ ] Run final repository validation and Codex validation.
-- [ ] Publish a connector-authored exact final head and require normal CI to pass.
-- [ ] Complete independent final diff and job-log review.
-- [ ] Merge the PR after the acceptance criteria above pass.
+- [x] Implement restartable cleanup of allowlisted Docker-specific configuration remnants independent of dpkg ownership.
+- [x] Run final repository validation and Codex validation. On 2026-07-20, `npm run check` passed with 137 tests, 100% TypeScript source coverage, runtime/toolchain checks, shell syntax checks, and all system integration tests.
+- [blocked] Publish a connector-authored exact final head and require normal CI to pass. The connected GitHub mutation was cancelled and the checkout's `.git` metadata is read-only, so this environment cannot create or push the implementation commit. Unblock by allowing the connector mutation after the Codex implementation commit reaches `agent/plan-docker-host-access`.
+- [blocked] Complete independent final diff and job-log review. Independent diff review and re-review found no remaining issue; exact-head job-log review is blocked until publication starts normal CI.
+- [blocked] Merge the PR after the acceptance criteria above pass. This remains downstream of exact-head publication and passing normal CI.
 - [post-merge] Perform manual privileged host acceptance; open a new plan only if it exposes a defect.
 
 ## Decision Log
@@ -234,7 +234,10 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - Docker configuration commonly includes files not registered as package conffiles, such as a manually created `/etc/docker/daemon.json` and repository/key setup performed from Docker's installation instructions. Dpkg ownership cannot define the complete cleanup boundary.
 - Cleanup detection cannot depend only on `rc`: an interruption after successful package purge can leave the same safe Docker-specific configuration remnants with no package record.
 - Codex-token pushes can leave normal CI as `action_required` with no jobs; a connector-authored final status commit is needed for exact-head CI evidence.
+- Dpkg purge can remove unit files before systemd forgets the inactive units. The unmarked cleanup inventory therefore treats an exact inactive loaded fragment under a supported unit root as restartable cleanup state and performs `daemon-reload` before full reclassification.
+- An interrupted atomic rewrite of a shared apt source can leave its same-directory staging file. The cleanup inventory explicitly recognizes and removes only the provisioner's exact Docker cleanup stage prefix.
+- Independent final diff review found that Bash `errexit` suppression could mask the adapter's mixed-URI deb822 rejection. Explicit failure propagation plus an integrated regression now prevent cleanup from reaching later artifact families, and independent re-review found no remaining diff issue.
 
 ## Outcomes & Retrospective
 
-Not complete. Keep this plan active until restartable Docker-specific configuration cleanup, complete repository validation, exact-head normal CI, and independent final review pass. Manual privileged host acceptance happens after merge and is not part of this PR's blocking acceptance.
+Implementation and repository-safe validation are complete. The provisioner now inventories allowlisted unmarked configuration, repository/key, plugin, unit/link, inactive socket, and stale systemd-manager remnants independently of `rc` package records; purges exact residual packages when present; re-inventories after purge; removes or safely rewrites exact artifacts; and reruns the complete fresh-state classification. Shared apt definitions and unrelated unit-root entries are preserved, while active/partial packages, commands, processes, active/nonterminal units, populated data, policy state, unsafe paths, and mixed deb822 repository URIs remain hard failures. Keep this plan active until the connector-authored exact final head, normal CI, independent final review, and merge complete. Manual privileged host acceptance happens after merge and is not part of this PR's blocking acceptance.

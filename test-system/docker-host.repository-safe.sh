@@ -556,20 +556,70 @@ DOCKER_HOST_CONTAINERD_CONFIG=${DOCKER_HOST_CONTAINERD_DIRECTORY}/config.toml
 DOCKER_HOST_RESIDUAL_PACKAGES=${TMP}/residual-config-packages
 printf 'docker-ce|rc |1\n' > "${DOCKER_HOST_RESIDUAL_PACKAGES}"
 mkdir -p -m 0755 "${DOCKER_HOST_DAEMON_DIRECTORY}" "${DOCKER_HOST_CONTAINERD_DIRECTORY}"
-printf 'package residual\n' > "${DOCKER_HOST_DAEMON_CONFIG}"
-chmod 0644 "${DOCKER_HOST_DAEMON_CONFIG}"
-(
-  docker_debian_command_owner() { printf 'docker-ce\n'; }
-  docker_host_residual_configuration_safe
-) || fail "package-owned residual managed configuration target was rejected"
+printf 'manually created\n' > "${DOCKER_HOST_DAEMON_CONFIG}"
+printf 'manually created\n' > "${DOCKER_HOST_CONTAINERD_CONFIG}"
+mkdir "${DOCKER_HOST_DAEMON_DIRECTORY}/certs.d"
+printf 'certificate\n' > "${DOCKER_HOST_DAEMON_DIRECTORY}/certs.d/ca.crt"
+chmod 0644 "${DOCKER_HOST_DAEMON_CONFIG}" "${DOCKER_HOST_CONTAINERD_CONFIG}" "${DOCKER_HOST_DAEMON_DIRECTORY}/certs.d/ca.crt"
+docker_host_inventory_cleanup_configuration || fail "manually created Docker configuration remnants were rejected"
+(( DOCKER_HOST_REMNANT_COUNT == 2 )) || fail "configuration remnant directories were not counted exactly"
 printf 'unknown\n' > "${DOCKER_HOST_DAEMON_DIRECTORY}/extra.json"
-if (docker_debian_command_owner() { printf 'docker-ce\n'; }; docker_host_residual_configuration_safe); then
-  fail "unknown residual configuration file was accepted"
+chmod 0644 "${DOCKER_HOST_DAEMON_DIRECTORY}/extra.json"
+docker_host_inventory_cleanup_configuration || fail "additional Docker-specific configuration content was rejected"
+ln -s "${TMP}/outside-config" "${DOCKER_HOST_DAEMON_DIRECTORY}/unsafe-link"
+if docker_host_inventory_cleanup_configuration; then fail "symlink inside cleanup configuration tree was accepted"; fi
+rm "${DOCKER_HOST_DAEMON_DIRECTORY}/unsafe-link"
+docker_host_inventory_cleanup_configuration || fail "configuration inventory did not recover after unsafe content was removed"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-key-files"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-entries.bin"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-unit-paths.bin"
+(
+  docker_debian_remove_cleanup_repository_files() { return 0; }
+  docker_host_remove_cleanup_remnants
+) || fail "allowlisted configuration remnants could not be removed"
+[[ ! -e "${DOCKER_HOST_DAEMON_DIRECTORY}" && ! -e "${DOCKER_HOST_CONTAINERD_DIRECTORY}" ]] \
+  || fail "allowlisted configuration remnants remained after cleanup"
+
+printf '%s\n' \
+  '# preserved comment' \
+  'deb https://deb.debian.org/debian trixie main' \
+  'deb [arch=amd64] https://download.docker.com/linux/debian trixie stable' \
+  > "${TMP}/mixed.list"
+docker_debian_filter_list_source "${TMP}/mixed.list" > "${TMP}/filtered.list"
+[[ "$(<"${TMP}/filtered.list")" == $'# preserved comment\ndeb https://deb.debian.org/debian trixie main' ]] \
+  || fail "shared list cleanup did not preserve unrelated lines exactly"
+docker_debian_list_source_is_dedicated_docker "${TMP}/mixed.list" \
+  && fail "mixed apt list was classified as Docker-dedicated"
+printf '%s\n' \
+  'Types: deb' 'URIs: https://deb.debian.org/debian' 'Suites: trixie' 'Components: main' '' \
+  'Types: deb' 'URIs: https://download.docker.com/linux/debian' 'Suites: trixie' 'Components: stable' \
+  > "${TMP}/mixed.sources"
+docker_debian_filter_sources_file "${TMP}/mixed.sources" > "${TMP}/filtered.sources"
+/usr/bin/grep -Fq 'https://deb.debian.org/debian' "${TMP}/filtered.sources" \
+  || fail "shared deb822 cleanup removed an unrelated stanza"
+! /usr/bin/grep -Fq 'download.docker.com' "${TMP}/filtered.sources" \
+  || fail "shared deb822 cleanup retained the Docker stanza"
+printf '%s\n' \
+  'Types: deb' \
+  'URIs: https://download.docker.com/linux/debian https://deb.debian.org/debian' \
+  'Suites: trixie' \
+  'Components: stable' \
+  > "${TMP}/mixed-uri.sources"
+if docker_debian_sources_docker_stanzas_cleanup_safe "${TMP}/mixed-uri.sources"; then
+  fail "Docker cleanup accepted a deb822 stanza containing an unrelated repository URI"
 fi
-rm "${DOCKER_HOST_DAEMON_DIRECTORY}/extra.json"
-if (docker_debian_command_owner() { printf 'unrelated-package\n'; }; docker_host_residual_configuration_safe); then
-  fail "configuration outside the exact residual package set was accepted"
+if (
+  docker_host_inventory_cleanup_configuration() { return 0; }
+  docker_debian_inventory_cleanup_repository_files() { return 1; }
+  docker_host_inventory_cleanup_plugins() { printf 'continued\n' > "${TMP}/continued-after-repository-inventory-failure"; }
+  docker_host_inventory_unmarked_remnants
+); then
+  fail "unsafe repository cleanup inventory failure was masked"
 fi
+[[ ! -e "${TMP}/continued-after-repository-inventory-failure" ]] \
+  || fail "remnant inventory continued after unsafe mixed repository state"
+configure_exact_state
 
 printf '%s\n' 'docker-ce|rc |1' 'runc|rc |2' > "${TMP}/purge-records"
 (
@@ -629,14 +679,13 @@ set -e
   docker_debian_assert_clean_dpkg() { printf 'audit\n' >> "${TMP}/cleanup-sequence"; }
   docker_debian_purge_residual_packages() {
     printf 'purge:%s\n' "$1" >> "${TMP}/cleanup-sequence"
-    rm -f -- "${DOCKER_HOST_DAEMON_CONFIG}" "${DOCKER_HOST_CONTAINERD_CONFIG}"
   }
+  docker_host_inventory_unmarked_remnants() { printf 'inventory\n' >> "${TMP}/cleanup-sequence"; }
+  docker_host_remove_cleanup_remnants() { printf 'remove\n' >> "${TMP}/cleanup-sequence"; }
   docker_host_classify_and_clean_unmarked
 ) || fail "successful cleanup was not reclassified as a fresh host"
-[[ "$(<"${TMP}/cleanup-sequence")" == $'classify-1\naudit\npurge:'"${TMP}"$'/purge-records\nclassify-2' ]] \
+[[ "$(<"${TMP}/cleanup-sequence")" == $'classify-1\naudit\npurge:'"${TMP}"$'/purge-records\ninventory\nremove\nclassify-2' ]] \
   || fail "residual cleanup did not rerun complete classification in order"
-[[ ! -e "${DOCKER_HOST_DAEMON_CONFIG}" && ! -e "${DOCKER_HOST_CONTAINERD_CONFIG}" ]] \
-  || fail "residual package configuration remained after cleanup"
 
 assert_unsafe_residual_state_blocks_cleanup() {
   local unsafe="$1"
@@ -646,23 +695,18 @@ assert_unsafe_residual_state_blocks_cleanup() {
     DOCKER_HOST_MARKER=${TMP}/missing-unmarked-marker
     docker_debian_related_package_inventory() { printf 'docker-ce|rc |1\n'; }
     docker_host_command_state_absent() { [[ "${unsafe}" != command ]]; }
-    docker_host_plugin_overrides_absent() { return 0; }
     docker_host_path_absent() { return 0; }
-    docker_host_runtime_socket_present() { [[ "${unsafe}" == socket ]]; }
     docker_host_processes_absent() { [[ "${unsafe}" != process ]]; }
     docker_host_directory_empty() {
       [[ "${unsafe}" == managed-data && "$1" == "${DOCKER_HOST_STORAGE_ROOT}" ]] && return 1
       [[ "${unsafe}" == default-data && "$1" == "${DOCKER_HOST_DEFAULT_ENGINE_ROOT}" ]] && return 1
       return 0
     }
-    docker_debian_inspect_repository_definitions() { DOCKER_DEBIAN_REPOSITORY_DEFINITION_COUNT=0; }
-    docker_debian_validate_repository_boundary() { return 0; }
-    docker_host_direct_unit_state_absent() { return 0; }
     docker_host_unit_roots_safe() { return 0; }
-    docker_host_unit_aliases_absent() { return 0; }
-    docker_host_activation_links_validate() { return 0; }
-    docker_host_unit_absent() { [[ "${unsafe}" != service ]]; }
+    docker_host_systemctl_property() { printf 'not-found\n'; }
+    docker_host_services_inactive() { [[ "${unsafe}" != service ]]; }
     docker_host_validate_publication_stages() { return 0; }
+    docker_host_inventory_unmarked_remnants() { [[ "${unsafe}" != socket ]]; }
     docker_debian_purge_residual_packages() { printf 'purged\n' > "${TMP}/unsafe-purge"; }
     docker_host_classify_and_clean_unmarked
   )
@@ -674,6 +718,157 @@ assert_unsafe_residual_state_blocks_cleanup() {
 for unsafe_residual_state in command socket process managed-data default-data service; do
   assert_unsafe_residual_state_blocks_cleanup "${unsafe_residual_state}"
 done
+
+(
+  classification_count=0
+  : > "${TMP}/config-only-sequence"
+  : > "${TMP}/no-residual-packages"
+  docker_host_classify() {
+    ((classification_count += 1))
+    if (( classification_count == 1 )); then
+      DOCKER_HOST_CLASSIFICATION=residual
+      DOCKER_HOST_RESIDUAL_PACKAGES=${TMP}/no-residual-packages
+    else
+      DOCKER_HOST_CLASSIFICATION=fresh
+    fi
+  }
+  docker_debian_assert_clean_dpkg() { printf 'audit\n' >> "${TMP}/config-only-sequence"; }
+  docker_debian_purge_residual_packages() { printf 'unexpected-purge\n' >> "${TMP}/config-only-sequence"; }
+  docker_host_inventory_unmarked_remnants() { printf 'inventory\n' >> "${TMP}/config-only-sequence"; }
+  docker_host_remove_cleanup_remnants() { printf 'remove\n' >> "${TMP}/config-only-sequence"; }
+  docker_host_classify_and_clean_unmarked
+) || fail "configuration-only cleanup could not resume without rc package records"
+[[ "$(<"${TMP}/config-only-sequence")" == $'audit\ninventory\nremove' ]] \
+  || fail "configuration-only cleanup unexpectedly depended on residual package records"
+
+plugin_cleanup_root=${TMP}/cleanup-plugins
+mkdir -p "${plugin_cleanup_root}/one" "${plugin_cleanup_root}/two"
+printf '#!/bin/sh\n' > "${plugin_cleanup_root}/one/docker-buildx"
+ln -s "${TMP}/missing-compose" "${plugin_cleanup_root}/two/docker-compose"
+chmod 0755 "${plugin_cleanup_root}/one/docker-buildx"
+DOCKER_HOST_PLUGIN_DIRS=("${plugin_cleanup_root}/one" "${plugin_cleanup_root}/two")
+DOCKER_HOST_RUNNER_HOME=${TMP}/cleanup-runner
+mkdir -p "${DOCKER_HOST_RUNNER_HOME}"
+DOCKER_HOST_REMNANT_COUNT=0
+docker_host_inventory_cleanup_plugins || fail "direct Docker CLI plugin remnants were rejected"
+(( DOCKER_HOST_REMNANT_COUNT == 2 )) || fail "Docker CLI plugin cleanup inventory was incomplete"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-configuration-directories"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-stages.bin"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-key-files"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-unit-paths.bin"
+(
+  docker_debian_remove_cleanup_repository_files() { return 0; }
+  docker_host_runtime_socket_present() { return 1; }
+  docker_host_remove_cleanup_remnants
+) || fail "Docker CLI plugin remnants could not be removed"
+[[ ! -e "${plugin_cleanup_root}/one/docker-buildx" && ! -L "${plugin_cleanup_root}/two/docker-compose" ]] \
+  || fail "Docker CLI plugin cleanup left an inventoried entry"
+
+unit_cleanup_root=${TMP}/cleanup-units
+mkdir -p "${unit_cleanup_root}/docker.service.d" "${unit_cleanup_root}/multi-user.target.wants"
+printf '[Unit]\n' > "${unit_cleanup_root}/docker.service"
+printf '[Service]\n' > "${unit_cleanup_root}/docker.service.d/override.conf"
+ln -s docker.service "${unit_cleanup_root}/docker-alias.service"
+ln -s ../docker.service "${unit_cleanup_root}/multi-user.target.wants/docker.service"
+printf 'preserve\n' > "${unit_cleanup_root}/unrelated.service"
+chmod 0644 "${unit_cleanup_root}/docker.service" "${unit_cleanup_root}/docker.service.d/override.conf" "${unit_cleanup_root}/unrelated.service"
+chmod 0755 "${unit_cleanup_root}" "${unit_cleanup_root}/docker.service.d" "${unit_cleanup_root}/multi-user.target.wants"
+DOCKER_HOST_UNIT_ROOTS=("${unit_cleanup_root}")
+DOCKER_HOST_REMNANT_COUNT=0
+docker_host_inventory_cleanup_units || fail "allowlisted Docker unit remnants were rejected"
+(( DOCKER_HOST_REMNANT_COUNT == 4 )) || fail "Docker unit, drop-in, alias, and activation cleanup inventory was incomplete"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-configuration-directories"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-stages.bin"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-key-files"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-entries.bin"
+(
+  docker_debian_remove_cleanup_repository_files() { return 0; }
+  docker_host_runtime_socket_present() { return 1; }
+  docker_host_systemctl_daemon_reload() { printf 'reload\n' > "${TMP}/cleanup-unit-reload"; }
+  docker_host_remove_cleanup_remnants
+) || fail "allowlisted Docker unit remnants could not be removed"
+[[ -f "${unit_cleanup_root}/unrelated.service" ]] || fail "unit cleanup removed unrelated shared-root content"
+[[ "$(<"${TMP}/cleanup-unit-reload")" == reload ]] || fail "unit cleanup did not reload systemd"
+[[ ! -e "${unit_cleanup_root}/docker.service" && ! -e "${unit_cleanup_root}/docker.service.d" \
+  && ! -L "${unit_cleanup_root}/docker-alias.service" \
+  && ! -L "${unit_cleanup_root}/multi-user.target.wants/docker.service" ]] \
+  || fail "unit cleanup left an inventoried Docker artifact"
+
+DOCKER_HOST_UNIT_ROOTS=("${unit_cleanup_root}")
+DOCKER_HOST_REMNANT_COUNT=0
+(
+  docker_host_systemctl_property() {
+    case "$1:$2" in
+      docker.service:LoadState) printf 'loaded\n' ;;
+      docker.service:FragmentPath) printf '%s/docker.service\n' "${unit_cleanup_root}" ;;
+      *:LoadState) printf 'not-found\n' ;;
+      *:ActiveState) printf 'inactive\n' ;;
+      *:SubState) printf 'dead\n' ;;
+      *:FragmentPath) printf '\n' ;;
+    esac
+  }
+  docker_host_inventory_stale_unit_manager_state
+  (( DOCKER_HOST_SYSTEMD_RELOAD_NEEDED == 1 && DOCKER_HOST_REMNANT_COUNT == 1 ))
+) || fail "stale inactive systemd manager state was not recognized as restartable cleanup"
+if (
+  docker_host_systemctl_property() {
+    case "$2" in LoadState) printf 'loaded\n' ;; ActiveState) printf 'inactive\n' ;; SubState) printf 'dead\n' ;; FragmentPath) printf '%s/unrelated.service\n' "${unit_cleanup_root}" ;; esac
+  }
+  docker_host_inventory_stale_unit_manager_state
+); then
+  fail "loaded unit manager state outside the exact cleanup paths was accepted"
+fi
+
+stale_socket=${TMP}/stale-docker.sock
+printf 'socket fixture\n' > "${stale_socket}"
+DOCKER_HOST_SOCKET=${stale_socket}
+DOCKER_HOST_RUNTIME_SOCKET=${stale_socket}
+DOCKER_HOST_REMNANT_COUNT=0
+(
+  docker_host_inventory_cleanup_configuration() { : > "${DOCKER_HOST_STATE_ROOT}/cleanup-configuration-directories"; }
+  docker_debian_inventory_cleanup_repository_files() { : > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"; : > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-stages.bin"; }
+  docker_host_inventory_cleanup_plugins() { : > "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-entries.bin"; }
+  docker_host_inventory_cleanup_units() { : > "${DOCKER_HOST_STATE_ROOT}/cleanup-unit-paths.bin"; }
+  docker_host_inventory_stale_unit_manager_state() { return 0; }
+  docker_host_runtime_socket_present() { return 0; }
+  docker_host_socket_safe_or_absent() { return 0; }
+  docker_host_inventory_unmarked_remnants
+  (( DOCKER_HOST_REMNANT_COUNT == 1 ))
+) || fail "stale inactive Docker socket was not inventoried for cleanup"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-configuration-directories"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-stages.bin"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-key-files"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-entries.bin"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-unit-paths.bin"
+(
+  docker_debian_remove_cleanup_repository_files() { return 0; }
+  docker_host_runtime_socket_present() { return 0; }
+  docker_host_remove_cleanup_remnants
+) || fail "stale inactive Docker socket could not be removed"
+[[ ! -e "${stale_socket}" ]] || fail "stale inactive Docker socket remained after cleanup"
+
+set +e
+(
+  set -e
+  classification_count=0
+  docker_host_classify() {
+    ((classification_count += 1))
+    DOCKER_HOST_CLASSIFICATION=residual
+    DOCKER_HOST_RESIDUAL_PACKAGES=${TMP}/no-residual-packages
+  }
+  docker_debian_assert_clean_dpkg() { return 0; }
+  docker_host_inventory_unmarked_remnants() { return 0; }
+  docker_host_remove_cleanup_remnants() { return 1; }
+  docker_host_classify_and_clean_unmarked
+  printf 'continued\n' > "${TMP}/continued-after-cleanup-failure"
+)
+cleanup_failure_status=$?
+set -e
+(( cleanup_failure_status != 0 )) || fail "configuration cleanup failure did not stop provisioning"
+[[ ! -e "${TMP}/continued-after-cleanup-failure" ]] || fail "provisioning continued after configuration cleanup failure"
 
 residual_packages=(
   docker-ce containerd.io runc rootlesskit docker-buildx-plugin docker-compose-plugin

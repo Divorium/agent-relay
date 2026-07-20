@@ -64,6 +64,8 @@ DOCKER_HOST_STATE_CONTAINER=
 DOCKER_HOST_STATE_ROOT=
 DOCKER_HOST_FRESH=0
 DOCKER_HOST_POLICY_REMOVE_ON_EXIT=0
+DOCKER_HOST_REMNANT_COUNT=0
+DOCKER_HOST_SYSTEMD_RELOAD_NEEDED=0
 
 docker_host_fail() { printf 'Docker provisioning failed in phase %s: %s\n' "$1" "$2" >&2; exit 1; }
 
@@ -200,6 +202,21 @@ docker_host_remove_publication_stages() {
   while IFS= read -r -d '' path; do /usr/bin/rm -f -- "${path}"; done < "${listing}"
 }
 
+docker_host_validate_unmarked_marker_stages() {
+  local directory path listing=${DOCKER_HOST_STATE_ROOT}/managed-publication-stages.bin
+  directory="$(/usr/bin/dirname -- "${DOCKER_HOST_MARKER}")"
+  : > "${listing}"
+  docker_host_path_absent "${directory}" && return 0
+  [[ -d "${directory}" && ! -L "${directory}" ]] || return 1
+  /usr/bin/find -P "${directory}" -mindepth 1 -maxdepth 1 \
+    -name '.agent-relay-docker-host-state-v1.tmp.*' -print0 > "${listing}" || return 1
+  while IFS= read -r -d '' path; do
+    docker_host_exact_metadata "${path}" file "${DOCKER_HOST_OWNER_UID}:${DOCKER_HOST_OWNER_GID}|600" \
+      && docker_host_marker_valid "${path}" \
+      && [[ "$(docker_host_marker_phase "${path}")" == preparing ]] || return 1
+  done < "${listing}"
+}
+
 docker_host_directory_empty() {
   local path="$1" first
   docker_host_path_absent "${path}" && return 0
@@ -311,22 +328,173 @@ docker_host_classify_unmarked_packages() {
   fi
 }
 
-docker_host_residual_configuration_safe() {
-  local directory target entry owner listing=${DOCKER_HOST_STATE_ROOT}/residual-configuration-entries.bin
+docker_host_inventory_cleanup_configuration() {
+  local directory entry listing=${DOCKER_HOST_STATE_ROOT}/cleanup-configuration-entries.bin
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-configuration-directories"
   for directory in "${DOCKER_HOST_DAEMON_DIRECTORY}" "${DOCKER_HOST_CONTAINERD_DIRECTORY}"; do
-    [[ "${directory}" == "${DOCKER_HOST_DAEMON_DIRECTORY}" ]] \
-      && target=${DOCKER_HOST_DAEMON_CONFIG} || target=${DOCKER_HOST_CONTAINERD_CONFIG}
     docker_host_path_absent "${directory}" && continue
     docker_host_secure_path "${directory}" directory || return 1
-    /usr/bin/find -P "${directory}" -mindepth 1 -maxdepth 1 -print0 > "${listing}" || return 1
+    : > "${listing}"
+    /usr/bin/find -P "${directory}" -xdev -mindepth 1 -print0 > "${listing}" || return 1
     while IFS= read -r -d '' entry; do
-      [[ "${entry}" == "${target}" ]] || return 1
-      docker_host_secure_path "${entry}" file || return 1
-      owner="$(docker_debian_command_owner "${entry}" 2>/dev/null || true)"
-      [[ -n "${owner}" ]] && docker_host_marker_package_contains "${owner}" "${DOCKER_HOST_RESIDUAL_PACKAGES}" \
-        || return 1
+      if [[ -d "${entry}" && ! -L "${entry}" ]]; then
+        docker_host_secure_path "${entry}" directory || return 1
+      else
+        docker_host_secure_path "${entry}" file || return 1
+      fi
     done < "${listing}"
+    printf '%s\n' "${directory}" >> "${DOCKER_HOST_STATE_ROOT}/cleanup-configuration-directories"
+    ((DOCKER_HOST_REMNANT_COUNT += 1))
   done
+}
+
+docker_host_inventory_cleanup_plugins() {
+  local directory entry listing=${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-entries.bin
+  : > "${listing}"
+  docker_host_path_absent "${DOCKER_HOST_RUNNER_HOME}/.docker/config.json" || return 1
+  for directory in "${DOCKER_HOST_PLUGIN_DIRS[@]}"; do
+    docker_host_path_absent "${directory}" && continue
+    [[ -d "${directory}" && ! -L "${directory}" ]] || return 1
+    /usr/bin/find -P "${directory}" -mindepth 1 -maxdepth 1 -print0 >> "${listing}" || return 1
+  done
+  while IFS= read -r -d '' entry; do
+    [[ -f "${entry}" || -L "${entry}" ]] || return 1
+    ((DOCKER_HOST_REMNANT_COUNT += 1))
+  done < "${listing}"
+}
+
+docker_host_inventory_cleanup_units() {
+  local root unit path target listing=${DOCKER_HOST_STATE_ROOT}/cleanup-unit-paths.bin
+  local scan=${DOCKER_HOST_STATE_ROOT}/cleanup-unit-scan.bin tree_listing=${DOCKER_HOST_STATE_ROOT}/cleanup-unit-tree.bin entry
+  : > "${listing}"
+  for root in "${DOCKER_HOST_UNIT_ROOTS[@]}"; do
+    docker_host_path_absent "${root}" && continue
+    docker_host_secure_path "${root}" directory || return 1
+    for unit in docker.service docker.socket containerd.service; do
+      for path in "${root}/${unit}" "${root}/${unit}.d"; do
+        docker_host_path_absent "${path}" || printf '%s\0' "${path}" >> "${listing}"
+      done
+    done
+    /usr/bin/find -P "${root}" -mindepth 1 -maxdepth 1 -type l -print0 > "${scan}" || return 1
+    while IFS= read -r -d '' path; do
+      target="$(docker_host_managed_unit_target "${path}" 2>/dev/null || true)"
+      [[ -z "${target}" ]] || printf '%s\0' "${path}" >> "${listing}"
+    done < "${scan}"
+    /usr/bin/find -P "${root}" -mindepth 2 -maxdepth 2 \
+      \( -path '*.wants/*' -o -path '*.requires/*' \) -print0 > "${scan}" || return 1
+    while IFS= read -r -d '' path; do
+      target="$(docker_host_managed_unit_target "${path}" 2>/dev/null || true)"
+      [[ -z "${target}" ]] || { [[ -L "${path}" ]] || return 1; printf '%s\0' "${path}" >> "${listing}"; }
+    done < "${scan}"
+  done
+  /usr/bin/sort -zu -o "${listing}" "${listing}"
+  while IFS= read -r -d '' path; do
+    if [[ -L "${path}" ]]; then
+      :
+    elif [[ -d "${path}" ]]; then
+      docker_host_secure_path "${path}" directory || return 1
+      /usr/bin/find -P "${path}" -xdev -mindepth 1 -print0 > "${tree_listing}" || return 1
+      while IFS= read -r -d '' entry; do
+        if [[ -d "${entry}" && ! -L "${entry}" ]]; then docker_host_secure_path "${entry}" directory || return 1
+        else docker_host_secure_path "${entry}" file || return 1
+        fi
+      done < "${tree_listing}"
+    else
+      docker_host_secure_path "${path}" file || return 1
+    fi
+    ((DOCKER_HOST_REMNANT_COUNT += 1))
+  done < "${listing}"
+}
+
+docker_host_cleanup_unit_fragment_allowlisted() {
+  local fragment="$1" unit="$2" root canonical_fragment canonical_expected
+  canonical_fragment="$(/usr/bin/readlink -f -- "${fragment}" 2>/dev/null || true)"
+  for root in "${DOCKER_HOST_UNIT_ROOTS[@]}"; do
+    [[ "${fragment}" == "${root}/${unit}" ]] && return 0
+    canonical_expected="$(/usr/bin/readlink -f -- "${root}/${unit}" 2>/dev/null || true)"
+    [[ -n "${canonical_fragment}" && -n "${canonical_expected}" && "${canonical_fragment}" == "${canonical_expected}" ]] && return 0
+  done
+  return 1
+}
+
+docker_host_inventory_stale_unit_manager_state() {
+  local unit load active substate fragment
+  DOCKER_HOST_SYSTEMD_RELOAD_NEEDED=0
+  for unit in docker.service docker.socket containerd.service; do
+    load="$(docker_host_systemctl_property "${unit}" LoadState)" || return 1
+    active="$(docker_host_systemctl_property "${unit}" ActiveState)" || return 1
+    substate="$(docker_host_systemctl_property "${unit}" SubState)" || return 1
+    [[ "${active}" == inactive && "${substate}" == dead ]] || return 1
+    case "${load}" in
+      not-found) ;;
+      loaded)
+        fragment="$(docker_host_systemctl_property "${unit}" FragmentPath)" || return 1
+        [[ -n "${fragment}" ]] && docker_host_cleanup_unit_fragment_allowlisted "${fragment}" "${unit}" || return 1
+        DOCKER_HOST_SYSTEMD_RELOAD_NEEDED=1
+        ((DOCKER_HOST_REMNANT_COUNT += 1)) ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
+docker_host_inventory_unmarked_remnants() {
+  local path
+  DOCKER_HOST_REMNANT_COUNT=0
+  docker_host_inventory_cleanup_configuration || return 1
+  docker_debian_inventory_cleanup_repository_files || return 1
+  while IFS= read -r path; do [[ -z "${path}" ]] || ((DOCKER_HOST_REMNANT_COUNT += 1)); done \
+    < "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-key-files"
+  for path in "${DOCKER_DEBIAN_MANAGED_KEY}" /etc/apt/keyrings/docker.gpg; do
+    docker_host_path_absent "${path}" && continue
+    docker_debian_readable_file_secure "${path}" || return 1
+    printf '%s\n' "${path}" >> "${DOCKER_HOST_STATE_ROOT}/cleanup-key-files"
+    ((DOCKER_HOST_REMNANT_COUNT += 1))
+  done
+  docker_host_inventory_cleanup_plugins || return 1
+  docker_host_inventory_cleanup_units || return 1
+  docker_host_inventory_stale_unit_manager_state || return 1
+  while IFS= read -r -d '' path; do ((DOCKER_HOST_REMNANT_COUNT += 1)); done \
+    < "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-stages.bin"
+  if docker_host_runtime_socket_present; then
+    docker_host_socket_safe_or_absent || return 1
+    ((DOCKER_HOST_REMNANT_COUNT += 1))
+  fi
+}
+
+docker_host_remove_cleanup_remnants() {
+  local path removed_units=0
+  while IFS= read -r path; do
+    [[ -z "${path}" ]] || /usr/bin/rm -rf --one-file-system -- "${path}" \
+      || docker_host_fail configuration "Could not remove Docker configuration remnant: ${path}"
+  done < "${DOCKER_HOST_STATE_ROOT}/cleanup-configuration-directories"
+  docker_debian_remove_cleanup_repository_files || docker_host_fail repository "Could not remove Docker repository remnants"
+  while IFS= read -r path; do
+    [[ -z "${path}" ]] || /usr/bin/rm -f -- "${path}" || docker_host_fail repository "Could not remove Docker keyring remnant: ${path}"
+  done \
+    < "${DOCKER_HOST_STATE_ROOT}/cleanup-key-files"
+  while IFS= read -r -d '' path; do
+    /usr/bin/rm -f -- "${path}" || docker_host_fail configuration "Could not remove Docker CLI plugin remnant: ${path}"
+  done \
+    < "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-entries.bin"
+  while IFS= read -r -d '' path; do
+    removed_units=1
+    if [[ -d "${path}" && ! -L "${path}" ]]; then
+      /usr/bin/rm -rf --one-file-system -- "${path}" || docker_host_fail service "Could not remove Docker unit remnant: ${path}"
+    else
+      /usr/bin/rm -f -- "${path}" || docker_host_fail service "Could not remove Docker unit remnant: ${path}"
+    fi
+  done < "${DOCKER_HOST_STATE_ROOT}/cleanup-unit-paths.bin"
+  if docker_host_runtime_socket_present; then
+    /usr/bin/rm -f -- "${DOCKER_HOST_SOCKET}" "${DOCKER_HOST_RUNTIME_SOCKET}" \
+      || docker_host_fail service "Could not remove stale inactive Docker socket"
+  fi
+  (( removed_units == 0 && DOCKER_HOST_SYSTEMD_RELOAD_NEEDED == 0 )) || docker_host_systemctl_daemon_reload \
+    || docker_host_fail service "Could not reload systemd after Docker remnant cleanup"
+}
+
+docker_host_systemctl_daemon_reload() {
+  /usr/bin/env LC_ALL=C LANG=C /usr/bin/systemctl daemon-reload
 }
 
 docker_host_marker_package_contains() {
@@ -707,33 +875,25 @@ docker_host_classify() {
   fi
   docker_host_classify_unmarked_packages
   docker_host_command_state_absent || docker_host_fail inspection "Pre-existing Docker or containerd command state is unsupported"
-  docker_host_plugin_overrides_absent || docker_host_fail inspection "Pre-existing Docker CLI plugin override state is unsupported"
-  if [[ "${DOCKER_HOST_CLASSIFICATION}" == residual ]]; then
-    docker_host_residual_configuration_safe \
-      || docker_host_fail inspection "Residual Docker or containerd configuration is not owned by the cleanup packages"
-  else
-    docker_host_path_absent "${DOCKER_HOST_DAEMON_CONFIG}" && docker_host_path_absent "${DOCKER_HOST_CONTAINERD_CONFIG}" \
-      || docker_host_fail inspection "Pre-existing Docker or containerd configuration is unsupported"
-    docker_host_directory_empty "${DOCKER_HOST_DAEMON_DIRECTORY}" && docker_host_directory_empty "${DOCKER_HOST_CONTAINERD_DIRECTORY}" \
-      || docker_host_fail inspection "Pre-existing Docker or containerd configuration directory content is unsupported"
-  fi
-  ! docker_host_runtime_socket_present || docker_host_fail inspection "Pre-existing Docker socket state is unsupported"
   docker_host_processes_absent || docker_host_fail inspection "Pre-existing Docker or containerd process state is unsupported"
   docker_host_directory_empty "${DOCKER_HOST_STORAGE_ROOT}" || docker_host_fail inspection "Managed Docker storage is already populated without a marker"
   docker_host_directory_empty "${DOCKER_HOST_DEFAULT_ENGINE_ROOT}" && docker_host_directory_empty "${DOCKER_HOST_DEFAULT_CONTAINERD_ROOT}" \
     || docker_host_fail inspection "Pre-existing default Docker or containerd data is unsupported"
-  docker_debian_inspect_repository_definitions
-  (( DOCKER_DEBIAN_REPOSITORY_DEFINITION_COUNT == 0 )) || docker_host_fail inspection "Pre-existing Docker apt repository state is unsupported"
-  docker_host_path_absent "${DOCKER_DEBIAN_MANAGED_KEY}" && docker_host_path_absent /etc/apt/keyrings/docker.gpg || docker_host_fail inspection "Pre-existing Docker apt key state is unsupported"
-  docker_debian_validate_repository_boundary fresh || docker_host_fail inspection "Pre-existing Docker repository staging state is unsupported"
-  docker_host_direct_unit_state_absent || docker_host_fail inspection "Pre-existing Docker unit or drop-in files are unsupported"
   docker_host_unit_roots_safe || docker_host_fail inspection "Pre-existing systemd unit or activation roots are unsafe"
-  docker_host_unit_aliases_absent || docker_host_fail inspection "Pre-existing systemd alias targets a managed Docker unit"
-  docker_host_activation_links_validate absent || docker_host_fail inspection "Pre-existing Docker activation links are unsupported"
   local unit
-  for unit in docker.service docker.socket containerd.service; do docker_host_unit_absent "${unit}" || docker_host_fail inspection "Pre-existing ${unit} is unsupported"; done
+  for unit in docker.service docker.socket containerd.service; do
+    docker_host_systemctl_property "${unit}" LoadState >/dev/null || docker_host_fail inspection "Could not inspect pre-existing ${unit}"
+  done
+  docker_host_services_inactive || docker_host_fail inspection "Pre-existing Docker or containerd unit state is active or nonterminal"
   docker_host_path_absent "${DOCKER_HOST_POLICY}" || docker_host_fail inspection "A pre-existing policy-rc.d prevents controlled Docker installation"
-  docker_host_validate_publication_stages fresh || docker_host_fail inspection "Pre-existing managed publication staging state is unsafe"
+  docker_host_validate_unmarked_marker_stages || docker_host_fail inspection "Pre-existing managed marker staging state is unsafe"
+  docker_host_inventory_unmarked_remnants || docker_host_fail inspection "Pre-existing Docker or containerd remnants are outside the cleanup allowlist"
+  if (( DOCKER_HOST_REMNANT_COUNT > 0 )); then DOCKER_HOST_CLASSIFICATION=residual; fi
+  if [[ "${DOCKER_HOST_CLASSIFICATION}" == fresh ]]; then
+    for unit in docker.service docker.socket containerd.service; do
+      docker_host_unit_absent "${unit}" || docker_host_fail inspection "Pre-existing ${unit} is unsupported"
+    done
+  fi
   [[ "${DOCKER_HOST_CLASSIFICATION}" == fresh ]] && DOCKER_HOST_FRESH=1
 }
 
@@ -741,7 +901,10 @@ docker_host_classify_and_clean_unmarked() {
   docker_host_classify
   if [[ "${DOCKER_HOST_CLASSIFICATION}" == residual ]]; then
     docker_debian_assert_clean_dpkg
-    docker_debian_purge_residual_packages "${DOCKER_HOST_RESIDUAL_PACKAGES}"
+    [[ ! -s "${DOCKER_HOST_RESIDUAL_PACKAGES}" ]] || docker_debian_purge_residual_packages "${DOCKER_HOST_RESIDUAL_PACKAGES}"
+    docker_host_inventory_unmarked_remnants \
+      || docker_host_fail inspection "Docker remnant state became unsafe during residual package cleanup"
+    docker_host_remove_cleanup_remnants
     docker_host_classify
     [[ "${DOCKER_HOST_CLASSIFICATION}" == fresh ]] \
       || docker_host_fail inspection "Host did not become fresh after residual package cleanup"

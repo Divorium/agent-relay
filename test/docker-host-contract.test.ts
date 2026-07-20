@@ -36,24 +36,33 @@ test("provisioner implements fresh, residual-cleanup, or exact-managed state and
   assert.match(host, /Managed Docker storage is already populated without a marker/u);
 });
 
-test("residual cleanup is exact, bounded, verified, and fully reclassified before publication", async () => {
+test("unmarked Docker remnant cleanup is exact, restartable, and fully reclassified before publication", async () => {
   const host = await source("scripts/docker-host.sh");
   const adapter = await source("scripts/docker-host-debian.sh");
   const cleanup = host.indexOf("docker_host_classify_and_clean_unmarked() {");
   const firstClassification = host.indexOf("\n  docker_host_classify\n", cleanup);
   const purge = host.indexOf("docker_debian_purge_residual_packages", firstClassification);
-  const secondClassification = host.indexOf("\n    docker_host_classify\n", purge);
+  const reinventory = host.indexOf("docker_host_inventory_unmarked_remnants", purge);
+  const remove = host.indexOf("docker_host_remove_cleanup_remnants", reinventory);
+  const secondClassification = host.indexOf("\n    docker_host_classify\n", remove);
   const main = host.indexOf("docker_host_main() {");
   const cleanupCall = host.indexOf("docker_host_classify_and_clean_unmarked", main);
   const publishPreparing = host.indexOf("docker_host_publish_marker preparing", cleanupCall);
   const configure = host.indexOf("docker_host_prepare_storage_and_configuration", publishPreparing);
-  assert.ok(cleanup >= 0 && firstClassification > cleanup && purge > firstClassification && secondClassification > purge);
+  assert.ok(cleanup >= 0 && firstClassification > cleanup && purge > firstClassification && reinventory > purge && remove > reinventory && secondClassification > remove);
   assert.ok(main >= 0 && cleanupCall > main && publishPreparing > cleanupCall && configure > publishPreparing);
   assert.match(adapter, /"\$\{status\}" == 'rc ' && -n "\$\{version\}"/u);
   assert.match(adapter, /docker_debian_run_residual_purge "\$\{packages\[@\]\}"/u);
   assert.match(adapter, /timeout --signal=TERM --kill-after=10s/u);
   assert.match(adapter, /\/usr\/bin\/dpkg --purge -- "\$@"/u);
   assert.match(adapter, /Residual package remains after cleanup/u);
+  assert.match(host, /docker_host_inventory_cleanup_configuration/u);
+  assert.match(host, /docker_host_inventory_cleanup_plugins/u);
+  assert.match(host, /docker_host_inventory_cleanup_units/u);
+  assert.match(host, /docker_host_inventory_stale_unit_manager_state/u);
+  assert.match(adapter, /docker_debian_filter_list_source/u);
+  assert.match(adapter, /docker_debian_filter_sources_file/u);
+  assert.match(adapter, /\.agent-relay-docker-cleanup\.tmp\./u);
   assert.doesNotMatch(adapter, /apt-get[^\n]*purge/u);
 });
 

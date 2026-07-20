@@ -280,7 +280,7 @@ docker_debian_repository_records_acceptable() {
   DOCKER_DEBIAN_REPOSITORY_DEFINITION_COUNT=${count}
 }
 
-docker_debian_inspect_repository_definitions() {
+docker_debian_inventory_repository_definitions() {
   local records=${DOCKER_HOST_STATE_ROOT}/repository-definitions.txt path output listing status record
   local -a sources=()
   : > "${records}"
@@ -309,8 +309,128 @@ docker_debian_inspect_repository_definitions() {
       [[ -z "${record}" ]] || printf '%s|%s\n' "${record}" "${path}" >> "${records}"
     done <<< "${output}"
   done
-  docker_debian_repository_records_acceptable "${records}" \
+}
+
+docker_debian_inspect_repository_definitions() {
+  docker_debian_inventory_repository_definitions
+  docker_debian_repository_records_acceptable "${DOCKER_HOST_STATE_ROOT}/repository-definitions.txt" \
     || docker_host_fail repository "Docker apt source definitions are conflicting, duplicate, ambiguous, disabled, or insecure"
+}
+
+docker_debian_inventory_cleanup_repository_files() {
+  local records=${DOCKER_HOST_STATE_ROOT}/repository-definitions.txt path listing=${DOCKER_HOST_STATE_ROOT}/cleanup-repository-stages.bin
+  docker_debian_inventory_repository_definitions
+  /usr/bin/awk -F'|' 'NF >= 3 && !seen[$3]++ {print $3}' "${records}" \
+    > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
+  while IFS= read -r path; do
+    [[ "${path}" != *.sources ]] || docker_debian_sources_docker_stanzas_cleanup_safe "${path}" || return 1
+  done < "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
+  : > "${listing}"
+  for path in /etc/apt/keyrings /etc/apt/sources.list.d; do
+    docker_host_path_absent "${path}" && continue
+    docker_debian_secure_path "${path}" directory || return 1
+    /usr/bin/find -P "${path}" -mindepth 1 -maxdepth 1 \
+      \( -name '.agent-relay-docker.asc.tmp.*' -o -name '.agent-relay-docker.sources.tmp.*' \
+      -o -name '.agent-relay-docker-cleanup.tmp.*' \) -print0 >> "${listing}" || return 1
+  done
+  while IFS= read -r -d '' path; do docker_debian_secure_path "${path}" file || return 1; done < "${listing}"
+}
+
+docker_debian_sources_docker_stanzas_cleanup_safe() {
+  /usr/bin/awk '
+    BEGIN {RS=""}
+    {
+      lowered=tolower($0)
+      if (!(lowered ~ /(^|\n)[[:space:]]*uris[[:space:]]*:/ && lowered ~ /download\.docker\.com\/linux\/debian/)) next
+      remainder=lowered; urls=0
+      while (match(remainder, /https?:\/\/[^[:space:]]+/)) {urls++; remainder=substr(remainder, RSTART+RLENGTH)}
+      if (urls != 1) bad=1
+    }
+    END {exit bad}
+  ' "$1"
+}
+
+docker_debian_list_source_is_dedicated_docker() {
+  /usr/bin/awk '
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ {next}
+    /download\.docker\.com\/linux\/debian/ {docker++; next}
+    {other++}
+    END {exit !(docker > 0 && other == 0)}
+  ' "$1"
+}
+
+docker_debian_filter_list_source() {
+  /usr/bin/awk '/^[[:space:]]*#/ || $0 !~ /download\.docker\.com\/linux\/debian/ {print}' "$1"
+}
+
+docker_debian_sources_file_is_dedicated_docker() {
+  /usr/bin/awk '
+    BEGIN {RS=""; docker=0; other=0}
+    {
+      lowered=tolower($0)
+      if (lowered ~ /(^|\n)[[:space:]]*uris[[:space:]]*:/ && lowered ~ /download\.docker\.com\/linux\/debian/) docker++
+      else if ($0 !~ /^[[:space:]#]*$/) other++
+    }
+    END {exit !(docker > 0 && other == 0)}
+  ' "$1"
+}
+
+docker_debian_filter_sources_file() {
+  /usr/bin/awk '
+    BEGIN {RS=""; ORS=""; first=1}
+    {
+      lowered=tolower($0)
+      if (lowered ~ /(^|\n)[[:space:]]*uris[[:space:]]*:/ && lowered ~ /download\.docker\.com\/linux\/debian/) next
+      if (!first) printf "\n\n"
+      printf "%s", $0
+      first=0
+    }
+    END {if (!first) printf "\n"}
+  ' "$1"
+}
+
+docker_debian_rewrite_shared_source() {
+  local source="$1" filtered=${DOCKER_HOST_STATE_ROOT}/filtered-source mode stage directory
+  directory="$(/usr/bin/dirname -- "${source}")"
+  mode="$(/usr/bin/stat -c '%a' -- "${source}")" || return 1
+  [[ "${mode}" =~ ^[0-7]{3,4}$ ]] || return 1
+  if [[ "${source}" == *.sources ]]; then
+    docker_debian_filter_sources_file "${source}" > "${filtered}" || return 1
+  else
+    docker_debian_filter_list_source "${source}" > "${filtered}" || return 1
+  fi
+  stage="$(/usr/bin/mktemp "${directory}/.agent-relay-docker-cleanup.tmp.XXXXXXXX")" || return 1
+  /usr/bin/install -o root -g root -m "0${mode}" "${filtered}" "${stage}" || return 1
+  /usr/bin/mv -T -- "${stage}" "${source}"
+}
+
+docker_debian_remove_cleanup_repository_files() {
+  local source
+  while IFS= read -r source; do
+    [[ -n "${source}" ]] || continue
+    docker_debian_readable_file_secure "${source}" || docker_host_fail repository "Docker cleanup source became unsafe: ${source}"
+    case "${source}" in
+      *.sources)
+        if docker_debian_sources_file_is_dedicated_docker "${source}"; then
+          /usr/bin/rm -f -- "${source}" || docker_host_fail repository "Could not remove dedicated Docker apt source: ${source}"
+        else
+          docker_debian_rewrite_shared_source "${source}" \
+            || docker_host_fail repository "Could not preserve shared apt source while removing Docker: ${source}"
+        fi ;;
+      /etc/apt/sources.list|*.list)
+        if docker_debian_list_source_is_dedicated_docker "${source}"; then
+          /usr/bin/rm -f -- "${source}" || docker_host_fail repository "Could not remove dedicated Docker apt source: ${source}"
+        else
+          docker_debian_rewrite_shared_source "${source}" \
+            || docker_host_fail repository "Could not preserve shared apt source while removing Docker: ${source}"
+        fi ;;
+      *) docker_host_fail repository "Docker cleanup selected an unsupported apt source path: ${source}" ;;
+    esac
+  done < "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
+  while IFS= read -r -d '' source; do
+    /usr/bin/rm -f -- "${source}" || docker_host_fail repository "Could not remove Docker repository cleanup stage: ${source}"
+  done \
+    < "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-stages.bin"
 }
 
 docker_debian_repository_content() {

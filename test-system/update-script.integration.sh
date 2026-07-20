@@ -254,7 +254,7 @@ run_update() {
   if [[ "${5:-1}" == 1 ]]; then rm -f -- "${ROOT}/omit-entrypoint"; else : > "${ROOT}/omit-entrypoint"; fi
   (
     cd "${SOURCE_ROOT}"
-    PATH="${FAKE_BIN}:${PATH}" MOCK_DOCKER_STATUS="${1:-0}" \
+    TMPDIR="${STICKY_TMP}" PATH="${FAKE_BIN}:${PATH}" MOCK_DOCKER_STATUS="${1:-0}" \
       MOCK_DOCKER_MODE="${2:-exit}" MOCK_SUDO_EXPIRE="${3:-0}" \
       MOCK_SIGNAL_FAIL="${4:-0}" MOCK_PROTECTED_REGULAR=1 bash "${TRANSFORMED_UPDATE}"
   )

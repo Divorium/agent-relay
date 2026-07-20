@@ -74,6 +74,20 @@ docker_debian_dpkg_state_clean() {
   ' "${package_file}"
 }
 
+docker_debian_recovery_dpkg_state_allowed() {
+  local package_file="$1" marker_packages="$2"
+  /usr/bin/awk -F'|' '
+    FILENAME==ARGV[1] {owned[$1]=1; next}
+    length($2) >= 3 {
+      current=substr($2,2,1); error=substr($2,3,1)
+      clean=((current=="n"||current=="c"||$2=="ii ")&&error==" ")
+      trigger=($2=="iW "||$2=="it ")
+      if(!clean && !trigger && !($1 in owned)) bad=1
+    }
+    END {exit bad}
+  ' "${marker_packages}" "${package_file}"
+}
+
 docker_debian_assert_clean_dpkg() {
   local audit=${DOCKER_HOST_STATE_ROOT}/dpkg-audit.txt packages=${DOCKER_HOST_STATE_ROOT}/dpkg-packages.txt status query_status
   set +e
@@ -86,6 +100,20 @@ docker_debian_assert_clean_dpkg() {
   (( status == 0 && query_status == 0 )) || docker_host_fail package "Could not audit global dpkg state"
   docker_debian_dpkg_state_clean "${audit}" "${packages}" \
     || docker_host_fail package "Global dpkg state is not clean; an administrator must finish or repair pending package work, then rerun ./update.sh"
+}
+
+docker_debian_assert_recovery_dpkg_bounded() {
+  local marker_packages=${DOCKER_HOST_STATE_ROOT}/recovery-boundary-marker-packages
+  local packages=${DOCKER_HOST_STATE_ROOT}/recovery-boundary-packages query_status
+  docker_host_marker_packages > "${marker_packages}"
+  set +e
+  /usr/bin/env LC_ALL=C LANG=C /usr/bin/dpkg-query -W -f='${Package}|${db:Status-Abbrev}|${Version}\n' \
+    > "${packages}" 2> "${DOCKER_HOST_STATE_ROOT}/recovery-boundary-dpkg-query.err"
+  query_status=$?
+  set -e
+  (( query_status == 0 )) || docker_host_fail package "Could not inspect interrupted dpkg state before recovery"
+  docker_debian_recovery_dpkg_state_allowed "${packages}" "${marker_packages}" \
+    || docker_host_fail package "Interrupted dpkg state includes unrelated non-trigger package work"
 }
 
 docker_debian_parse_list_source() {
@@ -201,10 +229,10 @@ docker_debian_inspect_repository_definitions() {
   local -a sources=()
   : > "${records}"
   for path in /etc /etc/apt /etc/apt/sources.list.d; do
-    [[ ! -e "${path}" ]] || docker_debian_secure_path "${path}" directory \
+    docker_host_path_absent "${path}" || docker_debian_secure_path "${path}" directory \
       || docker_host_fail repository "Unsafe apt source directory: ${path}"
   done
-  [[ ! -e /etc/apt/sources.list ]] || sources+=(/etc/apt/sources.list)
+  docker_host_path_absent /etc/apt/sources.list || sources+=(/etc/apt/sources.list)
   if [[ -d /etc/apt/sources.list.d ]]; then
     listing=${DOCKER_HOST_STATE_ROOT}/apt-source-paths.bin
     set +e
@@ -269,19 +297,24 @@ docker_debian_key_bytes_valid() {
 
 docker_debian_published_key_valid() {
   local key="$1"
-  docker_debian_apt_key_secure "${key}" && docker_debian_key_bytes_valid "${key}"
+  docker_debian_apt_key_secure "${key}" \
+    && docker_host_exact_metadata "${key}" file "${DOCKER_HOST_OWNER_UID}:${DOCKER_HOST_OWNER_GID}|644" \
+    && docker_debian_key_bytes_valid "${key}"
 }
 
 docker_debian_staged_key_valid() {
   local key="$1"
   [[ "${key}" == "${DOCKER_DEBIAN_MANAGED_KEY_STAGE_GLOB}"* ]] || return 1
-  docker_debian_readable_file_secure "${key}" && docker_debian_key_bytes_valid "${key}"
+  docker_debian_readable_file_secure "${key}" \
+    && docker_host_exact_metadata "${key}" file "${DOCKER_HOST_OWNER_UID}:${DOCKER_HOST_OWNER_GID}|644" \
+    && docker_debian_key_bytes_valid "${key}"
 }
 
 docker_debian_managed_source_valid() {
   local source="$1" expected=${DOCKER_HOST_STATE_ROOT}/expected-docker.sources
   [[ "${source}" == "${DOCKER_DEBIAN_MANAGED_SOURCE}" || "${source}" == "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE_GLOB}"* ]] || return 1
   docker_debian_readable_file_secure "${source}" || return 1
+  docker_host_exact_metadata "${source}" file "${DOCKER_HOST_OWNER_UID}:${DOCKER_HOST_OWNER_GID}|644" || return 1
   docker_debian_repository_content > "${expected}"
   /usr/bin/cmp -s -- "${expected}" "${source}"
 }
@@ -289,7 +322,7 @@ docker_debian_managed_source_valid() {
 docker_debian_prepare_repository_directories() {
   local directory
   for directory in /etc/apt/keyrings /etc/apt/sources.list.d; do
-    if [[ -e "${directory}" ]]; then
+    if docker_host_path_occupied "${directory}"; then
       docker_debian_secure_path "${directory}" directory \
         || docker_host_fail repository "Unsafe managed apt directory: ${directory}"
       docker_debian_mode_has_other_bit "${directory}" 1 \
@@ -305,7 +338,7 @@ docker_debian_remove_orphan_stages() {
   : > "${listing}"
   for directory in /etc/apt/keyrings /etc/apt/sources.list.d; do
     [[ -d "${directory}" ]] || continue
-    /usr/bin/find -P "${directory}" -maxdepth 1 -type f -name '.agent-relay-docker.*.tmp.*' -print0 >> "${listing}" \
+    /usr/bin/find -P "${directory}" -mindepth 1 -maxdepth 1 -name '.agent-relay-docker.*.tmp.*' -print0 >> "${listing}" \
       || docker_host_fail repository "Could not inspect interrupted Docker repository publications"
   done
   while IFS= read -r -d '' path; do
@@ -318,9 +351,43 @@ docker_debian_remove_orphan_stages() {
   done < "${listing}"
 }
 
+docker_debian_validate_repository_boundary() {
+  local phase="$1" managed_key=0 managed_source=0 directory path listing=${DOCKER_HOST_STATE_ROOT}/repository-boundary-stages.bin
+  docker_debian_inspect_repository_definitions
+  docker_host_path_absent "${DOCKER_DEBIAN_MANAGED_KEY}" || managed_key=1
+  docker_host_path_absent "${DOCKER_DEBIAN_MANAGED_SOURCE}" || managed_source=1
+  if (( managed_key == 1 )); then docker_debian_published_key_valid "${DOCKER_DEBIAN_MANAGED_KEY}" || return 1; fi
+  if (( managed_source == 1 )); then docker_debian_managed_source_valid "${DOCKER_DEBIAN_MANAGED_SOURCE}" || return 1; fi
+  (( managed_source <= managed_key )) || return 1
+  if [[ "${phase}" == fresh ]] && (( managed_key != 0 || managed_source != 0 || DOCKER_DEBIAN_REPOSITORY_DEFINITION_COUNT != 0 )); then return 1; fi
+  if (( DOCKER_DEBIAN_REPOSITORY_DEFINITION_COUNT == 1 )); then
+    [[ "${DOCKER_DEBIAN_REPOSITORY_SOURCE_PATH}" == "${DOCKER_DEBIAN_MANAGED_SOURCE}" \
+      && "${DOCKER_DEBIAN_REPOSITORY_KEY_PATH}" == "${DOCKER_DEBIAN_MANAGED_KEY}" ]] || return 1
+  else
+    (( DOCKER_DEBIAN_REPOSITORY_DEFINITION_COUNT == 0 )) || return 1
+    (( managed_source == 0 )) || return 1
+  fi
+  : > "${listing}"
+  for directory in /etc/apt/keyrings /etc/apt/sources.list.d; do
+    docker_host_path_absent "${directory}" && continue
+    [[ -d "${directory}" && ! -L "${directory}" ]] || return 1
+    /usr/bin/find -P "${directory}" -mindepth 1 -maxdepth 1 -name '.agent-relay-docker.*.tmp.*' -print0 >> "${listing}" || return 1
+  done
+  while IFS= read -r -d '' path; do
+    [[ "${phase}" != fresh ]] || return 1
+    [[ "${phase}" == preparing ]] || return 1
+    case "${path}" in
+      "${DOCKER_DEBIAN_MANAGED_KEY_STAGE_GLOB}"*) docker_debian_staged_key_valid "${path}" || return 1 ;;
+      "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE_GLOB}"*) docker_debian_managed_source_valid "${path}" || return 1 ;;
+      *) return 1 ;;
+    esac
+  done < "${listing}"
+  if [[ "${phase}" != preparing && "${phase}" != fresh ]]; then (( managed_key == 1 && managed_source == 1 && DOCKER_DEBIAN_REPOSITORY_DEFINITION_COUNT == 1 )) || return 1; fi
+}
+
 docker_debian_publish_key() {
   local source="$1" stage
-  [[ ! -e "${DOCKER_DEBIAN_MANAGED_KEY}" ]] \
+  docker_host_path_absent "${DOCKER_DEBIAN_MANAGED_KEY}" \
     || docker_host_fail repository "Managed Docker key paths are already occupied"
   stage="$(/usr/bin/mktemp "${DOCKER_DEBIAN_MANAGED_KEY_STAGE_GLOB}XXXXXXXX")" \
     || docker_host_fail repository "Could not stage Docker signing key"
@@ -333,7 +400,7 @@ docker_debian_publish_key() {
 
 docker_debian_publish_source() {
   local source=${DOCKER_HOST_STATE_ROOT}/docker.sources stage
-  [[ ! -e "${DOCKER_DEBIAN_MANAGED_SOURCE}" ]] \
+  docker_host_path_absent "${DOCKER_DEBIAN_MANAGED_SOURCE}" \
     || docker_host_fail repository "Managed Docker source paths are already occupied"
   docker_debian_repository_content > "${source}"
   stage="$(/usr/bin/mktemp "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE_GLOB}XXXXXXXX")" \
@@ -362,8 +429,8 @@ docker_debian_ensure_repository() {
   docker_debian_remove_orphan_stages
   docker_debian_inspect_repository_definitions
 
-  [[ ! -e "${DOCKER_DEBIAN_MANAGED_KEY}" ]] || managed_key=1
-  [[ ! -e "${DOCKER_DEBIAN_MANAGED_SOURCE}" ]] || managed_source=1
+  docker_host_path_absent "${DOCKER_DEBIAN_MANAGED_KEY}" || managed_key=1
+  docker_host_path_absent "${DOCKER_DEBIAN_MANAGED_SOURCE}" || managed_source=1
   if (( managed_key == 1 )); then
     docker_debian_published_key_valid "${DOCKER_DEBIAN_MANAGED_KEY}" \
       || docker_host_fail repository "Managed Docker signing key is unsafe or unexpected"
@@ -409,7 +476,7 @@ docker_debian_validate_repository() {
   : > "${listing}"
   for directory in /etc/apt/keyrings /etc/apt/sources.list.d; do
     [[ -d "${directory}" ]] || docker_host_fail repository "Completed managed apt directory is absent"
-    /usr/bin/find -P "${directory}" -maxdepth 1 -type f -name '.agent-relay-docker.*.tmp.*' -print0 >> "${listing}" \
+    /usr/bin/find -P "${directory}" -mindepth 1 -maxdepth 1 -name '.agent-relay-docker.*.tmp.*' -print0 >> "${listing}" \
       || docker_host_fail repository "Could not inspect completed repository staging state"
   done
   while IFS= read -r -d '' orphan; do

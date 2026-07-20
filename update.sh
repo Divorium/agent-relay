@@ -16,15 +16,13 @@ PROCESS_GROUP_WAIT_STEPS=300
 PROCESS_GROUP_WAIT_SECONDS=0.1
 PROVISIONER_DEADLINE_STEPS=7200
 PROVISIONER_DEADLINE_SECONDS=1
-SUDO_KEEPALIVE_SECONDS=15
+SUDO_REFRESH_STEPS=15
 
 runner_needs_restore=0
 runtime_finalized=0
 active_launcher_pid=
 active_child_pgid=
 provisioner_pgid_file=
-sudo_keeper_pid=
-sudo_keeper_failure_file=
 
 protected_source_file() {
   local path="$1" metadata mode owner_uid
@@ -52,16 +50,8 @@ cleanup_update() {
       runtime_finalized=0
     fi
   fi
-  if [[ -n "${sudo_keeper_pid}" ]]; then
-    /usr/bin/kill -TERM "${sudo_keeper_pid}" 2>/dev/null || true
-    wait "${sudo_keeper_pid}" 2>/dev/null || true
-    sudo_keeper_pid=
-  fi
   if [[ -n "${provisioner_pgid_file}" ]]; then
     /usr/bin/rm -f -- "${provisioner_pgid_file}" || true
-  fi
-  if [[ -n "${sudo_keeper_failure_file}" ]]; then
-    /usr/bin/rm -f -- "${sudo_keeper_failure_file}" || true
   fi
   if (( runner_needs_restore == 1 )); then
     if (( runtime_finalized == 1 )); then
@@ -142,20 +132,11 @@ stop_active_operation() {
   (( failed == 0 ))
 }
 
-start_sudo_keeper() {
-  local parent=$$ failure="$1"
-  (
-    while /usr/bin/kill -0 "${parent}" 2>/dev/null; do
-      /usr/bin/sleep "${SUDO_KEEPALIVE_SECONDS}"
-      /usr/bin/kill -0 "${parent}" 2>/dev/null || exit 0
-      if ! sudo -n true; then
-        printf 'expired\n' > "${failure}"
-        /usr/bin/kill -TERM "${parent}" 2>/dev/null || exit 1
-        exit 1
-      fi
-    done
-  ) &
-  sudo_keeper_pid=$!
+refresh_sudo_authority() {
+  sudo -n true || {
+    echo "Noninteractive sudo authority expired while the runner was stopped" >&2
+    return 70
+  }
 }
 trap 'terminate_active_operation HUP 129' HUP
 trap 'terminate_active_operation INT 130' INT
@@ -211,9 +192,6 @@ if ! /usr/bin/flock --nonblock 9; then
 fi
 
 sudo -v
-sudo_keeper_failure_file="$(/usr/bin/mktemp)"
-/usr/bin/chmod 0600 "${sudo_keeper_failure_file}"
-start_sudo_keeper "${sudo_keeper_failure_file}"
 runner_needs_restore=1
 sudo -n systemctl stop "${SERVICE_NAME}"
 runner_uid="$(/usr/bin/id -u "${RUNNER_USER}")"
@@ -227,9 +205,10 @@ while true; do
   fi
   echo "Waiting for current GitHub Actions job to finish..."
   /usr/bin/sleep 5
+  refresh_sudo_authority || exit $?
 done
 
-sudo -n true || { echo "Noninteractive sudo authority expired while the runner was stopped" >&2; exit 70; }
+refresh_sudo_authority || exit $?
 
 sudo -n /usr/bin/rm -rf --one-file-system -- "${BUILD_ROOT}"
 sudo -n /usr/bin/install -d -o "${BUILD_USER}" -g "${BUILD_USER}" -m 0700 "${BUILD_ROOT}"
@@ -254,10 +233,10 @@ runtime_finalized=1
 
 provisioner_pgid_file="$(/usr/bin/mktemp)"
 /usr/bin/chmod 0600 "${provisioner_pgid_file}"
-/usr/bin/setsid --wait /bin/bash -c '
+sudo -n /usr/bin/setsid --wait /bin/bash -c '
   set -euo pipefail
   printf "%s\n" "$$" > "$1"
-  exec /usr/bin/sudo -n -- "$2"
+  exec "$2"
 ' -- "${provisioner_pgid_file}" "${DOCKER_PROVISIONER}" &
 active_launcher_pid=$!
 
@@ -292,8 +271,9 @@ deadline_expired=1
 operation_control_failed=0
 for ((step = 0; step < PROVISIONER_DEADLINE_STEPS; step += 1)); do
   if ! launcher_running; then deadline_expired=0; break; fi
-  if [[ -s "${sudo_keeper_failure_file}" ]]; then
+  if (( step % SUDO_REFRESH_STEPS == 0 )) && ! refresh_sudo_authority; then
     echo "Noninteractive sudo authority expired during Docker provisioning" >&2
+    operation_control_failed=1
     break
   fi
   /usr/bin/sleep "${PROVISIONER_DEADLINE_SECONDS}"

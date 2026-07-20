@@ -144,10 +144,10 @@ If this lifecycle is unavailable, keep the item blocked with its exact cause and
 - [x] Ran Codex again on the corrected plan; it pushed `0dd18030803d0be2481d99fce33aeb73cc2d3470` after a complete local repository check.
 - [x] Completed the second independent code and job-log review and recorded the current blockers above.
 - [x] Normal CI run `29744541905` passed on plan-only head `980c595a9444f8e7616d7192b8a2079d9b35818f`.
-- [ ] Implement the current review fixes and behavioral tests.
-- [ ] Run exact-head repository validation and CI after the final production edit.
-- [ ] Complete another independent final diff and job-log review.
-- [blocked] Run automated privileged real-host acceptance if no disposable or designated host lifecycle is available.
+- [x] Implemented the current review fixes and behavioral tests in the final worktree revision.
+- [blocked] Run exact-head repository validation and CI after the final production edit. `npm run check` passed completely on 2026-07-20 after the final production edit (135 tests, 100% measured TypeScript coverage, runtime/syntax/toolchain/system gates), but this Codex checkout is detached with read-only `.git` metadata and exposes neither `gh` nor a publication credential interface. The concrete unblock condition is creation and publication of the final commit by the automated finalizer, followed by normal CI on that exact commit.
+- [blocked] Complete another independent final diff and job-log review. The current run completed a point-by-point self-review with no unresolved finding, but there is no exact-head CI job log or independent-review execution interface available before the final commit is published. The unblock condition is an independent automated review of the published final diff and its exact-head job logs.
+- [blocked] Run automated privileged real-host acceptance. The current environment is a non-root bubblewrap Codex sandbox rather than a designated disposable Debian systemd host; using the live runner host as a destructive installation/interruption target is not an approved lifecycle. The unblock condition is an automated disposable or explicitly designated Debian 13 x86-64 systemd host lifecycle covering the acceptance matrix.
 
 ## Surprises & Discoveries
 
@@ -156,6 +156,8 @@ If this lifecycle is unavailable, keep the item blocked with its exact cause and
 - Shell `-e` does not detect dangling symlinks.
 - Systemd activation state includes enablement links in addition to unit fragments and drop-ins.
 - A valid ownership marker is not sufficient evidence that no unrelated state appeared after an interruption.
+- A parent-PID-scoped sudo contract also requires the privileged provisioner launch itself to be a direct child of the authenticated update shell; refreshing only the main shell would not fix a child-shell `sudo` launch.
+- The Codex execution sandbox can exercise repository-safe behavior and the complete repository gate, but it cannot stand in for a destructive privileged host lifecycle or publish an exact Git commit when `.git` is mounted read-only.
 
 ## Decision Log
 
@@ -167,7 +169,10 @@ If this lifecycle is unavailable, keep the item blocked with its exact cause and
 - Treat every symlink and staging-directory entry as explicit occupied state.
 - Confirm the full provisioner group is gone before runner restoration.
 - Keep current-state documentation unchanged until exact-head CI, independent review, and privileged host acceptance are complete.
+- Keep the plan active: passing worktree validation is evidence for implementation, not a substitute for exact-head CI, independent job-log review, or privileged host acceptance.
 
 ## Outcomes & Retrospective
 
-Not complete. Keep this plan active until implementation, exact-head CI, independent final review, and privileged real-host acceptance satisfy the criteria above.
+Implementation and repository-safe validation are complete. The final worktree uses main-shell parent-scoped sudo refresh and launch, exact phase boundaries before mutation, deterministic service recovery, trigger-aware dpkg recovery, narrow policy handling, symlink/staging rejection, the production Codex PATH, exact systemd enablement/override checks, and explicit bounded containerd inspection. `npm run check` passed on 2026-07-20, and the final self-review found no unresolved production or regression issue. No workflow, public API, request contract, installation argument, routing, README, specification, or operator-documentation change was required.
+
+The plan remains active because the final commit and exact-head CI/job logs do not yet exist in this read-only detached checkout, no independent automated final reviewer is available in this run, and no approved privileged disposable host lifecycle is available. Preserve the completed work and remove each blocker only when its stated automated evidence is produced.

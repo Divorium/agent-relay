@@ -7,7 +7,7 @@ const source = (path: string): Promise<string> => readFile(path, "utf8");
 test("updater maintains noninteractive sudo authority through bounded provisioning", async () => {
   const update = await source("update.sh");
   const wait = update.indexOf('process_table="$(/usr/bin/ps -e -o euid=,comm=)"');
-  const authority = update.indexOf("sudo -n true", wait);
+  const authority = update.indexOf("refresh_sudo_authority", wait);
   const compile = update.indexOf('/usr/local/bin/tsc -p "${SOURCE_ROOT}/tsconfig.runtime.json"', authority);
   const finalized = update.indexOf("runtime_finalized=1", compile);
   const provision = update.indexOf("/usr/bin/setsid --wait", finalized);
@@ -17,7 +17,8 @@ test("updater maintains noninteractive sudo authority through bounded provisioni
   assert.match(update, /process_group_running/u);
   assert.match(update, /substr\(\$2,1,1\)!="Z"/u);
   assert.match(update, /PROVISIONER_DEADLINE_STEPS/u);
-  assert.match(update, /start_sudo_keeper/u);
+  assert.match(update, /sudo -n \/usr\/bin\/setsid --wait/u);
+  assert.doesNotMatch(update, /start_sudo_keeper/u);
 });
 
 test("provisioner implements fresh-or-exact-managed state and permanent roots", async () => {
@@ -67,12 +68,17 @@ test("package transaction pins requested and resolver-selected packages", async 
 test("effective roots, plugins, groups, socket and first-install registry check are validated", async () => {
   const host = await source("scripts/docker-host.sh");
   assert.match(host, /info --format '\{\{\.DockerRootDir\}\}'/u);
-  assert.match(host, /ctr plugins ls -d/u);
+  assert.match(host, /ctr --address \/run\/containerd\/containerd\.sock plugins ls -d/u);
+  assert.match(host, /timeout --signal=TERM --kill-after=2s/u);
   assert.match(host, /buildx version/u);
   assert.match(host, /compose version/u);
   assert.match(host, /DOCKER_HOST_FRESH == 1.*DOCKER_HOST_ACCEPTANCE/u);
   assert.match(host, /agent-relay-builder must not be in docker/u);
   assert.match(host, /DOCKER_CONFIG=\$\{client\}/u);
+  assert.match(host, /DOCKER_HOST_CODEX_PATH=\/opt\/java\/openjdk\/bin:\/usr\/local\/go\/bin:\/opt\/rust\/cargo\/bin:\/usr\/local\/bin:\/usr\/bin:\/bin/u);
+  assert.match(host, /systemctl is-enabled --quiet/u);
+  assert.match(host, /DOCKER_HOST_OVERRIDE_UNIT_ROOTS=\(\/etc\/systemd\/system \/run\/systemd\/system \/usr\/local\/lib\/systemd\/system\)/u);
+  assert.match(host, /docker_host_validate_phase_boundary "\$\{phase\}"/u);
 });
 
 test("Docker lifecycle remains with Codex and bind-mount ownership is explicit", async () => {

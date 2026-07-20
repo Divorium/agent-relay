@@ -27,6 +27,8 @@ mkdir -p "${TMP}/empty" "${TMP}/populated"
 printf 'state\n' > "${TMP}/populated/entry"
 docker_host_directory_empty "${TMP}/empty" || fail "empty managed directory was rejected"
 if docker_host_directory_empty "${TMP}/populated"; then fail "populated unmanaged directory was accepted"; fi
+ln -s "${TMP}/missing" "${TMP}/dangling-directory"
+if docker_host_directory_empty "${TMP}/dangling-directory"; then fail "dangling data-root link was treated as absent"; fi
 
 DOCKER_HOST_RUNNER_HOME=${TMP}/runner-home
 mkdir -p "${DOCKER_HOST_RUNNER_HOME}/.docker/cli-plugins"
@@ -37,6 +39,9 @@ rm "${DOCKER_HOST_RUNNER_HOME}/.docker/cli-plugins/docker-compose"
 printf '{}\n' > "${DOCKER_HOST_RUNNER_HOME}/.docker/config.json"
 if docker_host_local_plugin_overrides_absent; then fail "user Docker CLI configuration was accepted"; fi
 rm "${DOCKER_HOST_RUNNER_HOME}/.docker/config.json"
+ln -s "${TMP}/missing-plugin" "${DOCKER_HOST_RUNNER_HOME}/.docker/cli-plugins/docker-buildx"
+if docker_host_local_plugin_overrides_absent; then fail "dangling user plugin shadow was accepted"; fi
+rm "${DOCKER_HOST_RUNNER_HOME}/.docker/cli-plugins/docker-buildx"
 
 DOCKER_HOST_UNIT_ROOTS=("${TMP}/units-etc" "${TMP}/units-run")
 mkdir -p "${DOCKER_HOST_UNIT_ROOTS[@]}"
@@ -46,6 +51,41 @@ if docker_host_direct_unit_state_absent; then fail "direct Docker unit leftover 
 rm "${DOCKER_HOST_UNIT_ROOTS[1]}/docker.service"
 mkdir "${DOCKER_HOST_UNIT_ROOTS[0]}/containerd.service.d"
 if docker_host_direct_unit_state_absent; then fail "direct containerd drop-in leftover was accepted"; fi
+rm -rf "${DOCKER_HOST_UNIT_ROOTS[0]}/containerd.service.d"
+ln -s "${TMP}/missing-unit" "${DOCKER_HOST_UNIT_ROOTS[0]}/docker.socket"
+if docker_host_direct_unit_state_absent; then fail "dangling Docker unit was accepted"; fi
+rm "${DOCKER_HOST_UNIT_ROOTS[0]}/docker.socket"
+
+unit_enable=${TMP}/enable-units
+unit_package=${TMP}/package-units
+mkdir -p "${unit_enable}/multi-user.target.wants" "${unit_enable}/sockets.target.wants" "${unit_package}"
+printf '[Unit]\n' > "${unit_package}/docker.service"
+printf '[Unit]\n' > "${unit_package}/docker.socket"
+printf '[Unit]\n' > "${unit_package}/containerd.service"
+DOCKER_HOST_ENABLE_ROOT=${unit_enable}
+DOCKER_HOST_UNIT_ROOTS=("${unit_enable}" "${unit_package}")
+DOCKER_HOST_OVERRIDE_UNIT_ROOTS=("${unit_enable}")
+DOCKER_HOST_PACKAGE_UNIT_ROOTS=("${unit_package}")
+docker_debian_command_owner() { [[ "$1" == *containerd.service ]] && printf 'containerd.io\n' || printf 'docker-ce\n'; }
+ln -s "${unit_package}/containerd.service" "${unit_enable}/multi-user.target.wants/containerd.service"
+docker_host_activation_links_validate subset || fail "exact partial activation link was rejected"
+if docker_host_activation_links_validate exact; then fail "partial activation links were accepted as complete"; fi
+ln -s "${unit_package}/docker.service" "${unit_enable}/multi-user.target.wants/docker.service"
+ln -s "${unit_package}/docker.socket" "${unit_enable}/sockets.target.wants/docker.socket"
+docker_host_activation_links_validate exact || fail "exact managed activation links were rejected"
+mkdir "${unit_enable}/multi-user.target.requires"
+ln -s "${unit_package}/docker.service" "${unit_enable}/multi-user.target.requires/docker.service"
+if docker_host_activation_links_validate exact; then fail "unexpected additional activation link was accepted"; fi
+rm -rf "${unit_enable}/multi-user.target.requires"
+rm "${unit_enable}/sockets.target.wants/docker.socket"
+printf 'not-a-link\n' > "${unit_enable}/sockets.target.wants/docker.socket"
+if docker_host_activation_links_validate subset; then fail "non-symlink activation entry was accepted"; fi
+
+for active_mask in 1 2 3 4 5 6 7; do
+  [[ "$(docker_host_service_recovery_action "$((active_mask & 1))" "$(((active_mask >> 1) & 1))" "$(((active_mask >> 2) & 1))")" == stop-all ]] \
+    || fail "partial activation combination ${active_mask} was not normalized"
+done
+[[ "$(docker_host_service_recovery_action 0 0 0)" == none ]] || fail "inactive services requested recovery"
 
 DOCKER_HOST_DEFAULT_ENGINE_ROOT=${TMP}/default-docker
 DOCKER_HOST_DEFAULT_CONTAINERD_ROOT=${TMP}/default-containerd
@@ -147,6 +187,14 @@ if docker_debian_dpkg_state_clean "${TMP}/audit" "${TMP}/packages"; then fail "d
 : > "${TMP}/audit"
 printf 'broken|iF |1.0\n' > "${TMP}/packages"
 if docker_debian_dpkg_state_clean "${TMP}/audit" "${TMP}/packages"; then fail "broken dpkg state was accepted"; fi
+printf 'docker-ce|1.0\n' > "${TMP}/transaction-packages"
+printf '%s\n' 'docker-ce|iF |1.0' 'man-db|it |2.12' 'libc-bin|iW |2.41' > "${TMP}/trigger-packages"
+docker_debian_recovery_dpkg_state_allowed "${TMP}/trigger-packages" "${TMP}/transaction-packages" \
+  || fail "owned transaction trigger states were rejected"
+printf '%s\n' 'docker-ce|iF |1.0' 'unrelated|iF |9' > "${TMP}/trigger-packages"
+if docker_debian_recovery_dpkg_state_allowed "${TMP}/trigger-packages" "${TMP}/transaction-packages"; then
+  fail "unrelated half-configured package was accepted during recovery"
+fi
 
 printf 'sl|5.02-1+b1\n' > "${TMP}/requested"
 printf '%s\n' sl libncurses6 > "${TMP}/allowed"
@@ -205,6 +253,26 @@ printf '%s\n' \
 if docker_host_containerd_metadata_root_exact "${TMP}/ctr-plugins" /srv/github-runner/storage/docker/containerd; then
   fail "default containerd metadata root was accepted"
 fi
+docker_host_ctr_command
+[[ " ${DOCKER_HOST_CTR_COMMAND[*]} " == *' /usr/bin/timeout --signal=TERM --kill-after=2s 10s /usr/bin/env -i '* ]] \
+  || fail "ctr inspection is not bounded and environment-clean"
+[[ " ${DOCKER_HOST_CTR_COMMAND[*]} " == *' /usr/bin/ctr --address /run/containerd/containerd.sock plugins ls -d '* ]] \
+  || fail "ctr inspection does not use the explicit local socket"
+
+shadow_java=${TMP}/shadow-java
+shadow_go=${TMP}/shadow-go
+shadow_rust=${TMP}/shadow-rust
+mkdir "${shadow_java}" "${shadow_go}" "${shadow_rust}"
+printf '#!/bin/sh\n' > "${shadow_java}/docker"
+printf '#!/bin/sh\n' > "${shadow_go}/dockerd"
+printf '#!/bin/sh\n' > "${shadow_rust}/ctr"
+chmod 0755 "${shadow_java}/docker" "${shadow_go}/dockerd" "${shadow_rust}/ctr"
+DOCKER_HOST_CODEX_PATH=${shadow_java}:${shadow_go}:${shadow_rust}:/usr/local/bin:/usr/bin:/bin
+if docker_host_command_state_absent; then fail "production PATH command shadowing was accepted"; fi
+DOCKER_HOST_CODEX_PATH=/opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin
+# shellcheck source=scripts/toolchain-environment.sh
+source "${ROOT}/scripts/toolchain-environment.sh"
+[[ "${DOCKER_HOST_CODEX_PATH}" == "${TOOLCHAIN_PATH}" ]] || fail "Docker validation PATH drifted from Codex's production PATH"
 
 configure_exact_state() {
   DOCKER_HOST_OWNER_UID=$(/usr/bin/id -u)
@@ -236,6 +304,41 @@ assert_revalidation_blocks_activation() {
 
 configure_exact_state
 docker_host_validate_storage_and_configuration
+DOCKER_HOST_MARKER=${TMP}/agent-state/docker-host-state-v1
+mkdir -p "$(dirname "${DOCKER_HOST_MARKER}")"
+daemon_stage=${DOCKER_HOST_DAEMON_DIRECTORY}/.agent-relay-daemon.json.tmp.safe
+docker_host_daemon_content > "${daemon_stage}"
+chmod 0644 "${daemon_stage}"
+docker_host_validate_publication_stages preparing || fail "exact interrupted configuration stage was rejected"
+docker_host_validate_preparing_paths || fail "exact interrupted configuration publication was not restartable"
+rm "${daemon_stage}"
+mkdir "${daemon_stage}"
+if docker_host_validate_publication_stages preparing; then fail "non-regular configuration stage was accepted"; fi
+rm -rf "${daemon_stage}"
+marker_stage=$(dirname "${DOCKER_HOST_MARKER}")/.agent-relay-docker-host-state-v1.tmp.safe
+printf 'schema=1\nphase=preparing\n' > "${marker_stage}"
+chmod 0600 "${marker_stage}"
+docker_host_validate_publication_stages fresh || fail "exact interrupted marker stage was rejected"
+rm "${marker_stage}"
+ln -s "${TMP}/missing-marker-stage" "${marker_stage}"
+if docker_host_validate_publication_stages fresh; then fail "dangling marker stage was accepted"; fi
+rm "${marker_stage}"
+printf 'schema=1\nphase=transaction\npackage=docker-ce:1\n' > "${DOCKER_HOST_MARKER}"
+chmod 0600 "${DOCKER_HOST_MARKER}"
+(
+  docker_debian_package_status() {
+    [[ "$1" == docker-ce ]] && printf 'iU |1\n' || printf 'not-installed|\n'
+  }
+  docker_host_validate_phase_packages transaction
+) || fail "owned partial transaction package was rejected"
+if (
+  docker_debian_package_status() {
+    case "$1" in docker-ce) printf 'iU |1\n' ;; docker.io) printf 'ii |99\n' ;; *) printf 'not-installed|\n' ;; esac
+  }
+  docker_host_validate_phase_packages transaction
+); then
+  fail "new conflicting package bypassed the transaction boundary"
+fi
 printf 'changed\n' > "${DOCKER_HOST_DAEMON_CONFIG}"
 assert_revalidation_blocks_activation daemon-file
 configure_exact_state
@@ -256,6 +359,27 @@ if (docker_host_validate_storage_and_configuration); then fail "completed-state 
 [[ ! -e "${DOCKER_HOST_DAEMON_CONFIG}" ]] || fail "completed-state corruption was repaired"
 
 DOCKER_HOST_POLICY=${TMP}/policy-rc.d
+docker_host_policy_content > "${DOCKER_HOST_POLICY}"
+chmod 0755 "${DOCKER_HOST_POLICY}"
+set +e
+"${DOCKER_HOST_POLICY}" docker.service start
+policy_docker_status=$?
+"${DOCKER_HOST_POLICY}" postgresql start
+policy_unrelated_status=$?
+set -e
+(( policy_docker_status == 101 )) || fail "managed policy did not deny Docker activation"
+(( policy_unrelated_status == 0 )) || fail "managed policy denied an unrelated package service"
+(
+  docker_host_services_inactive() { return 0; }
+  docker_host_recover_preparing_policy
+) || fail "exact preparing policy was not recoverable"
+[[ ! -e "${DOCKER_HOST_POLICY}" ]] || fail "exact preparing policy was not removed before restart"
+printf 'unexpected\n' > "${DOCKER_HOST_POLICY}"
+chmod 0755 "${DOCKER_HOST_POLICY}"
+if (docker_host_services_inactive() { return 0; }; docker_host_recover_preparing_policy); then
+  fail "non-exact preparing policy was accepted"
+fi
+[[ -e "${DOCKER_HOST_POLICY}" ]] || fail "non-exact preparing policy was mutated"
 docker_host_policy_content > "${DOCKER_HOST_POLICY}"
 chmod 0755 "${DOCKER_HOST_POLICY}"
 DOCKER_HOST_POLICY_REMOVE_ON_EXIT=1

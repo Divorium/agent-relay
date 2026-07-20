@@ -81,12 +81,28 @@ cat > "${FAKE_BIN}/sudo" <<EOF_SUDO
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'sudo %s\n' "\$*" >> "${COMMAND_LOG}"
-if [[ "\${1:-}" == '-v' || "\${1:-}" == '-k' ]]; then exit 0; fi
+if [[ "\${1:-}" == '-v' ]]; then printf '%s\n' "\${PPID}" > "${ROOT}/sudo-parent"; exit 0; fi
+if [[ "\${1:-}" == '-k' ]]; then rm -f -- "${ROOT}/sudo-parent"; exit 0; fi
+[[ -f "${ROOT}/sudo-parent" && "\$(<"${ROOT}/sudo-parent")" == "\${PPID}" ]] || exit 1
 if [[ "\$*" == '-n true' && "\${MOCK_SUDO_EXPIRE:-0}" == 1 && -e "${ROOT}/provisioning" ]]; then exit 1; fi
 if [[ "\${1:-}" == '-n' ]]; then shift; fi
 if [[ "\${1:-}" == '-u' ]]; then shift 2; fi
 if [[ "\${1:-}" == '--' ]]; then shift; fi
 case "\${1:-}" in
+  '${FAKE_BIN}/setsid')
+    pgid_file="\${@: -2:1}"
+    printf '%s\n' "\${BASHPID}" > "\${pgid_file}"
+    printf 'docker provisioner\n' >> "${DOCKER_LOG}"
+    if [[ "\${MOCK_DOCKER_MODE:-exit}" == hang ]]; then
+      : > "${ROOT}/provisioning"
+      while true; do /bin/sleep 1; done
+    fi
+    if [[ "\${MOCK_DOCKER_MODE:-exit}" == linger ]]; then
+      : > "${ROOT}/provisioning"
+      /bin/sleep 2
+    fi
+    exit "\${MOCK_DOCKER_STATUS:-0}"
+    ;;
   '${DOCKER_PROVISIONER}')
     printf 'docker provisioner\n' >> "${DOCKER_LOG}"
     if [[ "\${MOCK_DOCKER_MODE:-exit}" == hang ]]; then
@@ -182,7 +198,7 @@ source = source.replace('PROCESS_GROUP_WAIT_STEPS=300', 'PROCESS_GROUP_WAIT_STEP
 source = source.replace('PROCESS_GROUP_WAIT_SECONDS=0.1', 'PROCESS_GROUP_WAIT_SECONDS=0')
 source = source.replace('PROVISIONER_DEADLINE_STEPS=7200', 'PROVISIONER_DEADLINE_STEPS=2')
 source = source.replace('PROVISIONER_DEADLINE_SECONDS=1', 'PROVISIONER_DEADLINE_SECONDS=0')
-source = source.replace('SUDO_KEEPALIVE_SECONDS=15', 'SUDO_KEEPALIVE_SECONDS=0')
+source = source.replace('SUDO_REFRESH_STEPS=15', 'SUDO_REFRESH_STEPS=1')
 pathlib.Path(sys.argv[2]).write_text(source)
 PY
 chmod 0755 "${TRANSFORMED_UPDATE}"
@@ -255,7 +271,10 @@ if (( expiry_status == 0 )); then
   printf 'expired-authority scenario unexpectedly succeeded\n' >&2
   exit 1
 fi
-grep -Eq 'Noninteractive sudo authority expired|Update interrupted by TERM' "${ROOT}/expiry.err"
+grep -Eq 'Noninteractive .*sudo authority expired|Update interrupted by TERM' "${ROOT}/expiry.err" || {
+  cat "${ROOT}/expiry.err" >&2
+  exit 1
+}
 grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
 
 rm -f -- "${ROOT}/provisioning"

@@ -17,6 +17,9 @@ source "${ROOT}/scripts/docker-host.sh"
 source "${ROOT}/scripts/docker-host-debian.sh"
 DOCKER_HOST_STATE_ROOT=${TMP}/state
 mkdir -p "${DOCKER_HOST_STATE_ROOT}"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-apt-roots.bin"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-roots.bin"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-unit-roots.bin"
 DOCKER_DEBIAN_CODENAME=trixie
 DOCKER_HOST_OWNER_UID=$(/usr/bin/id -u)
 DOCKER_HOST_OWNER_GID=$(/usr/bin/id -g)
@@ -613,6 +616,11 @@ assert_cleanup_mount_rejected "${ordinary_cleanup_tree}/new"$'\n'line "${ordinar
   "newline-escaped mounted cleanup root" "${ordinary_cleanup_tree}/new\\012line"
 assert_cleanup_mount_rejected "${ordinary_cleanup_tree}/back\\slash" "${ordinary_cleanup_tree}/back\\slash" \
   "backslash-escaped mounted cleanup root" "${ordinary_cleanup_tree}/back\\134slash"
+printf '1 0 0:1 / / rw - ext4 /dev/root rw\n' > "${TMP}/root-filesystem-mountinfo"
+(
+  DOCKER_HOST_MOUNTINFO=${TMP}/root-filesystem-mountinfo
+  docker_host_assert_cleanup_tree_unmounted "${ordinary_cleanup_tree}"
+) || fail "mounted ancestor above the selected cleanup root created a false positive"
 
 for configuration_mount_kind in root descendant; do
   mounted_configuration=${TMP}/mounted-configuration-${configuration_mount_kind}
@@ -681,6 +689,63 @@ set -e
 [[ "$(<"${mounted_plugin_unsafe_directory}/nested/content")" == preserve ]] \
   || fail "mounted plugin directory with an escaped path character was modified"
 
+mounted_shared_plugin_root=${TMP}/mounted-shared-plugin-root
+mkdir -p "${mounted_shared_plugin_root}/docker-directory" "${TMP}/mounted-shared-plugin-runner"
+printf 'file\n' > "${mounted_shared_plugin_root}/docker-file"
+ln -s "${TMP}/missing-shared-plugin" "${mounted_shared_plugin_root}/docker-link"
+mkfifo "${mounted_shared_plugin_root}/docker-fifo"
+printf 'directory\n' > "${mounted_shared_plugin_root}/docker-directory/content"
+printf '1 0 0:1 / %s rw - tmpfs tmpfs rw\n' "${mounted_shared_plugin_root}" \
+  > "${TMP}/mounted-shared-plugin-mountinfo"
+set +e
+(
+  set -e
+  DOCKER_HOST_PLUGIN_DIRS=("${mounted_shared_plugin_root}")
+  DOCKER_HOST_RUNNER_HOME=${TMP}/mounted-shared-plugin-runner
+  DOCKER_HOST_MOUNTINFO=${TMP}/mounted-shared-plugin-mountinfo
+  docker_host_fail() { [[ "$1" == inspection ]] && exit 42; exit 43; }
+  docker_host_inventory_cleanup_plugins
+)
+mounted_shared_plugin_status=$?
+set -e
+(( mounted_shared_plugin_status == 42 )) || fail "mounted shared plugin root was accepted before direct-entry inventory"
+[[ -f "${mounted_shared_plugin_root}/docker-file" && -L "${mounted_shared_plugin_root}/docker-link" \
+  && -p "${mounted_shared_plugin_root}/docker-fifo" && -d "${mounted_shared_plugin_root}/docker-directory" \
+  && "$(<"${mounted_shared_plugin_root}/docker-directory/content")" == directory ]] \
+  || fail "mounted shared plugin root content was modified"
+
+recheck_plugin_root=${TMP}/recheck-plugin-root
+mkdir -p "${recheck_plugin_root}" "${TMP}/recheck-plugin-runner"
+printf 'preserve\n' > "${recheck_plugin_root}/docker-buildx"
+set +e
+(
+  set -e
+  mount_inspections=0
+  DOCKER_HOST_PLUGIN_DIRS=("${recheck_plugin_root}")
+  DOCKER_HOST_RUNNER_HOME=${TMP}/recheck-plugin-runner
+  docker_host_cleanup_tree_has_mount() {
+    ((mount_inspections += 1))
+    (( mount_inspections == 1 )) && return 1
+    return 0
+  }
+  docker_host_fail() { [[ "$1" == inspection ]] && exit 42; exit 43; }
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-configuration-directories"
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-stages.bin"
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-key-files"
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-unit-paths.bin"
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-unit-roots.bin"
+  docker_debian_remove_cleanup_repository_files() { return 0; }
+  docker_host_runtime_socket_present() { return 1; }
+  docker_host_inventory_cleanup_plugins
+  docker_host_remove_cleanup_remnants
+)
+recheck_plugin_status=$?
+set -e
+(( recheck_plugin_status == 42 )) || fail "plugin root mounted after inventory was accepted before direct-entry removal"
+[[ "$(<"${recheck_plugin_root}/docker-buildx")" == preserve ]] \
+  || fail "plugin root mounted after inventory was modified"
+
 for unit_mount_kind in root descendant; do
   mounted_unit_root=${TMP}/mounted-unit-${unit_mount_kind}
   mounted_unit_directory=${mounted_unit_root}/docker.service.d
@@ -702,6 +767,95 @@ for unit_mount_kind in root descendant; do
   [[ "$(<"${mounted_unit_directory}/nested/content")" == preserve ]] \
     || fail "mounted unit directory ${unit_mount_kind} content was modified"
 done
+
+mounted_shared_unit_root=${TMP}/mounted-shared-unit-root
+mkdir -p "${mounted_shared_unit_root}/docker.service.d" "${mounted_shared_unit_root}/multi-user.target.wants"
+printf '[Unit]\n' > "${mounted_shared_unit_root}/docker.service"
+printf '[Service]\n' > "${mounted_shared_unit_root}/docker.service.d/override.conf"
+ln -s docker.service "${mounted_shared_unit_root}/docker-alias.service"
+ln -s ../docker.service "${mounted_shared_unit_root}/multi-user.target.wants/docker.service"
+printf '1 0 0:1 / %s rw - tmpfs tmpfs rw\n' "${mounted_shared_unit_root}" \
+  > "${TMP}/mounted-shared-unit-mountinfo"
+set +e
+(
+  set -e
+  DOCKER_HOST_UNIT_ROOTS=("${mounted_shared_unit_root}")
+  DOCKER_HOST_MOUNTINFO=${TMP}/mounted-shared-unit-mountinfo
+  docker_host_fail() { [[ "$1" == inspection ]] && exit 42; exit 43; }
+  docker_host_inventory_cleanup_units
+)
+mounted_shared_unit_status=$?
+set -e
+(( mounted_shared_unit_status == 42 )) || fail "mounted shared systemd root was accepted before direct-entry inventory"
+[[ -f "${mounted_shared_unit_root}/docker.service" \
+  && -f "${mounted_shared_unit_root}/docker.service.d/override.conf" \
+  && -L "${mounted_shared_unit_root}/docker-alias.service" \
+  && -L "${mounted_shared_unit_root}/multi-user.target.wants/docker.service" ]] \
+  || fail "mounted shared systemd root content was modified"
+
+recheck_unit_root=${TMP}/recheck-unit-root
+mkdir -p "${recheck_unit_root}"
+printf '[Unit]\n' > "${recheck_unit_root}/docker.service"
+set +e
+(
+  set -e
+  mount_inspections=0
+  DOCKER_HOST_UNIT_ROOTS=("${recheck_unit_root}")
+  docker_host_cleanup_tree_has_mount() {
+    ((mount_inspections += 1))
+    (( mount_inspections == 1 )) && return 1
+    return 0
+  }
+  docker_host_fail() { [[ "$1" == inspection ]] && exit 42; exit 43; }
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-configuration-directories"
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-stages.bin"
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-key-files"
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-entries.bin"
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-roots.bin"
+  docker_debian_remove_cleanup_repository_files() { return 0; }
+  docker_host_runtime_socket_present() { return 1; }
+  docker_host_inventory_cleanup_units
+  docker_host_remove_cleanup_remnants
+)
+recheck_unit_status=$?
+set -e
+(( recheck_unit_status == 42 )) || fail "systemd root mounted after inventory was accepted before unit removal"
+[[ "$(<"${recheck_unit_root}/docker.service")" == '[Unit]' ]] \
+  || fail "systemd root mounted after inventory was modified"
+
+recheck_reload_unit_root=${TMP}/recheck-reload-unit-root
+mkdir -p "${recheck_reload_unit_root}"
+printf 'preserve\n' > "${recheck_reload_unit_root}/unrelated.service"
+set +e
+(
+  set -e
+  mount_inspections=0
+  DOCKER_HOST_UNIT_ROOTS=("${recheck_reload_unit_root}")
+  docker_host_cleanup_tree_has_mount() {
+    ((mount_inspections += 1))
+    (( mount_inspections <= 2 )) && return 1
+    return 0
+  }
+  docker_host_fail() { [[ "$1" == inspection ]] && exit 42; exit 43; }
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-configuration-directories"
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-stages.bin"
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-key-files"
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-entries.bin"
+  : > "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-roots.bin"
+  docker_debian_remove_cleanup_repository_files() { return 0; }
+  docker_host_runtime_socket_present() { return 1; }
+  docker_host_systemctl_daemon_reload() { printf 'reloaded\n' > "${TMP}/unsafe-unit-reload"; }
+  docker_host_inventory_cleanup_units
+  DOCKER_HOST_SYSTEMD_RELOAD_NEEDED=1
+  docker_host_remove_cleanup_remnants
+)
+recheck_reload_status=$?
+set -e
+(( recheck_reload_status == 42 )) || fail "systemd root mounted after inventory was accepted before daemon reload"
+[[ ! -e "${TMP}/unsafe-unit-reload" && "$(<"${recheck_reload_unit_root}/unrelated.service")" == preserve ]] \
+  || fail "mounted systemd root triggered daemon reload or modified unrelated content"
 
 recheck_configuration=${TMP}/recheck-configuration
 mkdir -p "${recheck_configuration}"
@@ -773,6 +927,132 @@ fi
 [[ ! -e "${TMP}/continued-after-repository-inventory-failure" ]] \
   || fail "remnant inventory continued after unsafe mixed repository state"
 configure_exact_state
+
+for mounted_apt_kind in apt keyrings sources-list-d; do
+  mounted_apt_root=${TMP}/mounted-apt-${mounted_apt_kind}
+  mkdir -p "${mounted_apt_root}/keyrings" "${mounted_apt_root}/sources.list.d"
+  case "${mounted_apt_kind}" in
+    apt)
+      mounted_apt_target=${mounted_apt_root}
+      mounted_apt_content=${mounted_apt_root}/.agent-relay-docker-cleanup.tmp.interrupted ;;
+    keyrings)
+      mounted_apt_target=${mounted_apt_root}/keyrings
+      mounted_apt_content=${mounted_apt_root}/keyrings/docker.asc ;;
+    sources-list-d)
+      mounted_apt_target=${mounted_apt_root}/sources.list.d
+      mounted_apt_content=${mounted_apt_root}/sources.list.d/docker.list ;;
+  esac
+  printf 'preserve\n' > "${mounted_apt_content}"
+  printf '1 0 0:1 / %s rw - tmpfs tmpfs rw\n' "${mounted_apt_target}" \
+    > "${TMP}/mounted-apt-${mounted_apt_kind}-mountinfo"
+  set +e
+  (
+    set -e
+    DOCKER_DEBIAN_APT_DIRECTORY=${mounted_apt_root}
+    DOCKER_HOST_MOUNTINFO=${TMP}/mounted-apt-${mounted_apt_kind}-mountinfo
+    docker_debian_secure_path() { return 0; }
+    docker_host_fail() { [[ "$1" == inspection ]] && exit 42; exit 43; }
+    docker_debian_inventory_cleanup_repository_files
+  )
+  mounted_apt_status=$?
+  set -e
+  (( mounted_apt_status == 42 )) \
+    || fail "mounted ${mounted_apt_kind} cleanup root was accepted before repository inventory"
+  [[ "$(<"${mounted_apt_content}")" == preserve ]] \
+    || fail "mounted ${mounted_apt_kind} cleanup root content was modified"
+done
+
+recheck_apt_root=${TMP}/recheck-apt-root
+mkdir -p "${recheck_apt_root}/keyrings" "${recheck_apt_root}/sources.list.d"
+recheck_apt_source=${recheck_apt_root}/sources.list.d/docker.list
+printf '%s\n' \
+  'deb https://deb.debian.org/debian trixie main' \
+  'deb https://download.docker.com/linux/debian trixie stable' \
+  > "${recheck_apt_source}"
+set +e
+(
+  set -e
+  mount_inspections=0
+  DOCKER_DEBIAN_APT_DIRECTORY=${recheck_apt_root}
+  docker_debian_secure_path() { return 0; }
+  docker_debian_readable_file_secure() { return 0; }
+  docker_host_cleanup_tree_has_mount() {
+    ((mount_inspections += 1))
+    (( mount_inspections <= 3 )) && return 1
+    return 0
+  }
+  docker_host_fail() { [[ "$1" == inspection ]] && exit 42; exit 43; }
+  docker_debian_inventory_repository_definitions() {
+    printf 'compatible|%s/keyrings/docker.asc|%s\n' "${recheck_apt_root}" "${recheck_apt_source}" \
+      > "${DOCKER_HOST_STATE_ROOT}/repository-definitions.txt"
+  }
+  docker_debian_inventory_cleanup_repository_files
+  docker_debian_remove_cleanup_repository_files
+)
+recheck_apt_source_status=$?
+set -e
+(( recheck_apt_source_status == 42 )) \
+  || fail "apt source root mounted after inventory was accepted before shared-source rewrite"
+/usr/bin/grep -Fq 'download.docker.com' "${recheck_apt_source}" \
+  || fail "apt source root mounted after inventory was rewritten"
+
+recheck_apt_key=${recheck_apt_root}/keyrings/docker.asc
+printf 'preserve\n' > "${recheck_apt_key}"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-configuration-directories"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-stages.bin"
+printf '%s\n' "${recheck_apt_key}" > "${DOCKER_HOST_STATE_ROOT}/cleanup-key-files"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-entries.bin"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-roots.bin"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-unit-paths.bin"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-unit-roots.bin"
+set +e
+(
+  set -e
+  DOCKER_DEBIAN_APT_DIRECTORY=${recheck_apt_root}
+  docker_host_cleanup_tree_has_mount() { return 0; }
+  docker_host_fail() { [[ "$1" == inspection ]] && exit 42; exit 43; }
+  docker_host_runtime_socket_present() { return 1; }
+  docker_host_remove_cleanup_remnants
+)
+recheck_apt_key_status=$?
+set -e
+(( recheck_apt_key_status == 42 )) \
+  || fail "apt keyring root mounted after inventory was accepted before key removal"
+[[ "$(<"${recheck_apt_key}")" == preserve ]] \
+  || fail "apt keyring root mounted after inventory was modified"
+
+recheck_apt_inventory_root=${TMP}/recheck-apt-inventory-root
+mkdir -p "${recheck_apt_inventory_root}/keyrings" "${recheck_apt_inventory_root}/sources.list.d"
+recheck_apt_inventory_key=${recheck_apt_inventory_root}/keyrings/docker.asc
+printf 'preserve\n' > "${recheck_apt_inventory_key}"
+set +e
+(
+  set -e
+  mount_inspections=0
+  DOCKER_DEBIAN_APT_DIRECTORY=${recheck_apt_inventory_root}
+  DOCKER_DEBIAN_MANAGED_KEY=${recheck_apt_inventory_key}
+  docker_debian_secure_path() { return 0; }
+  docker_host_cleanup_tree_has_mount() {
+    ((mount_inspections += 1))
+    (( mount_inspections <= 3 )) && return 1
+    return 0
+  }
+  docker_host_fail() { [[ "$1" == inspection ]] && exit 42; exit 43; }
+  docker_host_inventory_cleanup_configuration() { return 0; }
+  docker_debian_inventory_repository_definitions() { : > "${DOCKER_HOST_STATE_ROOT}/repository-definitions.txt"; }
+  docker_host_inventory_cleanup_plugins() { printf 'continued\n' > "${TMP}/continued-after-mounted-key-inventory"; }
+  docker_host_inventory_unmarked_remnants
+)
+recheck_apt_inventory_status=$?
+set -e
+(( recheck_apt_inventory_status == 42 )) \
+  || fail "apt root mounted after repository inventory was accepted before key inventory"
+[[ "$(<"${recheck_apt_inventory_key}")" == preserve ]] \
+  || fail "apt key content was modified during mounted cleanup inventory"
+[[ ! -e "${TMP}/continued-after-mounted-key-inventory" ]] \
+  || fail "cleanup inventory continued after the apt root became mounted"
+DOCKER_DEBIAN_APT_DIRECTORY=/etc/apt
 
 printf '%s\n' 'docker-ce|rc |1' 'runc|rc |2' > "${TMP}/purge-records"
 (

@@ -63,6 +63,11 @@ test("unmarked Docker remnant cleanup is exact, restartable, and fully reclassif
   assert.match(host, /DOCKER_HOST_CLEANUP_PATH="\$1" \/usr\/bin\/awk/u);
   assert.match(host, /Mounted filesystem at or below recursive cleanup path/u);
   assert.match(host, /docker_host_assert_cleanup_tree_unmounted "\$\{path\}"[\s\S]*?rm -rf --one-file-system -- "\$\{path\}"/u);
+  assert.match(host, /cleanup-plugin-roots\.bin/u);
+  assert.match(host, /cleanup-unit-roots\.bin/u);
+  assert.match(host, /docker_host_assert_recorded_cleanup_roots_unmounted/u);
+  assert.match(adapter, /cleanup-apt-roots\.bin/u);
+  assert.match(adapter, /docker_debian_assert_cleanup_apt_roots_unmounted/u);
   assert.match(adapter, /docker_debian_filter_list_source/u);
   assert.match(adapter, /docker_debian_filter_sources_file/u);
   assert.match(adapter, /\.agent-relay-docker-cleanup\.tmp\./u);

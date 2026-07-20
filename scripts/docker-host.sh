@@ -99,6 +99,13 @@ docker_host_assert_cleanup_tree_unmounted() {
   fi
 }
 
+docker_host_assert_recorded_cleanup_roots_unmounted() {
+  local roots="$1" root
+  while IFS= read -r -d '' root; do
+    docker_host_assert_cleanup_tree_unmounted "${root}"
+  done < "${roots}"
+}
+
 docker_host_cleanup() {
   (( DOCKER_HOST_POLICY_REMOVE_ON_EXIT == 0 )) || docker_host_path_absent "${DOCKER_HOST_POLICY}" || {
     docker_host_policy_valid "${DOCKER_HOST_POLICY}" && /usr/bin/rm -f -- "${DOCKER_HOST_POLICY}" || true
@@ -378,11 +385,15 @@ docker_host_inventory_cleanup_configuration() {
 
 docker_host_inventory_cleanup_plugins() {
   local directory entry listing=${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-entries.bin
+  local roots=${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-roots.bin
   : > "${listing}"
+  : > "${roots}"
   docker_host_path_absent "${DOCKER_HOST_RUNNER_HOME}/.docker/config.json" || return 1
   for directory in "${DOCKER_HOST_PLUGIN_DIRS[@]}"; do
     docker_host_path_absent "${directory}" && continue
     [[ -d "${directory}" && ! -L "${directory}" ]] || return 1
+    docker_host_assert_cleanup_tree_unmounted "${directory}"
+    printf '%s\0' "${directory}" >> "${roots}"
     /usr/bin/find -P "${directory}" -mindepth 1 -maxdepth 1 -print0 >> "${listing}" || return 1
   done
   while IFS= read -r -d '' entry; do
@@ -395,12 +406,17 @@ docker_host_inventory_cleanup_plugins() {
 
 docker_host_inventory_cleanup_units() {
   local root unit path target listing=${DOCKER_HOST_STATE_ROOT}/cleanup-unit-paths.bin
+  local roots=${DOCKER_HOST_STATE_ROOT}/cleanup-unit-roots.bin
   local scan=${DOCKER_HOST_STATE_ROOT}/cleanup-unit-scan.bin tree_listing=${DOCKER_HOST_STATE_ROOT}/cleanup-unit-tree.bin entry activation_directory
   local activation_directories=${DOCKER_HOST_STATE_ROOT}/cleanup-unit-activation-directories.bin
   : > "${listing}"
+  : > "${roots}"
   for root in "${DOCKER_HOST_UNIT_ROOTS[@]}"; do
     docker_host_path_absent "${root}" && continue
+    [[ -d "${root}" && ! -L "${root}" ]] || return 1
+    docker_host_assert_cleanup_tree_unmounted "${root}"
     docker_host_secure_path "${root}" directory || return 1
+    printf '%s\0' "${root}" >> "${roots}"
     for unit in docker.service docker.socket containerd.service; do
       for path in "${root}/${unit}" "${root}/${unit}.d"; do
         docker_host_path_absent "${path}" || printf '%s\0' "${path}" >> "${listing}"
@@ -480,6 +496,7 @@ docker_host_inventory_unmarked_remnants() {
   docker_debian_inventory_cleanup_repository_files || return 1
   while IFS= read -r path; do [[ -z "${path}" ]] || ((DOCKER_HOST_REMNANT_COUNT += 1)); done \
     < "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
+  docker_debian_assert_cleanup_apt_roots_unmounted
   : > "${DOCKER_HOST_STATE_ROOT}/cleanup-key-files"
   for path in "${DOCKER_DEBIAN_MANAGED_KEY}" /etc/apt/keyrings/docker.gpg; do
     docker_host_path_absent "${path}" && continue
@@ -509,9 +526,13 @@ docker_host_remove_cleanup_remnants() {
   done < "${DOCKER_HOST_STATE_ROOT}/cleanup-configuration-directories"
   docker_debian_remove_cleanup_repository_files || docker_host_fail repository "Could not remove Docker repository remnants"
   while IFS= read -r path; do
-    [[ -z "${path}" ]] || /usr/bin/rm -f -- "${path}" || docker_host_fail repository "Could not remove Docker keyring remnant: ${path}"
+    if [[ -n "${path}" ]]; then
+      docker_debian_assert_cleanup_apt_roots_unmounted
+      /usr/bin/rm -f -- "${path}" || docker_host_fail repository "Could not remove Docker keyring remnant: ${path}"
+    fi
   done \
     < "${DOCKER_HOST_STATE_ROOT}/cleanup-key-files"
+  docker_host_assert_recorded_cleanup_roots_unmounted "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-roots.bin"
   while IFS= read -r -d '' path; do
     if [[ -d "${path}" && ! -L "${path}" ]]; then
       docker_host_assert_cleanup_tree_unmounted "${path}"
@@ -523,6 +544,7 @@ docker_host_remove_cleanup_remnants() {
     fi
   done \
     < "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-entries.bin"
+  docker_host_assert_recorded_cleanup_roots_unmounted "${DOCKER_HOST_STATE_ROOT}/cleanup-unit-roots.bin"
   while IFS= read -r -d '' path; do
     removed_units=1
     if [[ -d "${path}" && ! -L "${path}" ]]; then
@@ -536,8 +558,11 @@ docker_host_remove_cleanup_remnants() {
     /usr/bin/rm -f -- "${DOCKER_HOST_SOCKET}" "${DOCKER_HOST_RUNTIME_SOCKET}" \
       || docker_host_fail service "Could not remove stale inactive Docker socket"
   fi
-  (( removed_units == 0 && DOCKER_HOST_SYSTEMD_RELOAD_NEEDED == 0 )) || docker_host_systemctl_daemon_reload \
-    || docker_host_fail service "Could not reload systemd after Docker remnant cleanup"
+  if (( removed_units != 0 || DOCKER_HOST_SYSTEMD_RELOAD_NEEDED != 0 )); then
+    docker_host_assert_recorded_cleanup_roots_unmounted "${DOCKER_HOST_STATE_ROOT}/cleanup-unit-roots.bin"
+    docker_host_systemctl_daemon_reload \
+      || docker_host_fail service "Could not reload systemd after Docker remnant cleanup"
+  fi
 }
 
 docker_host_systemctl_daemon_reload() {

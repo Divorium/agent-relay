@@ -320,6 +320,7 @@ docker_debian_inspect_repository_definitions() {
 
 docker_debian_inventory_cleanup_repository_files() {
   local records=${DOCKER_HOST_STATE_ROOT}/repository-definitions.txt path listing=${DOCKER_HOST_STATE_ROOT}/cleanup-repository-stages.bin
+  docker_debian_inventory_cleanup_apt_roots
   docker_debian_inventory_repository_definitions
   /usr/bin/awk -F'|' 'NF >= 3 && !seen[$3]++ {print $3}' "${records}" \
     > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
@@ -341,6 +342,23 @@ docker_debian_inventory_cleanup_repository_files() {
       -o -name '.agent-relay-docker-cleanup.tmp.*' \) -print0 >> "${listing}" || return 1
   done
   while IFS= read -r -d '' path; do docker_debian_secure_path "${path}" file || return 1; done < "${listing}"
+}
+
+docker_debian_inventory_cleanup_apt_roots() {
+  local root roots=${DOCKER_HOST_STATE_ROOT}/cleanup-apt-roots.bin
+  : > "${roots}"
+  for root in "${DOCKER_DEBIAN_APT_DIRECTORY}" \
+    "${DOCKER_DEBIAN_APT_DIRECTORY}/keyrings" "${DOCKER_DEBIAN_APT_DIRECTORY}/sources.list.d"; do
+    docker_host_path_absent "${root}" && continue
+    [[ -d "${root}" && ! -L "${root}" ]] || return 1
+    docker_host_assert_cleanup_tree_unmounted "${root}"
+    docker_debian_secure_path "${root}" directory || return 1
+    printf '%s\0' "${root}" >> "${roots}"
+  done
+}
+
+docker_debian_assert_cleanup_apt_roots_unmounted() {
+  docker_host_assert_recorded_cleanup_roots_unmounted "${DOCKER_HOST_STATE_ROOT}/cleanup-apt-roots.bin"
 }
 
 docker_debian_sources_docker_stanzas_cleanup_safe() {
@@ -418,6 +436,7 @@ docker_debian_remove_cleanup_repository_files() {
     docker_debian_readable_file_secure "${source}" || docker_host_fail repository "Docker cleanup source became unsafe: ${source}"
     case "${source}" in
       *.sources)
+        docker_debian_assert_cleanup_apt_roots_unmounted
         if docker_debian_sources_file_is_dedicated_docker "${source}"; then
           /usr/bin/rm -f -- "${source}" || docker_host_fail repository "Could not remove dedicated Docker apt source: ${source}"
         else
@@ -425,6 +444,7 @@ docker_debian_remove_cleanup_repository_files() {
             || docker_host_fail repository "Could not preserve shared apt source while removing Docker: ${source}"
         fi ;;
       /etc/apt/sources.list|*.list)
+        docker_debian_assert_cleanup_apt_roots_unmounted
         if docker_debian_list_source_is_dedicated_docker "${source}"; then
           /usr/bin/rm -f -- "${source}" || docker_host_fail repository "Could not remove dedicated Docker apt source: ${source}"
         else
@@ -435,6 +455,7 @@ docker_debian_remove_cleanup_repository_files() {
     esac
   done < "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
   while IFS= read -r -d '' source; do
+    docker_debian_assert_cleanup_apt_roots_unmounted
     /usr/bin/rm -f -- "${source}" || docker_host_fail repository "Could not remove Docker repository cleanup stage: ${source}"
   done \
     < "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-stages.bin"

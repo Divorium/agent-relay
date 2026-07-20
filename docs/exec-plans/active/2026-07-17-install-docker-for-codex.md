@@ -216,11 +216,12 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - [x] `270afa3` fixed complete post-purge reclassification, `/etc/apt` cleanup-stage recovery, and arbitrary direct plugin-entry cleanup.
 - [x] `24db705` implemented mountinfo-backed recursive-tree protection and passed complete Codex validation with 137 tests and 100% measured TypeScript coverage.
 - [x] Independently reviewed `24db705` and recorded the mounted shared-root direct-entry blocker.
-- [ ] Protect plugin, systemd, and apt cleanup roots before inventory and direct mutation, with pre-mutation rechecks and behavioral tests.
-- [ ] Run final repository and Codex validation.
-- [ ] Publish a connector-authored exact final status commit and require normal CI to pass.
-- [ ] Complete independent final diff and job-log review.
-- [ ] Merge the PR after the acceptance criteria pass.
+- [x] Protected plugin, systemd, and apt cleanup roots before inventory and direct mutation, including apt key-inventory and systemd daemon-reload boundaries; deterministic mountinfo-seam tests preserve mounted direct contents and retain ancestor/recursive regressions.
+- [x] Ran final repository and Codex validation: `npm run check` passed with 137 tests, 100% measured TypeScript source coverage, and successful runtime, shell, node-script, toolchain, installer, updater, and repository-safe system checks.
+- [blocked] [ ] Publish a connector-authored exact final status commit and require normal CI to pass. The implementation is still the current Codex workspace rather than a connector-authored commit; unblock after runner finalization publishes this exact tree and its normal CI completes successfully.
+- [x] Completed independent final diff review with no correctness, data-safety, restartability, maintainability, test-adequacy, scope, or current-main regression finding.
+- [blocked] [ ] Complete independent final job-log review. No normal-CI job exists for the unpublished final implementation tree; unblock after the connector-authored commit's CI job completes and its logs are available.
+- [blocked] [ ] Merge the PR after the acceptance criteria pass. Exact-head normal CI and job-log review remain prerequisites.
 - [post-merge] Perform manual privileged host acceptance; open a new plan only if it exposes a defect.
 
 ## Decision Log
@@ -241,6 +242,7 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - Keep application-container lifecycle under Codex control.
 - Keep GitHub Actions workflows unchanged.
 - Complete privileged real-host acceptance manually after merge; defects found there become a new plan.
+- Record each existing shared plugin, systemd, and apt cleanup root during inventory and recheck the recorded set at its direct-mutation boundary; apt roots are rechecked before every source, key, or stage mutation, and systemd roots are rechecked again before daemon reload.
 
 ## Surprises & Discoveries
 
@@ -259,7 +261,11 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - Parsing `/proc/self/mountinfo` with the four kernel path escapes provides a deterministic testable boundary independent of util-linux output variants.
 - Protecting only recursively removed children is insufficient when cleanup directly unlinks or rewrites entries inside a mounted shared root.
 - Codex-token pushes may leave normal CI as `action_required`; a connector-authored final status commit is needed for exact-head CI evidence.
+- A root check before repository inventory is not sufficient for the later apt key inventory boundary; the recorded apt-root set must be rechecked between those inventories as well.
+- A systemd root can become mounted after unit cleanup but before the required manager reload, so daemon reload has its own recorded-root recheck.
 
 ## Outcomes & Retrospective
 
-Not complete. Keep this plan active until mounted shared-root protection, complete repository validation, exact-head normal CI, and independent final review pass. Manual privileged host acceptance happens after merge and is not part of this PR's blocking acceptance.
+Mounted shared-root protection and repository-safe validation are complete. The implementation records existing plugin, systemd, and apt cleanup roots, rejects mounted roots or descendants before direct-entry inventory, and rechecks the relevant recorded roots before deletion, rewriting, key inventory, and systemd daemon reload. Deterministic tests cover ordinary cleanup, mounted direct roots, mount-after-inventory transitions, recursive descendants, mountinfo escapes, and the valid mounted ancestor case. `npm run check` passed with 137 tests and 100% measured TypeScript source coverage, and independent code review found no unresolved implementation issue.
+
+The plan remains active because the final implementation has not yet been published as a connector-authored commit. Exact-head normal CI, independent review of that CI job log, and merge therefore remain blocked. Manual privileged host acceptance happens after merge and is not part of this PR's blocking acceptance.

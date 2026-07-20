@@ -114,7 +114,9 @@ python3 - update.sh "${TRANSFORMED_UPDATE}" <<'PY'
 import json
 import os
 import pathlib
+import re
 import sys
+
 source = pathlib.Path(sys.argv[1]).read_text()
 replacements = {
     'BASE_ROOT=/srv/github-runner': 'BASE_ROOT=' + json.dumps(os.path.join(os.environ['SOURCE_ROOT'], '..', '..')),
@@ -126,10 +128,13 @@ replacements = {
     '/usr/bin/setsid': os.path.join(os.environ['FAKE_BIN'], 'setsid'),
     '/usr/bin/sleep': os.path.join(os.environ['FAKE_BIN'], 'sleep'),
     '/usr/bin/kill': os.path.join(os.environ['FAKE_BIN'], 'kill'),
-    'sudo ': os.path.join(os.environ['FAKE_BIN'], 'sudo') + ' ',
 }
 for old, new in replacements.items():
     source = source.replace(old, new)
+
+fake_sudo = os.path.join(os.environ['FAKE_BIN'], 'sudo')
+source = source.replace('/usr/bin/sudo', fake_sudo)
+source = re.sub(r'(?<![/A-Za-z0-9_.-])sudo(?=\s)', fake_sudo, source)
 source = source.replace('PROCESS_GROUP_WAIT_STEPS=300', 'PROCESS_GROUP_WAIT_STEPS=2')
 source = source.replace('PROCESS_GROUP_WAIT_SECONDS=0.1', 'PROCESS_GROUP_WAIT_SECONDS=0')
 pathlib.Path(sys.argv[2]).write_text(source)
@@ -145,7 +150,17 @@ run_update() {
   )
 }
 
+set +e
 run_update 0 > "${ROOT}/success.out" 2> "${ROOT}/success.err"
+success_status=$?
+set -e
+if (( success_status != 0 )); then
+  cat "${ROOT}/success.out" >&2
+  cat "${ROOT}/success.err" >&2
+  printf 'successful updater scenario exited with status %s\n' "${success_status}" >&2
+  exit "${success_status}"
+fi
+
 test -f "${SOURCE_ROOT}/dist/src/run-codex.js"
 grep -Fq "${BUILD_ROOT}" "${COMMAND_LOG}"
 grep -Fq "tsc -p ${SOURCE_ROOT}/tsconfig.runtime.json --outDir ${SOURCE_ROOT}/dist" "${COMMAND_LOG}"
@@ -159,7 +174,12 @@ set +e
 run_update 42 > "${ROOT}/failure.out" 2> "${ROOT}/failure.err"
 failure_status=$?
 set -e
-[[ "${failure_status}" == 42 ]]
+if (( failure_status != 42 )); then
+  cat "${ROOT}/failure.out" >&2
+  cat "${ROOT}/failure.err" >&2
+  printf 'failing updater scenario exited with status %s instead of 42\n' "${failure_status}" >&2
+  exit 1
+fi
 grep -Fq 'Docker provisioning failed with status 42 after runtime finalization; the runner was restored with the finalized runtime.' "${ROOT}/failure.err"
 grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
 

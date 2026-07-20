@@ -31,9 +31,9 @@ protected_source_file() {
 }
 
 restore_runner() {
-  sudo systemctl enable "${SERVICE_NAME}" \
-    && sudo systemctl start "${SERVICE_NAME}" \
-    && sudo systemctl is-active --quiet "${SERVICE_NAME}"
+  sudo -n systemctl enable "${SERVICE_NAME}" \
+    && sudo -n systemctl start "${SERVICE_NAME}" \
+    && sudo -n systemctl is-active --quiet "${SERVICE_NAME}"
 }
 
 cleanup_update() {
@@ -65,13 +65,25 @@ process_group_signal() {
 }
 
 launcher_running() {
-  [[ -n "${active_launcher_pid}" ]] && /usr/bin/kill -0 "${active_launcher_pid}" 2>/dev/null
+  local state
+  [[ -n "${active_launcher_pid}" ]] || return 1
+  state="$(/usr/bin/ps -o stat= -p "${active_launcher_pid}" 2>/dev/null | /usr/bin/awk 'NR==1{print substr($1,1,1)}')"
+  [[ -n "${state}" && "${state}" != Z ]]
 }
 
-wait_for_launcher_bounded() {
-  local step
+process_group_running() {
+  local pgid="$1"
+  /usr/bin/ps -e -o pgid=,stat= | /usr/bin/awk -v pgid="${pgid}" '$1==pgid && substr($2,1,1)!="Z"{found=1} END{exit !found}'
+}
+
+wait_for_operation_bounded() {
+  local pgid="${1:-}" step
   for ((step = 0; step < PROCESS_GROUP_WAIT_STEPS; step += 1)); do
-    launcher_running || return 0
+    if [[ -n "${pgid}" ]]; then
+      process_group_running "${pgid}" || return 0
+    else
+      launcher_running || return 0
+    fi
     /usr/bin/sleep "${PROCESS_GROUP_WAIT_SECONDS}"
   done
   return 1
@@ -82,16 +94,18 @@ terminate_active_operation() {
   trap - HUP INT TERM
   if [[ -n "${active_child_pgid}" ]]; then
     process_group_signal TERM "${active_child_pgid}"
-    if ! wait_for_launcher_bounded; then
+    if ! wait_for_operation_bounded "${active_child_pgid}"; then
       process_group_signal KILL "${active_child_pgid}"
+      wait_for_operation_bounded "${active_child_pgid}" || true
     fi
   elif [[ -n "${active_launcher_pid}" ]]; then
     /usr/bin/kill -TERM "${active_launcher_pid}" 2>/dev/null || true
-    if ! wait_for_launcher_bounded; then
+    if ! wait_for_operation_bounded; then
       /usr/bin/kill -KILL "${active_launcher_pid}" 2>/dev/null || true
+      wait_for_operation_bounded || true
     fi
   fi
-  if [[ -n "${active_launcher_pid}" ]]; then
+  if [[ -n "${active_launcher_pid}" ]] && ! launcher_running; then
     wait "${active_launcher_pid}" 2>/dev/null || true
   fi
   active_launcher_pid=
@@ -154,7 +168,7 @@ fi
 
 sudo -v
 runner_needs_restore=1
-sudo systemctl stop "${SERVICE_NAME}"
+sudo -n systemctl stop "${SERVICE_NAME}"
 runner_uid="$(/usr/bin/id -u "${RUNNER_USER}")"
 while true; do
   if ! process_table="$(/usr/bin/ps -e -o euid=,comm=)"; then
@@ -168,11 +182,15 @@ while true; do
   /usr/bin/sleep 5
 done
 
-sudo /usr/bin/rm -rf --one-file-system -- "${BUILD_ROOT}"
-sudo /usr/bin/install -d -o "${BUILD_USER}" -g "${BUILD_USER}" -m 0700 "${BUILD_ROOT}"
-sudo /usr/bin/rm -rf --one-file-system -- "${SOURCE_ROOT}/dist"
-sudo /usr/bin/install -d -o "${BUILD_USER}" -g "${BUILD_USER}" -m 0700 "${SOURCE_ROOT}/dist"
-sudo -u "${BUILD_USER}" /usr/bin/env -i \
+# The worker wait can outlive sudo's credential timestamp. Refresh it once,
+# then require every remaining privileged operation to be non-interactive.
+sudo -v
+
+sudo -n /usr/bin/rm -rf --one-file-system -- "${BUILD_ROOT}"
+sudo -n /usr/bin/install -d -o "${BUILD_USER}" -g "${BUILD_USER}" -m 0700 "${BUILD_ROOT}"
+sudo -n /usr/bin/rm -rf --one-file-system -- "${SOURCE_ROOT}/dist"
+sudo -n /usr/bin/install -d -o "${BUILD_USER}" -g "${BUILD_USER}" -m 0700 "${SOURCE_ROOT}/dist"
+sudo -n -u "${BUILD_USER}" /usr/bin/env -i \
   HOME="${BUILD_HOME}" \
   USER="${BUILD_USER}" \
   LOGNAME="${BUILD_USER}" \
@@ -184,9 +202,9 @@ sudo -u "${BUILD_USER}" /usr/bin/env -i \
   echo "Compiled runtime entrypoint is missing; the runner remains stopped" >&2
   exit 1
 }
-sudo /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -exec /usr/bin/chown -h root:root {} +
-sudo /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -type d -exec /usr/bin/chmod 0755 {} +
-sudo /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -type f -exec /usr/bin/chmod 0644 {} +
+sudo -n /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -exec /usr/bin/chown -h root:root {} +
+sudo -n /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -type d -exec /usr/bin/chmod 0755 {} +
+sudo -n /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -type f -exec /usr/bin/chmod 0644 {} +
 runtime_finalized=1
 
 provisioner_pgid_file="$(/usr/bin/mktemp)"
@@ -194,7 +212,7 @@ provisioner_pgid_file="$(/usr/bin/mktemp)"
 /usr/bin/setsid --wait /bin/bash -c '
   set -euo pipefail
   printf "%s\n" "$$" > "$1"
-  exec /usr/bin/sudo -- "$2"
+  exec /usr/bin/sudo -n -- "$2"
 ' -- "${provisioner_pgid_file}" "${DOCKER_PROVISIONER}" &
 active_launcher_pid=$!
 
@@ -228,6 +246,15 @@ set +e
 wait "${active_launcher_pid}"
 docker_status=$?
 set -e
+if [[ -n "${active_child_pgid}" ]] && process_group_running "${active_child_pgid}"; then
+  printf 'Docker provisioner launcher exited while descendants remained in process group %s\n' "${active_child_pgid}" >&2
+  process_group_signal TERM "${active_child_pgid}"
+  if ! wait_for_operation_bounded "${active_child_pgid}"; then
+    process_group_signal KILL "${active_child_pgid}"
+    wait_for_operation_bounded "${active_child_pgid}" || true
+  fi
+  docker_status=70
+fi
 active_launcher_pid=
 active_child_pgid=
 /usr/bin/rm -f -- "${provisioner_pgid_file}"

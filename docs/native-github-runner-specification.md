@@ -6,7 +6,7 @@ This document describes the currently implemented architecture. Agent Relay runs
 
 The dedicated runner host is the production containment boundary selected by the deployment. The repository does not assume Windows integration, shared host folders, a specific hypervisor, or a particular cloud. The official organization-level GitHub Actions runner is the only long-lived Agent Relay service. It executes the trusted runtime from the administrator-owned repository checkout and gives Codex direct access only to the selected workflow workspace.
 
-There is currently no Relay HTTP service, queue, polling loop, persisted job state, Docker integration, Compose deployment, `.env`, or `/opt/agent-relay` copy.
+There is currently no Relay HTTP service, queue, polling loop, persisted job state, Relay-managed Compose deployment, `.env`, or `/opt/agent-relay` copy. The host provides an ordinary rootful Docker CLI and local socket to Codex; Relay does not parse Docker commands, proxy its API, or own application-container lifecycle.
 
 ## Fixed paths
 
@@ -19,6 +19,7 @@ All Agent Relay and GitHub Runner application data is grouped below `/srv/github
 /srv/github-runner/storage/home         github-runner home and Codex authentication
 /srv/github-runner/storage/build        disposable update leftovers
 /srv/github-runner/storage/build-home   builder home
+/srv/github-runner/storage/docker       root-owned Docker Engine and containerd state
 ```
 
 The storage root is a regular `root:root` directory not writable by group or other identities. `build` and `build-home` are private `agent-relay-builder:agent-relay-builder` directories with mode `0700`. The updater may delete and recreate `build`; no persistent update state is stored there.
@@ -37,7 +38,9 @@ Three identities are used:
 
 The source checkout is readable by both service accounts but writable only by the administrator. During compilation `dist` is temporarily builder-owned and mode `0700`. After compilation every runtime entry is changed to `root:root`; directories are mode `0755` and regular files are mode `0644`.
 
-`/etc/agent-relay/administrator` is a regular non-symlink `root:root` trust-anchor file not writable by group or other identities. Its content selects the only administrator account permitted to run updates.
+`/etc/agent-relay/administrator` is a regular non-symlink `root:root` trust-anchor file not writable by group or other identities. Its content selects the only administrator account permitted to run updates. `/etc/agent-relay/docker-host-state-v1` is the protected transaction and completed-state marker for the exact managed Docker installation.
+
+`github-runner` belongs to the `docker` group and can use the local rootful Docker socket; this is intentionally root-equivalent access within the dedicated runner host boundary. `agent-relay-builder` is explicitly excluded from `docker`.
 
 Neither service account can use the administrator's cached sudo authentication. Both accounts are explicitly kept out of sudo and are verified not to have passwordless sudo access.
 
@@ -112,7 +115,7 @@ Installation, Codex execution, and the pipeline toolchain smoke use this profile
 1. accept no arguments and refuse root execution;
 2. require the exact repository location, protected administrator file, recorded administrator identity, systemd as PID 1, builder and runner accounts, `/usr/local/bin/tsc`, `/usr/bin/ps`, and `tsconfig.runtime.json`;
 3. perform no Git command and impose no clean-worktree requirement;
-4. acquire sudo credentials and register only sudo-cache invalidation as process cleanup, never runtime or service rollback;
+4. acquire sudo credentials, refresh them after the worker wait, and require all later privileged operations and cleanup to be non-interactive;
 5. stop `actions.runner.Divorium.gh-runner.service` before waiting, preventing the listener from accepting another job;
 6. resolve the numeric effective UID of `github-runner`, inspect the complete process table through `/usr/bin/ps -e -o euid=,comm=`, fail when that command fails, and wait without a timeout only while a row matches both that UID and `Runner.Worker`;
 7. delete and recreate `/srv/github-runner/storage/build` as a private builder-owned directory, discarding previous update leftovers;
@@ -120,11 +123,14 @@ Installation, Codex execution, and the pipeline toolchain smoke use this profile
 9. invoke only `/usr/local/bin/tsc -p tsconfig.runtime.json --outDir dist` as `agent-relay-builder` through `env -i` with explicit identity, home, locale, and path;
 10. require `dist/src/run-codex.js` to exist;
 11. change the runtime tree to `root:root`, set directories to `0755`, and set regular files to `0644` through physical filesystem-bounded traversal;
-12. enable and start the runner unit, require it to become active, and display its status.
+12. run the checked-in Docker provisioner in an identifiable process group with bounded TERM/KILL handling and reaping;
+13. on a fresh supported host, atomically configure and install the exact official Docker Engine, CLI, containerd, Buildx, Compose, and resolver-selected dependency transaction without permitting premature service activation;
+14. store Engine state in `/srv/github-runner/storage/docker/engine` and containerd state in `/srv/github-runner/storage/docker/containerd`, validate both effective roots, package and unit ownership, the local socket, plugins, and group boundaries, and reuse only the exact protected managed state on later updates;
+15. enable and start the runner unit after the finalized runtime and Docker provisioner outcome are known, require it to become active, and display its status.
 
 The updater does not run `npm ci`, tests, coverage, shell checks, Node checks, system tests, or toolchain smoke. Those are pipeline responsibilities.
 
-The updater has no stage, backup, activation move, transaction journal, recovery, or rollback. If any step fails, the service may remain stopped and `dist` may be absent or partial. The next invocation deletes `dist` and compiles it again from zero.
+The runtime updater has no runtime stage, backup, activation move, or rollback. Before Docker package mutation, the provisioner records the exact selected package versions in its protected marker so an interrupted owned dpkg transaction can be distinguished, repaired, and resumed. It never adopts unrelated Docker state. Once runtime finalization is complete, cleanup restores the runner even when Docker provisioning fails; before finalization, the runner remains stopped. The next invocation always deletes `dist` and compiles it again from zero.
 
 ## GitHub request flow
 
@@ -154,7 +160,7 @@ The launcher and runtime:
 - trust only the exact canonical selected workspace;
 - deny the runner home, trusted source checkout, entire runner workspace root, `/tmp`, and `/var/tmp` to model-controlled tools;
 - expose `/opt/rust` read-only;
-- grant writes only to the selected repository and private runtime directory;
+- grant writes only to the selected repository, private runtime directory, and the conventional `/var/run/docker.sock` and `/run/docker.sock` paths;
 - keep the selected repository's `.git` directory read-only;
 - enable network access and disable memories;
 - remove only their own private runtime directory.

@@ -141,10 +141,12 @@ If this automated host lifecycle is unavailable, keep this acceptance item block
 - [x] Re-reviewed the current implementation against the corrected fresh-host persistent-storage requirement.
 - [x] Replaced the previous no-storage-change plan with the required permanent `/srv` storage design.
 - [x] Corrected the system-test harness command interception, canonical-path simulation, contradictory repository assertion, and restored the complete system validation gate.
-- [ ] Implement the corrected provisioner, updater behavior, package transaction proof, and behavioral tests.
-- [ ] Run final repository validation and exact-head CI after the production implementation.
-- [ ] Complete independent final diff and job-log review.
-- [blocked] Run automated privileged real-host acceptance if no disposable or designated host lifecycle is available.
+- [x] Implemented the corrected provisioner, persistent storage, fresh-or-managed state marker, controlled package transaction and recovery, updater behavior, socket permissions, ownership guidance, and repository-safe tests.
+- [x] Ran final repository validation: `npm run check` passed on the working tree on 2026-07-20, including 135 Node tests with 100% source coverage, runtime compilation, shell and Node syntax checks, toolchain smoke, and all three system harnesses.
+- [blocked] Run exact-head GitHub CI. Cause: this execution environment has no readable GitHub workflow skill and no `gh` executable or other authenticated job interface. Impact: no exact-head remote job logs can be captured here. Unblock condition: an automated authenticated GitHub CI interface becomes available for this checkout.
+- [x] Completed a final local diff review covering fresh-state rejection, marker phases, interrupted dpkg recovery, atomic publication, configuration and storage validation, effective roots, package/unit/socket ownership, sudo lifetime, process-group cleanup, documentation, and absence of workflow changes; `git diff --check` passed.
+- [blocked] Obtain an independent final review. Cause: no independent automated reviewer was authorized or available in this execution. Impact: the local review is not independent acceptance evidence. Unblock condition: make an independent agent or automated review job available to review the exact final diff and validation evidence.
+- [blocked] Run automated privileged real-host acceptance. Cause: no disposable or explicitly designated Debian 13 x86-64 systemd host lifecycle is available to this execution environment. Impact: privileged apt, systemd, daemon, socket, storage-root, interruption, signal, and real Compose behavior are not accepted. Unblock condition: provide an automated disposable or designated host lifecycle with permission to install packages and exercise the required failure matrix.
 
 ## Surprises & Discoveries
 
@@ -152,6 +154,9 @@ If this automated host lifecycle is unavailable, keep this acceptance item block
 - Package post-install service activation must be controlled, otherwise Docker can create state in package-default locations before the permanent roots are configured.
 - The Codex workflow is present and executable; an individual failed validation run is not evidence that the branch lacks a Codex execution path.
 - A recursive apt dependency listing is not equivalent to the resolver-selected dependency closure when alternatives exist.
+- A durable transaction-phase marker is required before apt mutation; otherwise an interrupted dpkg operation cannot be safely distinguished from unrelated dirty global package state on rerun.
+- The local validation environment denies `/tmp`; CI helper scripts now honor the trusted `TMPDIR` fallback when `RUNNER_TEMP` is absent.
+- The checkout has no `gh` executable, so local validation cannot be supplemented with exact-head GitHub job-log evidence.
 
 ## Decision Log
 
@@ -159,9 +164,11 @@ If this automated host lifecycle is unavailable, keep this acceptance item block
 - Configure both roots before the first daemon start because the target host has no prior Docker state to migrate.
 - Reuse only the exact managed installation created by this feature; fail on unrelated existing Docker state.
 - Bind package mutation to exact candidates and the selected dependency closure.
+- Record the resolver-selected package/version transaction before apt mutation, retain the exact service-start suppression policy across an interrupted transaction, and permit recovery only when every non-clean dpkg package belongs to that marker.
+- Use `preparing`, `transaction`, `installed`, and `complete` marker phases so `hello-world` runs on the first successful installation, including a retry after a post-install validation failure, while completed updates remain registry-independent.
 - Keep the existing Codex workflow and direct Docker CLI model.
 - Keep application-container lifecycle under Codex control.
 
 ## Outcomes & Retrospective
 
-Not complete. Keep this plan active until implementation, repository-safe validation, exact-head CI, and independent final review pass.
+Implementation and repository-safe validation are complete. The final working-tree gate passed on 2026-07-20 and no GitHub Actions workflow changed. The plan remains active because exact-head GitHub CI, independent final review, and the automated privileged real-host acceptance matrix are blocked by unavailable execution interfaces. Do not treat the Docker host contract as deployment-accepted until all three blockers are resolved.

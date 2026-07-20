@@ -2,7 +2,7 @@
 set -euo pipefail
 
 source_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-runtime_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/agent-relay-runtime.XXXXXX")"
+runtime_root="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:?TMPDIR is required when RUNNER_TEMP is unset}}/agent-relay-runtime.XXXXXX")"
 
 cleanup() {
   rm -rf -- "${runtime_root}"

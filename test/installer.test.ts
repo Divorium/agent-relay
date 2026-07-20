@@ -133,21 +133,21 @@ test("one trusted profile defines the complete host toolchain environment", asyn
 
 test("update finalizes the runtime before Docker provisioning and runner restoration", async () => {
   const { update } = await scripts();
-  const stop = update.indexOf('sudo systemctl stop "${SERVICE_NAME}"');
+  const stop = update.indexOf('sudo -n systemctl stop "${SERVICE_NAME}"');
   const wait = update.indexOf('process_table="$(/usr/bin/ps -e -o euid=,comm=)"', stop);
-  const removeBuild = update.indexOf('sudo /usr/bin/rm -rf --one-file-system -- "${BUILD_ROOT}"', wait);
-  const removeRuntime = update.indexOf('sudo /usr/bin/rm -rf --one-file-system -- "${SOURCE_ROOT}/dist"', removeBuild);
-  const createRuntime = update.indexOf('sudo /usr/bin/install -d -o "${BUILD_USER}"', removeRuntime);
+  const removeBuild = update.indexOf('sudo -n /usr/bin/rm -rf --one-file-system -- "${BUILD_ROOT}"', wait);
+  const removeRuntime = update.indexOf('sudo -n /usr/bin/rm -rf --one-file-system -- "${SOURCE_ROOT}/dist"', removeBuild);
+  const createRuntime = update.indexOf('sudo -n /usr/bin/install -d -o "${BUILD_USER}"', removeRuntime);
   const compile = update.indexOf('/usr/local/bin/tsc -p "${SOURCE_ROOT}/tsconfig.runtime.json"', createRuntime);
   const entrypoint = update.indexOf('[[ -f "${SOURCE_ROOT}/dist/src/run-codex.js" ]]', compile);
-  const adopt = update.indexOf('sudo /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -exec /usr/bin/chown -h root:root', entrypoint);
+  const adopt = update.indexOf('sudo -n /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -exec /usr/bin/chown -h root:root', entrypoint);
   const finalized = update.indexOf("runtime_finalized=1", adopt);
   const provision = update.indexOf("/usr/bin/setsid --wait", finalized);
   const restore = update.indexOf("\nrestore_runner\nrunner_status=", provision);
   assert.ok(stop >= 0 && wait > stop && removeBuild > wait && removeRuntime > removeBuild);
   assert.ok(createRuntime > removeRuntime && compile > createRuntime && entrypoint > compile);
   assert.ok(adopt > entrypoint && finalized > adopt && provision > finalized && restore > provision);
-  assert.match(update, /sudo -u "\$\{BUILD_USER\}" \/usr\/bin\/env -i/);
+  assert.match(update, /sudo -n -u "\$\{BUILD_USER\}" \/usr\/bin\/env -i/);
   assert.match(update, /-p "\$\{SOURCE_ROOT\}\/tsconfig\.runtime\.json"/);
   assert.match(update, /--outDir "\$\{SOURCE_ROOT\}\/dist"/);
   assert.doesNotMatch(update, /npm ci|node --test|test-coverage|bash -n|node --check|toolchain-smoke/);
@@ -158,8 +158,8 @@ test("update performs no Git synchronization, runtime staging or rollback", asyn
   assert.doesNotMatch(update, /\bgit\s+(?:-C\s+\S+\s+)?(?:pull|status|reset|fetch|switch|checkout|rev-parse)\b/u);
   assert.doesNotMatch(update, /AGENT_RELAY_UPDATE_PHASE|original_head|reexec|previous_dist|activation_stage|dist_swapped|rollback/u);
   assert.doesNotMatch(update, /\.agent-relay-dist|\.dist\.previous|workspace\./u);
-  assert.match(update, /sudo \/usr\/bin\/rm -rf --one-file-system -- "\$\{BUILD_ROOT\}"/);
-  assert.match(update, /sudo \/usr\/bin\/rm -rf --one-file-system -- "\$\{SOURCE_ROOT\}\/dist"/);
+  assert.match(update, /sudo -n \/usr\/bin\/rm -rf --one-file-system -- "\$\{BUILD_ROOT\}"/);
+  assert.match(update, /sudo -n \/usr\/bin\/rm -rf --one-file-system -- "\$\{SOURCE_ROOT\}\/dist"/);
 });
 
 test("runtime adoption does not follow links and applies production modes", async () => {
@@ -196,10 +196,11 @@ test("README files mirror the native runner filesystem decision", async () => {
     }
     assert.match(document, /\.\/install\.sh/);
     assert.match(document, /\.\/update\.sh/);
-    assert.doesNotMatch(document, /\/srv\/github-runner\/storage\/docker(?:\/|\s|$)/u);
+    assert.match(document, /\/srv\/github-runner\/storage\/docker(?:\/|\s|$)/u);
     assert.doesNotMatch(document, /\/srv\/github-runner\/(?:runner|home|build|build-home)(?:\/|\s|$)/u);
     assert.doesNotMatch(document, /\/opt\/agent-relay|AGENT_RELAY_TOKEN/iu);
   }
+  assert.match(specification, /\/srv\/github-runner\/storage\/docker/u);
   assert.match(plan, /README files may summarize it but must not introduce additional filesystem decisions/);
   assert.match(plan, /runner\/_work` is a managed symlink to `\.\.\/work/);
 });

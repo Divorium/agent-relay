@@ -10,8 +10,8 @@ DOCKER_DEBIAN_CONFLICTS=(docker.io docker-compose docker-doc podman-docker conta
 DOCKER_DEBIAN_KEY_FINGERPRINT=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
 DOCKER_DEBIAN_MANAGED_KEY=/etc/apt/keyrings/docker.asc
 DOCKER_DEBIAN_MANAGED_SOURCE=/etc/apt/sources.list.d/agent-relay-docker.sources
-DOCKER_DEBIAN_MANAGED_KEY_STAGE=/etc/apt/keyrings/.agent-relay-docker.asc.new
-DOCKER_DEBIAN_MANAGED_SOURCE_STAGE=/etc/apt/sources.list.d/.agent-relay-docker.sources.new
+DOCKER_DEBIAN_MANAGED_KEY_STAGE_GLOB=/etc/apt/keyrings/.agent-relay-docker.asc.tmp.
+DOCKER_DEBIAN_MANAGED_SOURCE_STAGE_GLOB=/etc/apt/sources.list.d/.agent-relay-docker.sources.tmp.
 
 docker_debian_require_host() {
   [[ "$(/usr/bin/uname -m)" == x86_64 ]] \
@@ -274,13 +274,13 @@ docker_debian_published_key_valid() {
 
 docker_debian_staged_key_valid() {
   local key="$1"
-  [[ "${key}" == "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" ]] || return 1
+  [[ "${key}" == "${DOCKER_DEBIAN_MANAGED_KEY_STAGE_GLOB}"* ]] || return 1
   docker_debian_readable_file_secure "${key}" && docker_debian_key_bytes_valid "${key}"
 }
 
 docker_debian_managed_source_valid() {
   local source="$1" expected=${DOCKER_HOST_STATE_ROOT}/expected-docker.sources
-  [[ "${source}" == "${DOCKER_DEBIAN_MANAGED_SOURCE}" || "${source}" == "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}" ]] || return 1
+  [[ "${source}" == "${DOCKER_DEBIAN_MANAGED_SOURCE}" || "${source}" == "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE_GLOB}"* ]] || return 1
   docker_debian_readable_file_secure "${source}" || return 1
   docker_debian_repository_content > "${expected}"
   /usr/bin/cmp -s -- "${expected}" "${source}"
@@ -300,54 +300,48 @@ docker_debian_prepare_repository_directories() {
   done
 }
 
-docker_debian_recover_key_stage() {
-  [[ ! -e "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" ]] && return 0
-  docker_debian_staged_key_valid "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" \
-    || docker_host_fail repository "Managed Docker key staging file is unsafe or unexpected"
-  if [[ -e "${DOCKER_DEBIAN_MANAGED_KEY}" ]]; then
-    docker_debian_published_key_valid "${DOCKER_DEBIAN_MANAGED_KEY}" \
-      || docker_host_fail repository "Managed Docker signing key is unsafe or unexpected"
-    /usr/bin/rm -f -- "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}"
-  else
-    /usr/bin/mv -T -- "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" "${DOCKER_DEBIAN_MANAGED_KEY}"
-    DOCKER_DEBIAN_REPOSITORY_CHANGED=1
-  fi
-}
-
-docker_debian_recover_source_stage() {
-  [[ ! -e "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}" ]] && return 0
-  docker_debian_managed_source_valid "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}" \
-    || docker_host_fail repository "Managed Docker source staging file is unsafe or unexpected"
-  if [[ -e "${DOCKER_DEBIAN_MANAGED_SOURCE}" ]]; then
-    docker_debian_managed_source_valid "${DOCKER_DEBIAN_MANAGED_SOURCE}" \
-      || docker_host_fail repository "Managed Docker source definition is unsafe or unexpected"
-    /usr/bin/rm -f -- "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}"
-  else
-    /usr/bin/mv -T -- "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}" "${DOCKER_DEBIAN_MANAGED_SOURCE}"
-    DOCKER_DEBIAN_REPOSITORY_CHANGED=1
-  fi
+docker_debian_remove_orphan_stages() {
+  local directory path listing=${DOCKER_HOST_STATE_ROOT}/repository-stages.bin
+  : > "${listing}"
+  for directory in /etc/apt/keyrings /etc/apt/sources.list.d; do
+    [[ -d "${directory}" ]] || continue
+    /usr/bin/find -P "${directory}" -maxdepth 1 -type f -name '.agent-relay-docker.*.tmp.*' -print0 >> "${listing}" \
+      || docker_host_fail repository "Could not inspect interrupted Docker repository publications"
+  done
+  while IFS= read -r -d '' path; do
+    case "${path}" in
+      "${DOCKER_DEBIAN_MANAGED_KEY_STAGE_GLOB}"*|"${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE_GLOB}"*) ;;
+      *) docker_host_fail repository "Unexpected Docker repository staging file: ${path}" ;;
+    esac
+    docker_debian_secure_path "${path}" file || docker_host_fail repository "Interrupted Docker repository publication is unsafe: ${path}"
+    /usr/bin/rm -f -- "${path}"
+  done < "${listing}"
 }
 
 docker_debian_publish_key() {
-  local source="$1"
-  [[ ! -e "${DOCKER_DEBIAN_MANAGED_KEY}" && ! -e "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" ]] \
+  local source="$1" stage
+  [[ ! -e "${DOCKER_DEBIAN_MANAGED_KEY}" ]] \
     || docker_host_fail repository "Managed Docker key paths are already occupied"
-  /usr/bin/install -o root -g root -m 0644 "${source}" "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}"
-  docker_debian_staged_key_valid "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" \
+  stage="$(/usr/bin/mktemp "${DOCKER_DEBIAN_MANAGED_KEY_STAGE_GLOB}XXXXXXXX")" \
+    || docker_host_fail repository "Could not stage Docker signing key"
+  /usr/bin/install -o root -g root -m 0644 "${source}" "${stage}"
+  docker_debian_staged_key_valid "${stage}" \
     || docker_host_fail repository "Staged Docker signing key is invalid"
-  /usr/bin/mv -T -- "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" "${DOCKER_DEBIAN_MANAGED_KEY}"
+  /usr/bin/mv -T -- "${stage}" "${DOCKER_DEBIAN_MANAGED_KEY}"
   DOCKER_DEBIAN_REPOSITORY_CHANGED=1
 }
 
 docker_debian_publish_source() {
-  local source=${DOCKER_HOST_STATE_ROOT}/docker.sources
-  [[ ! -e "${DOCKER_DEBIAN_MANAGED_SOURCE}" && ! -e "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}" ]] \
+  local source=${DOCKER_HOST_STATE_ROOT}/docker.sources stage
+  [[ ! -e "${DOCKER_DEBIAN_MANAGED_SOURCE}" ]] \
     || docker_host_fail repository "Managed Docker source paths are already occupied"
   docker_debian_repository_content > "${source}"
-  /usr/bin/install -o root -g root -m 0644 "${source}" "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}"
-  docker_debian_managed_source_valid "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}" \
+  stage="$(/usr/bin/mktemp "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE_GLOB}XXXXXXXX")" \
+    || docker_host_fail repository "Could not stage Docker source definition"
+  /usr/bin/install -o root -g root -m 0644 "${source}" "${stage}"
+  docker_debian_managed_source_valid "${stage}" \
     || docker_host_fail repository "Staged Docker source definition is invalid"
-  /usr/bin/mv -T -- "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}" "${DOCKER_DEBIAN_MANAGED_SOURCE}"
+  /usr/bin/mv -T -- "${stage}" "${DOCKER_DEBIAN_MANAGED_SOURCE}"
   DOCKER_DEBIAN_REPOSITORY_CHANGED=1
 }
 
@@ -361,30 +355,11 @@ docker_debian_download_key() {
 }
 
 docker_debian_ensure_repository() {
-  local managed_key=0 managed_source=0 downloaded_key external_source=0
+  local managed_key=0 managed_source=0 downloaded_key
   DOCKER_DEBIAN_REPOSITORY_CHANGED=0
   docker_debian_inspect_repository_definitions
-  if (( DOCKER_DEBIAN_REPOSITORY_DEFINITION_COUNT == 1 )) \
-    && [[ "${DOCKER_DEBIAN_REPOSITORY_SOURCE_PATH}" != "${DOCKER_DEBIAN_MANAGED_SOURCE}" ]]; then
-    external_source=1
-  fi
-
-  if (( external_source == 1 )); then
-    [[ ! -e "${DOCKER_DEBIAN_MANAGED_SOURCE}" \
-      && ! -e "${DOCKER_DEBIAN_MANAGED_KEY_STAGE}" \
-      && ! -e "${DOCKER_DEBIAN_MANAGED_SOURCE_STAGE}" ]] \
-      || docker_host_fail repository "Managed Docker paths are occupied beside an external Docker source"
-    if [[ -e "${DOCKER_DEBIAN_MANAGED_KEY}" && "${DOCKER_DEBIAN_REPOSITORY_KEY_PATH}" != "${DOCKER_DEBIAN_MANAGED_KEY}" ]]; then
-      docker_host_fail repository "An unreferenced managed Docker key path is occupied beside an external source"
-    fi
-    docker_debian_published_key_valid "${DOCKER_DEBIAN_REPOSITORY_KEY_PATH}" \
-      || docker_host_fail repository "The configured Docker signing key is missing, unreadable, unsafe, or unexpected"
-    return
-  fi
-
   docker_debian_prepare_repository_directories
-  docker_debian_recover_key_stage
-  docker_debian_recover_source_stage
+  docker_debian_remove_orphan_stages
   docker_debian_inspect_repository_definitions
 
   [[ ! -e "${DOCKER_DEBIAN_MANAGED_KEY}" ]] || managed_key=1
@@ -404,6 +379,8 @@ docker_debian_ensure_repository() {
   elif (( managed_source == 1 )); then
     docker_host_fail repository "Managed Docker source was not recognized as the exact active definition"
   fi
+  (( DOCKER_DEBIAN_REPOSITORY_DEFINITION_COUNT == 0 || managed_source == 1 )) \
+    || docker_host_fail repository "An unmanaged Docker apt source already exists"
 
   if (( managed_key == 0 )); then
     downloaded_key="$(docker_debian_download_key)"
@@ -433,12 +410,16 @@ docker_debian_candidate_is_unambiguously_official() {
 }
 
 docker_debian_parse_simulation() {
-  local simulation="$1" requested="$2" allowed="$3" installed="$4" accepted="$5" line package
+  local simulation="$1" requested="$2" allowed="$3" installed="$4" accepted="$5" line package version
   : > "${accepted}"
   /usr/bin/grep -Eq '^(Remv|Purg) |DOWNGRADED|unauthenticated' "${simulation}" && return 1
   while IFS= read -r line; do
     case "${line}" in
-      Inst\ *) package=${line#Inst }; package=${package%% *}; package=${package%%:*} ;;
+      Inst\ *)
+        package=${line#Inst }; package=${package%% *}; package=${package%%:*}
+        [[ "${line}" =~ \ \(([^[:space:]\)]+)\  ]] || return 1
+        version=${BASH_REMATCH[1]}
+        ;;
       Conf\ *) continue ;;
       *) [[ ! "${line}" =~ ^[[:alpha:]]+[[:space:]][^[:space:]]+[[:space:]]\( ]] || return 1; continue ;;
     esac
@@ -446,11 +427,11 @@ docker_debian_parse_simulation() {
     if /usr/bin/awk -F'|' -v package="${package}" '$1==package && $2=="ii "{found=1} END{exit !found}' "${installed}"; then
       return 1
     fi
-    printf '%s\n' "${package}" >> "${accepted}"
+    printf '%s|%s\n' "${package}" "${version}" >> "${accepted}"
   done < "${simulation}"
   /usr/bin/sort -u -o "${accepted}" "${accepted}"
-  while IFS= read -r package; do
-    /usr/bin/grep -Fxq "${package}" "${accepted}" || return 1
+  while IFS='|' read -r package version; do
+    /usr/bin/grep -Fxq "${package}|${version}" "${accepted}" || return 1
   done < "${requested}"
 }
 
@@ -459,7 +440,7 @@ docker_debian_install_components() {
   docker_debian_assert_clean_dpkg
   docker_debian_ensure_repository
   (( DOCKER_DEBIAN_REPOSITORY_CHANGED == 0 )) || /usr/bin/env LC_ALL=C LANG=C /usr/bin/apt-get update
-  local package candidate
+  local package candidate status installed_version
   local -a exact=()
   : > "${DOCKER_HOST_STATE_ROOT}/requested.txt"
   /usr/bin/env LC_ALL=C LANG=C /usr/bin/dpkg-query -W -f='${Package}|${db:Status-Abbrev}|${Version}\n' > "${DOCKER_HOST_STATE_ROOT}/packages-before.txt"
@@ -473,17 +454,49 @@ docker_debian_install_components() {
     docker_debian_candidate_is_unambiguously_official "${package}" "${candidate}" \
       || docker_host_fail package "Candidate ${package}=${candidate} is absent from or ambiguous outside Docker's official repository"
     exact+=("${package}=${candidate}")
-    printf '%s\n' "${package}" >> "${DOCKER_HOST_STATE_ROOT}/requested.txt"
+    status="$(docker_debian_package_status "${package}")"
+    if docker_debian_package_installed "${status}"; then
+      installed_version=${status#*|}; installed_version=${installed_version%$'\n'}
+      [[ "${installed_version}" == "${candidate}" ]] || docker_host_fail package "Partially installed managed package differs from the exact candidate: ${package}"
+    else
+      docker_debian_package_absent "${status}" || docker_host_fail package "Managed package is in a partial state: ${package}"
+      printf '%s|%s\n' "${package}" "${candidate}" >> "${DOCKER_HOST_STATE_ROOT}/requested.txt"
+    fi
   done
-  /usr/bin/env LC_ALL=C LANG=C /usr/bin/apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts --no-breaks --no-replaces --no-enhances "${exact[@]}" \
-    | /usr/bin/awk '/^[[:space:]]*(Pre)?Depends:/{value=$2;gsub(/[<>]/,"",value);sub(/:.*/,"",value);if(value!="")print value}' \
-    | /usr/bin/sort -u > "${DOCKER_HOST_STATE_ROOT}/allowed.txt"
-  printf '%s\n' "$@" >> "${DOCKER_HOST_STATE_ROOT}/allowed.txt"
-  /usr/bin/sort -u -o "${DOCKER_HOST_STATE_ROOT}/allowed.txt" "${DOCKER_HOST_STATE_ROOT}/allowed.txt"
   /usr/bin/env LC_ALL=C LANG=C /usr/bin/apt-get --simulate --no-install-recommends install "${exact[@]}" > "${DOCKER_HOST_STATE_ROOT}/simulation.txt" 2>&1 \
     || docker_host_fail package "Docker package simulation failed"
+  # The solver's Inst records are the selected dependency path. Do not use
+  # the recursive dependency listing here: it expands every alternative, including
+  # packages the resolver did not select.
+  /usr/bin/awk '/^Inst /{name=$2;sub(/:.*/,"",name);print name}' "${DOCKER_HOST_STATE_ROOT}/simulation.txt" \
+    | /usr/bin/sort -u > "${DOCKER_HOST_STATE_ROOT}/allowed.txt"
   docker_debian_parse_simulation "${DOCKER_HOST_STATE_ROOT}/simulation.txt" "${DOCKER_HOST_STATE_ROOT}/requested.txt" "${DOCKER_HOST_STATE_ROOT}/allowed.txt" "${DOCKER_HOST_STATE_ROOT}/packages-before.txt" "${DOCKER_HOST_STATE_ROOT}/accepted.txt" \
     || docker_host_fail package "Docker package simulation contains an unapproved change"
-  DEBIAN_FRONTEND=noninteractive LC_ALL=C LANG=C /usr/bin/apt-get --yes --no-install-recommends install "${exact[@]}" \
-    || docker_host_fail package "Docker package installation failed; make dpkg clean before rerunning ./update.sh"
+  local selected_package selected_version
+  local -a selected_exact=()
+  while IFS='|' read -r selected_package selected_version; do
+    selected_exact+=("${selected_package}=${selected_version}")
+  done < "${DOCKER_HOST_STATE_ROOT}/accepted.txt"
+  /usr/bin/install -o root -g root -m 0600 "${DOCKER_HOST_STATE_ROOT}/accepted.txt" "${DOCKER_HOST_STATE_ROOT}/resolved-packages.txt"
+  docker_host_publish_marker transaction "${DOCKER_HOST_STATE_ROOT}/resolved-packages.txt"
+  if (( ${#selected_exact[@]} > 0 )); then
+    DEBIAN_FRONTEND=noninteractive LC_ALL=C LANG=C /usr/bin/apt-get --yes --no-install-recommends install "${selected_exact[@]}" \
+      || docker_host_fail package "Docker package installation failed; make dpkg clean before rerunning ./update.sh"
+  fi
+  : > "${DOCKER_HOST_STATE_ROOT}/resolved-packages.txt"
+  for package in "${DOCKER_DEBIAN_PACKAGES[@]}"; do
+    status="$(docker_debian_package_status "${package}")"
+    docker_debian_package_installed "${status}" || docker_host_fail package "Docker package was not installed: ${package}"
+    installed_version=${status#*|}; installed_version=${installed_version%$'\n'}
+    printf '%s|%s\n' "${package}" "${installed_version}" >> "${DOCKER_HOST_STATE_ROOT}/resolved-packages.txt"
+  done
+  while IFS='|' read -r selected_package selected_version; do
+    local installed_status installed_version
+    installed_status="$(docker_debian_package_status "${selected_package}")"
+    docker_debian_package_installed "${installed_status}" || docker_host_fail package "Resolved package was not installed: ${selected_package}"
+    installed_version=${installed_status#*|}; installed_version=${installed_version%$'\n'}
+    [[ "${installed_version}" == "${selected_version}" ]] || docker_host_fail package "Installed version differs from resolved transaction for ${selected_package}"
+    case " ${DOCKER_DEBIAN_PACKAGES[*]} " in *" ${selected_package} "*) ;; *) printf '%s|%s\n' "${selected_package}" "${selected_version}" >> "${DOCKER_HOST_STATE_ROOT}/resolved-packages.txt" ;; esac
+  done < "${DOCKER_HOST_STATE_ROOT}/accepted.txt"
+  /usr/bin/sort -u -o "${DOCKER_HOST_STATE_ROOT}/resolved-packages.txt" "${DOCKER_HOST_STATE_ROOT}/resolved-packages.txt"
 }

@@ -19,15 +19,15 @@ test("update leaves Git and repository validation outside deployment", async () 
 test("update stops intake, waits, finalizes runtime, provisions Docker and restores runner", async () => {
   const update = await read("update.sh");
   const responsibility = update.indexOf("runner_needs_restore=1");
-  const stop = update.indexOf('sudo systemctl stop "${SERVICE_NAME}"', responsibility);
+  const stop = update.indexOf('sudo -n systemctl stop "${SERVICE_NAME}"', responsibility);
   const runnerUid = update.indexOf('runner_uid="$(/usr/bin/id -u "${RUNNER_USER}")"', stop);
   const wait = update.indexOf('process_table="$(/usr/bin/ps -e -o euid=,comm=)"', runnerUid);
-  const removeBuild = update.indexOf('sudo /usr/bin/rm -rf --one-file-system -- "${BUILD_ROOT}"', wait);
-  const removeRuntime = update.indexOf('sudo /usr/bin/rm -rf --one-file-system -- "${SOURCE_ROOT}/dist"', removeBuild);
-  const createRuntime = update.indexOf('sudo /usr/bin/install -d -o "${BUILD_USER}"', removeRuntime);
+  const removeBuild = update.indexOf('sudo -n /usr/bin/rm -rf --one-file-system -- "${BUILD_ROOT}"', wait);
+  const removeRuntime = update.indexOf('sudo -n /usr/bin/rm -rf --one-file-system -- "${SOURCE_ROOT}/dist"', removeBuild);
+  const createRuntime = update.indexOf('sudo -n /usr/bin/install -d -o "${BUILD_USER}"', removeRuntime);
   const compile = update.indexOf('/usr/local/bin/tsc -p "${SOURCE_ROOT}/tsconfig.runtime.json"', createRuntime);
   const entrypoint = update.indexOf('[[ -f "${SOURCE_ROOT}/dist/src/run-codex.js" ]]', compile);
-  const adopt = update.indexOf('sudo /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -exec /usr/bin/chown -h root:root', entrypoint);
+  const adopt = update.indexOf('sudo -n /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -exec /usr/bin/chown -h root:root', entrypoint);
   const finalized = update.indexOf("runtime_finalized=1", adopt);
   const provision = update.indexOf("/usr/bin/setsid --wait", finalized);
   const dockerStatus = update.indexOf("docker_status=$?", provision);
@@ -36,7 +36,7 @@ test("update stops intake, waits, finalizes runtime, provisions Docker and resto
   assert.ok(removeBuild > wait && removeRuntime > removeBuild && createRuntime > removeRuntime);
   assert.ok(compile > createRuntime && entrypoint > compile && adopt > entrypoint && finalized > adopt);
   assert.ok(provision > finalized && dockerStatus > provision && restore > dockerStatus);
-  assert.match(update, /sudo -u "\$\{BUILD_USER\}" \/usr\/bin\/env -i/u);
+  assert.match(update, /sudo -n -u "\$\{BUILD_USER\}" \/usr\/bin\/env -i/u);
   assert.match(update, /--outDir "\$\{SOURCE_ROOT\}\/dist"/u);
   assert.match(update, /-type d -exec \/usr\/bin\/chmod 0755/u);
   assert.match(update, /-type f -exec \/usr\/bin\/chmod 0644/u);

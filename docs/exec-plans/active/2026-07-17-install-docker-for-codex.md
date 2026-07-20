@@ -207,11 +207,11 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - [x] `4da52b3` implemented non-package-owned Docker-remnant cleanup and shared-source preservation.
 - [x] `270afa3` fixed complete post-purge reclassification, `/etc/apt` cleanup-stage recovery, and arbitrary direct plugin-entry cleanup; its Codex validation passed.
 - [x] Independently reviewed `270afa3` and recorded the mounted-tree data-safety blocker.
-- [ ] Implement mounted-tree rejection and recheck-before-recursive-delete with behavioral tests.
-- [ ] Run final repository and Codex validation.
-- [ ] Publish a connector-authored exact final status commit and require normal CI to pass.
-- [ ] Complete independent final diff and job-log review.
-- [ ] Merge the PR after the acceptance criteria pass.
+- [x] Implemented mountinfo-backed mounted-tree rejection and recheck-before-recursive-delete for configuration, plugin, and unit cleanup trees, with deterministic behavioral tests.
+- [x] `npm run check` passed on 2026-07-20: 137 tests passed, measured TypeScript source coverage remained 100%, and runtime, shell, Node-script, toolchain, and system integration checks passed.
+- [ ] [blocked] Publish a connector-authored exact final status commit and require normal CI to pass. The worktree is validated, but `.git` is read-only (`fatal: Unable to create '.git/index.lock': Read-only file system`) and two GitHub connector blob-write attempts returned `user cancelled MCP tool call`; no remote ref changed. Unblock when a repository write path can author the exact validated tree.
+- [ ] [blocked] Complete independent final job-log review. Independent final code review passed after both reported findings were fixed, but an exact-head CI job log cannot exist until the status commit is published. Unblock after normal CI runs on that commit.
+- [ ] [blocked] Merge the PR after the acceptance criteria pass. Publication and exact-head normal CI are prerequisites.
 - [post-merge] Perform manual privileged host acceptance; open a new plan only if it exposes a defect.
 
 ## Decision Log
@@ -247,8 +247,10 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - Shared apt-source cleanup requires same-directory atomic rewriting and explicit recovery of the temporary file in every possible source directory, including `/etc/apt`.
 - Direct plugin cleanup must support every filesystem entry type without deleting the plugin search root.
 - `rm --one-file-system` protects crossings below an ordinary starting directory but does not protect a command-line target that is itself mounted; same-device bind mounts also require mount-table inspection.
+- Raw `findmnt` output hex-escapes unsafe path characters, while direct plugin-directory names are unrestricted. The final helper instead parses `/proc/self/mountinfo`, decodes its four path escapes, and compares literal paths without depending on a util-linux version-specific interface.
+- The execution workspace exposes `.git` read-only, and repository-connector writes were cancelled, so the validated implementation could not be published from this run. The active plan records the exact unblock condition instead of treating local validation as exact-head CI evidence.
 - Codex-token pushes may leave normal CI as `action_required`; a connector-authored final status commit is needed for exact-head CI evidence.
 
 ## Outcomes & Retrospective
 
-Not complete. Keep this plan active until mounted-tree cleanup protection, complete repository validation, exact-head normal CI, and independent final review pass. Manual privileged host acceptance happens after merge and is not part of this PR's blocking acceptance.
+Not complete. Mounted-tree cleanup protection, complete repository validation, and independent final code review pass in the current worktree. Keep this plan active until that exact tree is published, normal CI and its job log pass review, and the PR is merged. Manual privileged host acceptance happens after merge and is not part of this PR's blocking acceptance.

@@ -60,6 +60,7 @@ DOCKER_HOST_PLUGIN_DIRS=(
 )
 DOCKER_HOST_CODEX_PATH=/opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin
 DOCKER_HOST_CTR_TIMEOUT_SECONDS=10
+DOCKER_HOST_MOUNTINFO=/proc/self/mountinfo
 DOCKER_HOST_STATE_CONTAINER=
 DOCKER_HOST_STATE_ROOT=
 DOCKER_HOST_FRESH=0
@@ -71,6 +72,32 @@ docker_host_fail() { printf 'Docker provisioning failed in phase %s: %s\n' "$1" 
 
 docker_host_path_occupied() { [[ -e "$1" || -L "$1" ]]; }
 docker_host_path_absent() { ! docker_host_path_occupied "$1"; }
+
+docker_host_cleanup_tree_has_mount() {
+  DOCKER_HOST_CLEANUP_PATH="$1" /usr/bin/awk '
+    BEGIN { root=ENVIRON["DOCKER_HOST_CLEANUP_PATH"] }
+    {
+      target=$5
+      gsub(/\\040/, " ", target)
+      gsub(/\\011/, "\t", target)
+      gsub(/\\012/, "\n", target)
+      gsub(/\\134/, "\\", target)
+      if (target==root || index(target,root "/")==1) found=1
+    }
+    END { if (found) exit 0; if (NR>0) exit 1; exit 2 }
+  ' "${DOCKER_HOST_MOUNTINFO}"
+}
+
+docker_host_assert_cleanup_tree_unmounted() {
+  local path="$1" status
+  if docker_host_cleanup_tree_has_mount "${path}"; then
+    docker_host_fail inspection "Mounted filesystem at or below recursive cleanup path: ${path}"
+  else
+    status=$?
+    (( status == 1 )) \
+      || docker_host_fail inspection "Could not inspect mount boundaries for recursive cleanup path: ${path}"
+  fi
+}
 
 docker_host_cleanup() {
   (( DOCKER_HOST_POLICY_REMOVE_ON_EXIT == 0 )) || docker_host_path_absent "${DOCKER_HOST_POLICY}" || {
@@ -334,6 +361,7 @@ docker_host_inventory_cleanup_configuration() {
   for directory in "${DOCKER_HOST_DAEMON_DIRECTORY}" "${DOCKER_HOST_CONTAINERD_DIRECTORY}"; do
     docker_host_path_absent "${directory}" && continue
     docker_host_secure_path "${directory}" directory || return 1
+    docker_host_assert_cleanup_tree_unmounted "${directory}"
     : > "${listing}"
     /usr/bin/find -P "${directory}" -xdev -mindepth 1 -print0 > "${listing}" || return 1
     while IFS= read -r -d '' entry; do
@@ -358,13 +386,17 @@ docker_host_inventory_cleanup_plugins() {
     /usr/bin/find -P "${directory}" -mindepth 1 -maxdepth 1 -print0 >> "${listing}" || return 1
   done
   while IFS= read -r -d '' entry; do
+    if [[ -d "${entry}" && ! -L "${entry}" ]]; then
+      docker_host_assert_cleanup_tree_unmounted "${entry}"
+    fi
     ((DOCKER_HOST_REMNANT_COUNT += 1))
   done < "${listing}"
 }
 
 docker_host_inventory_cleanup_units() {
   local root unit path target listing=${DOCKER_HOST_STATE_ROOT}/cleanup-unit-paths.bin
-  local scan=${DOCKER_HOST_STATE_ROOT}/cleanup-unit-scan.bin tree_listing=${DOCKER_HOST_STATE_ROOT}/cleanup-unit-tree.bin entry
+  local scan=${DOCKER_HOST_STATE_ROOT}/cleanup-unit-scan.bin tree_listing=${DOCKER_HOST_STATE_ROOT}/cleanup-unit-tree.bin entry activation_directory
+  local activation_directories=${DOCKER_HOST_STATE_ROOT}/cleanup-unit-activation-directories.bin
   : > "${listing}"
   for root in "${DOCKER_HOST_UNIT_ROOTS[@]}"; do
     docker_host_path_absent "${root}" && continue
@@ -379,12 +411,16 @@ docker_host_inventory_cleanup_units() {
       target="$(docker_host_managed_unit_target "${path}" 2>/dev/null || true)"
       [[ -z "${target}" ]] || printf '%s\0' "${path}" >> "${listing}"
     done < "${scan}"
-    /usr/bin/find -P "${root}" -mindepth 2 -maxdepth 2 \
-      \( -path '*.wants/*' -o -path '*.requires/*' \) -print0 > "${scan}" || return 1
-    while IFS= read -r -d '' path; do
-      target="$(docker_host_managed_unit_target "${path}" 2>/dev/null || true)"
-      [[ -z "${target}" ]] || { [[ -L "${path}" ]] || return 1; printf '%s\0' "${path}" >> "${listing}"; }
-    done < "${scan}"
+    /usr/bin/find -P "${root}" -mindepth 1 -maxdepth 1 -type d \
+      \( -name '*.wants' -o -name '*.requires' \) -print0 > "${activation_directories}" || return 1
+    while IFS= read -r -d '' activation_directory; do
+      docker_host_assert_cleanup_tree_unmounted "${activation_directory}"
+      /usr/bin/find -P "${activation_directory}" -mindepth 1 -maxdepth 1 -print0 > "${scan}" || return 1
+      while IFS= read -r -d '' path; do
+        target="$(docker_host_managed_unit_target "${path}" 2>/dev/null || true)"
+        [[ -z "${target}" ]] || { [[ -L "${path}" ]] || return 1; printf '%s\0' "${path}" >> "${listing}"; }
+      done < "${scan}"
+    done < "${activation_directories}"
   done
   /usr/bin/sort -zu -o "${listing}" "${listing}"
   while IFS= read -r -d '' path; do
@@ -392,6 +428,7 @@ docker_host_inventory_cleanup_units() {
       :
     elif [[ -d "${path}" ]]; then
       docker_host_secure_path "${path}" directory || return 1
+      docker_host_assert_cleanup_tree_unmounted "${path}"
       /usr/bin/find -P "${path}" -xdev -mindepth 1 -print0 > "${tree_listing}" || return 1
       while IFS= read -r -d '' entry; do
         if [[ -d "${entry}" && ! -L "${entry}" ]]; then docker_host_secure_path "${entry}" directory || return 1
@@ -464,8 +501,11 @@ docker_host_inventory_unmarked_remnants() {
 docker_host_remove_cleanup_remnants() {
   local path removed_units=0
   while IFS= read -r path; do
-    [[ -z "${path}" ]] || /usr/bin/rm -rf --one-file-system -- "${path}" \
-      || docker_host_fail configuration "Could not remove Docker configuration remnant: ${path}"
+    if [[ -n "${path}" ]]; then
+      docker_host_assert_cleanup_tree_unmounted "${path}"
+      /usr/bin/rm -rf --one-file-system -- "${path}" \
+        || docker_host_fail configuration "Could not remove Docker configuration remnant: ${path}"
+    fi
   done < "${DOCKER_HOST_STATE_ROOT}/cleanup-configuration-directories"
   docker_debian_remove_cleanup_repository_files || docker_host_fail repository "Could not remove Docker repository remnants"
   while IFS= read -r path; do
@@ -474,6 +514,7 @@ docker_host_remove_cleanup_remnants() {
     < "${DOCKER_HOST_STATE_ROOT}/cleanup-key-files"
   while IFS= read -r -d '' path; do
     if [[ -d "${path}" && ! -L "${path}" ]]; then
+      docker_host_assert_cleanup_tree_unmounted "${path}"
       /usr/bin/rm -rf --one-file-system -- "${path}" \
         || docker_host_fail configuration "Could not remove Docker CLI plugin remnant: ${path}"
     else
@@ -485,6 +526,7 @@ docker_host_remove_cleanup_remnants() {
   while IFS= read -r -d '' path; do
     removed_units=1
     if [[ -d "${path}" && ! -L "${path}" ]]; then
+      docker_host_assert_cleanup_tree_unmounted "${path}"
       /usr/bin/rm -rf --one-file-system -- "${path}" || docker_host_fail service "Could not remove Docker unit remnant: ${path}"
     else
       /usr/bin/rm -f -- "${path}" || docker_host_fail service "Could not remove Docker unit remnant: ${path}"

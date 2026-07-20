@@ -581,6 +581,159 @@ docker_host_inventory_cleanup_configuration || fail "configuration inventory did
 [[ ! -e "${DOCKER_HOST_DAEMON_DIRECTORY}" && ! -e "${DOCKER_HOST_CONTAINERD_DIRECTORY}" ]] \
   || fail "allowlisted configuration remnants remained after cleanup"
 
+ordinary_cleanup_tree=${TMP}/ordinary-cleanup-tree
+mkdir -p "${ordinary_cleanup_tree}/nested"
+docker_host_assert_cleanup_tree_unmounted "${ordinary_cleanup_tree}" \
+  || fail "ordinary recursive cleanup tree was classified as mounted"
+
+assert_cleanup_mount_rejected() {
+  local cleanup_path="$1" mount_target="$2" description="$3" encoded_target="${4:-$2}" status
+  printf '1 0 0:1 / %s rw - tmpfs tmpfs rw\n' "${encoded_target}" > "${TMP}/synthetic-mountinfo"
+  set +e
+  (
+    set -e
+    DOCKER_HOST_MOUNTINFO=${TMP}/synthetic-mountinfo
+    docker_host_fail() {
+      [[ "$1" == inspection && "$2" == "Mounted filesystem at or below recursive cleanup path: ${cleanup_path}" ]] && exit 42
+      exit 43
+    }
+    docker_host_assert_cleanup_tree_unmounted "${cleanup_path}"
+  )
+  status=$?
+  set -e
+  (( status == 42 )) || fail "${description} was not rejected with the precise mount-boundary error"
+}
+assert_cleanup_mount_rejected "${ordinary_cleanup_tree}" "${ordinary_cleanup_tree}" "mounted cleanup root"
+assert_cleanup_mount_rejected "${ordinary_cleanup_tree}" "${ordinary_cleanup_tree}/nested/bind" "descendant bind mount"
+assert_cleanup_mount_rejected "${ordinary_cleanup_tree}/space path" "${ordinary_cleanup_tree}/space path" \
+  "space-escaped mounted cleanup root" "${ordinary_cleanup_tree}/space\\040path"
+assert_cleanup_mount_rejected "${ordinary_cleanup_tree}/tab"$'\t'path "${ordinary_cleanup_tree}/tab"$'\t'path \
+  "tab-escaped mounted cleanup root" "${ordinary_cleanup_tree}/tab\\011path"
+assert_cleanup_mount_rejected "${ordinary_cleanup_tree}/new"$'\n'line "${ordinary_cleanup_tree}/new"$'\n'line \
+  "newline-escaped mounted cleanup root" "${ordinary_cleanup_tree}/new\\012line"
+assert_cleanup_mount_rejected "${ordinary_cleanup_tree}/back\\slash" "${ordinary_cleanup_tree}/back\\slash" \
+  "backslash-escaped mounted cleanup root" "${ordinary_cleanup_tree}/back\\134slash"
+
+for configuration_mount_kind in root descendant; do
+  mounted_configuration=${TMP}/mounted-configuration-${configuration_mount_kind}
+  mkdir -p "${mounted_configuration}/nested"
+  printf 'preserve\n' > "${mounted_configuration}/nested/content"
+  configuration_mount_target=${mounted_configuration}
+  [[ "${configuration_mount_kind}" == root ]] || configuration_mount_target=${mounted_configuration}/nested/bind
+  set +e
+  (
+    set -e
+    DOCKER_HOST_DAEMON_DIRECTORY=${mounted_configuration}
+    DOCKER_HOST_CONTAINERD_DIRECTORY=${TMP}/absent-mounted-containerd
+    docker_host_cleanup_tree_has_mount() { return 0; }
+    docker_host_fail() { [[ "$1" == inspection ]] && exit 42; exit 43; }
+    docker_host_inventory_cleanup_configuration
+  )
+  mounted_configuration_status=$?
+  set -e
+  (( mounted_configuration_status == 42 )) || fail "mounted configuration ${configuration_mount_kind} was accepted"
+  [[ "$(<"${mounted_configuration}/nested/content")" == preserve ]] \
+    || fail "mounted configuration ${configuration_mount_kind} content was modified"
+done
+
+for plugin_mount_kind in root descendant; do
+  mounted_plugin_root=${TMP}/mounted-plugin-${plugin_mount_kind}
+  mounted_plugin_directory=${mounted_plugin_root}/docker-mounted
+  mkdir -p "${mounted_plugin_directory}/nested"
+  printf 'preserve\n' > "${mounted_plugin_directory}/nested/content"
+  plugin_mount_target=${mounted_plugin_directory}
+  [[ "${plugin_mount_kind}" == root ]] || plugin_mount_target=${mounted_plugin_directory}/nested/bind
+  set +e
+  (
+    set -e
+    DOCKER_HOST_PLUGIN_DIRS=("${mounted_plugin_root}")
+    DOCKER_HOST_RUNNER_HOME=${TMP}/mounted-plugin-runner
+    mkdir -p "${DOCKER_HOST_RUNNER_HOME}"
+    docker_host_cleanup_tree_has_mount() { return 0; }
+    docker_host_fail() { [[ "$1" == inspection ]] && exit 42; exit 43; }
+    docker_host_inventory_cleanup_plugins
+  )
+  mounted_plugin_status=$?
+  set -e
+  (( mounted_plugin_status == 42 )) || fail "mounted plugin directory ${plugin_mount_kind} was accepted"
+  [[ "$(<"${mounted_plugin_directory}/nested/content")" == preserve ]] \
+    || fail "mounted plugin directory ${plugin_mount_kind} content was modified"
+done
+
+mounted_plugin_unsafe_root=${TMP}/mounted-plugin-unsafe
+mounted_plugin_unsafe_directory="${mounted_plugin_unsafe_root}/docker mounted"
+mkdir -p "${mounted_plugin_unsafe_directory}/nested" "${TMP}/mounted-plugin-unsafe-runner"
+printf 'preserve\n' > "${mounted_plugin_unsafe_directory}/nested/content"
+printf '1 0 0:1 / %s/docker\\040mounted rw - tmpfs tmpfs rw\n' \
+  "${mounted_plugin_unsafe_root}" > "${TMP}/unsafe-character-mountinfo"
+set +e
+(
+  set -e
+  DOCKER_HOST_PLUGIN_DIRS=("${mounted_plugin_unsafe_root}")
+  DOCKER_HOST_RUNNER_HOME=${TMP}/mounted-plugin-unsafe-runner
+  DOCKER_HOST_MOUNTINFO=${TMP}/unsafe-character-mountinfo
+  docker_host_fail() { [[ "$1" == inspection ]] && exit 42; exit 43; }
+  docker_host_inventory_cleanup_plugins
+)
+mounted_plugin_unsafe_status=$?
+set -e
+(( mounted_plugin_unsafe_status == 42 )) || fail "mounted plugin directory with an escaped path character was accepted"
+[[ "$(<"${mounted_plugin_unsafe_directory}/nested/content")" == preserve ]] \
+  || fail "mounted plugin directory with an escaped path character was modified"
+
+for unit_mount_kind in root descendant; do
+  mounted_unit_root=${TMP}/mounted-unit-${unit_mount_kind}
+  mounted_unit_directory=${mounted_unit_root}/docker.service.d
+  mkdir -p "${mounted_unit_directory}/nested"
+  printf 'preserve\n' > "${mounted_unit_directory}/nested/content"
+  unit_mount_target=${mounted_unit_directory}
+  [[ "${unit_mount_kind}" == root ]] || unit_mount_target=${mounted_unit_directory}/nested/bind
+  set +e
+  (
+    set -e
+    DOCKER_HOST_UNIT_ROOTS=("${mounted_unit_root}")
+    docker_host_cleanup_tree_has_mount() { return 0; }
+    docker_host_fail() { [[ "$1" == inspection ]] && exit 42; exit 43; }
+    docker_host_inventory_cleanup_units
+  )
+  mounted_unit_status=$?
+  set -e
+  (( mounted_unit_status == 42 )) || fail "mounted unit directory ${unit_mount_kind} was accepted"
+  [[ "$(<"${mounted_unit_directory}/nested/content")" == preserve ]] \
+    || fail "mounted unit directory ${unit_mount_kind} content was modified"
+done
+
+recheck_configuration=${TMP}/recheck-configuration
+mkdir -p "${recheck_configuration}"
+printf 'preserve\n' > "${recheck_configuration}/content"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-stages.bin"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-key-files"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-entries.bin"
+: > "${DOCKER_HOST_STATE_ROOT}/cleanup-unit-paths.bin"
+set +e
+(
+  set -e
+  mount_inspections=0
+  DOCKER_HOST_DAEMON_DIRECTORY=${recheck_configuration}
+  DOCKER_HOST_CONTAINERD_DIRECTORY=${TMP}/absent-recheck-containerd
+  docker_host_cleanup_tree_has_mount() {
+    ((mount_inspections += 1))
+    if (( mount_inspections == 1 )); then return 1; fi
+    return 0
+  }
+  docker_host_fail() { [[ "$1" == inspection ]] && exit 42; exit 43; }
+  docker_debian_remove_cleanup_repository_files() { return 0; }
+  docker_host_runtime_socket_present() { return 1; }
+  docker_host_inventory_cleanup_configuration
+  docker_host_remove_cleanup_remnants
+)
+recheck_status=$?
+set -e
+(( recheck_status == 42 )) || fail "recursive cleanup did not recheck the mount boundary immediately before deletion"
+[[ "$(<"${recheck_configuration}/content")" == preserve ]] \
+  || fail "recursive cleanup deleted content mounted after inventory"
+
 printf '%s\n' \
   '# preserved comment' \
   'deb https://deb.debian.org/debian trixie main' \

@@ -33,7 +33,7 @@ test("update stops intake, waits, finalizes runtime, provisions Docker and resto
   const removeRuntime = update.indexOf('sudo -n /usr/bin/rm -rf --one-file-system -- "${SOURCE_ROOT}/dist"', removeBuild);
   const createRuntime = update.indexOf('sudo -n /usr/bin/install -d -o "${BUILD_USER}"', removeRuntime);
   const compile = update.indexOf('/usr/local/bin/tsc -p "${SOURCE_ROOT}/tsconfig.runtime.json"', createRuntime);
-  const entrypoint = update.indexOf('[[ -f "${SOURCE_ROOT}/dist/src/run-codex.js" ]]', compile);
+  const entrypoint = update.indexOf('sudo -n -u "${BUILD_USER}" /usr/bin/test -f "${SOURCE_ROOT}/dist/src/run-codex.js"', compile);
   const adopt = update.indexOf('sudo -n /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -exec /usr/bin/chown -h root:root', entrypoint);
   const finalized = update.indexOf("runtime_finalized=1", adopt);
   const provision = update.indexOf("/usr/bin/setsid --wait", finalized);
@@ -65,6 +65,10 @@ test("runner wait scans the complete process table and filters by numeric UID", 
 
 test("Docker provisioner process group is race-safe and signal handling is bounded", async () => {
   const update = await read("update.sh");
+  assert.match(update, /provisioner_control_dir="\$\(\/usr\/bin\/mktemp -d \/tmp\/agent-relay-provisioner\.XXXXXXXX\)"/u);
+  assert.match(update, /provisioner_pgid_file="\$\{provisioner_control_dir\}\/pgid"/u);
+  assert.doesNotMatch(update, /provisioner_pgid_file="\$\(\/usr\/bin\/mktemp\)"/u);
+  assert.match(update, /\/usr\/bin\/rm -rf --one-file-system -- "\$\{provisioner_control_dir\}"/u);
   assert.match(update, /\/usr\/bin\/setsid --wait \/bin\/bash -c/u);
   assert.match(update, /printf "%s\\n" "\$\$" > "\$1"/u);
   assert.match(update, /if ! launcher_running; then\n    break/u);

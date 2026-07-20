@@ -22,6 +22,7 @@ runner_needs_restore=0
 runtime_finalized=0
 active_launcher_pid=
 active_child_pgid=
+provisioner_control_dir=
 provisioner_pgid_file=
 
 protected_source_file() {
@@ -50,8 +51,8 @@ cleanup_update() {
       runtime_finalized=0
     fi
   fi
-  if [[ -n "${provisioner_pgid_file}" ]]; then
-    /usr/bin/rm -f -- "${provisioner_pgid_file}" || true
+  if [[ -n "${provisioner_control_dir}" ]]; then
+    /usr/bin/rm -rf --one-file-system -- "${provisioner_control_dir}" || true
   fi
   if (( runner_needs_restore == 1 )); then
     if (( runtime_finalized == 1 )); then
@@ -231,7 +232,10 @@ sudo -n /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -type d -exec /usr/bin/chmo
 sudo -n /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -type f -exec /usr/bin/chmod 0644 {} +
 runtime_finalized=1
 
-provisioner_pgid_file="$(/usr/bin/mktemp)"
+provisioner_control_dir="$(/usr/bin/mktemp -d /tmp/agent-relay-provisioner.XXXXXXXX)"
+/usr/bin/chmod 0700 "${provisioner_control_dir}"
+provisioner_pgid_file="${provisioner_control_dir}/pgid"
+: > "${provisioner_pgid_file}"
 /usr/bin/chmod 0600 "${provisioner_pgid_file}"
 sudo -n /usr/bin/setsid --wait /bin/bash -c '
   set -euo pipefail
@@ -306,8 +310,9 @@ if (( operation_control_failed == 1 )) \
 fi
 active_launcher_pid=
 active_child_pgid=
-/usr/bin/rm -f -- "${provisioner_pgid_file}"
+/usr/bin/rm -rf --one-file-system -- "${provisioner_control_dir}"
 provisioner_pgid_file=
+provisioner_control_dir=
 
 set +e
 restore_runner

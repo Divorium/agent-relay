@@ -17,9 +17,11 @@ FAKE_TSC="${ROOT}/fake-tsc"
 DOCKER_PROVISIONER="${SOURCE_ROOT}/scripts/docker-host.sh"
 DOCKER_ADAPTER="${SOURCE_ROOT}/scripts/docker-host-debian.sh"
 PRIVATE_DIST="${SOURCE_ROOT}/dist"
+STICKY_TMP="${ROOT}/tmp"
 TEST_UID="$(/usr/bin/id -u)"
 
-mkdir -p "${SOURCE_ROOT}/scripts" "${BUILD_HOME}" "${FAKE_BIN}" "$(dirname "${ADMIN_FILE}")"
+mkdir -p "${SOURCE_ROOT}/scripts" "${BUILD_HOME}" "${FAKE_BIN}" "$(dirname "${ADMIN_FILE}")" "${STICKY_TMP}"
+chmod 1777 "${STICKY_TMP}"
 printf 'test-admin\n' > "${ADMIN_FILE}"
 chmod 0600 "${ADMIN_FILE}"
 cp scripts/docker-host.sh "${DOCKER_PROVISIONER}"
@@ -108,6 +110,11 @@ fi
 case "\${1:-}" in
   '${FAKE_BIN}/setsid')
     pgid_file="\${@: -2:1}"
+    printf 'pgid-file %s\n' "\${pgid_file}" >> "${COMMAND_LOG}"
+    if [[ "\${MOCK_PROTECTED_REGULAR:-0}" == 1 && "\${pgid_file%/*}" == '${STICKY_TMP}' ]]; then
+      printf -- '--: line 3: %s: Permission denied\n' "\${pgid_file}" >&2
+      exit 1
+    fi
     printf '%s\n' "\${BASHPID}" > "\${pgid_file}"
     printf 'docker provisioner\n' >> "${DOCKER_LOG}"
     if [[ "\${MOCK_DOCKER_MODE:-exit}" == hang ]]; then
@@ -194,7 +201,7 @@ EOF_KILL
 chmod 0755 "${FAKE_BIN}"/*
 
 SOURCE_ROOT="${SOURCE_ROOT}" BUILD_ROOT="${BUILD_ROOT}" BUILD_HOME="${BUILD_HOME}" \
-ADMIN_FILE="${ADMIN_FILE}" FAKE_TSC="${FAKE_TSC}" FAKE_BIN="${FAKE_BIN}" \
+ADMIN_FILE="${ADMIN_FILE}" FAKE_TSC="${FAKE_TSC}" FAKE_BIN="${FAKE_BIN}" STICKY_TMP="${STICKY_TMP}" \
 python3 - update.sh "${TRANSFORMED_UPDATE}" <<'PY'
 import json
 import os
@@ -206,6 +213,7 @@ source = pathlib.Path(sys.argv[1]).read_text()
 replacements = {
     'BASE_ROOT=/srv/github-runner': 'BASE_ROOT=' + json.dumps(os.path.realpath(os.path.join(os.environ['SOURCE_ROOT'], '..', '..'))),
     'ADMIN_FILE=/etc/agent-relay/administrator': 'ADMIN_FILE=' + json.dumps(os.environ['ADMIN_FILE']),
+    '/tmp/agent-relay-provisioner.XXXXXXXX': os.path.join(os.environ['STICKY_TMP'], 'agent-relay-provisioner.XXXXXXXX'),
     '/usr/local/bin/tsc': os.environ['FAKE_TSC'],
     '/usr/bin/id': os.path.join(os.environ['FAKE_BIN'], 'id'),
     '/usr/bin/ps': os.path.join(os.environ['FAKE_BIN'], 'ps'),
@@ -230,6 +238,15 @@ pathlib.Path(sys.argv[2]).write_text(source)
 PY
 chmod 0755 "${TRANSFORMED_UPDATE}"
 
+assert_control_clean() {
+  local leaked
+  leaked="$(/usr/bin/find -P "${STICKY_TMP}" -mindepth 1 -maxdepth 1 -print -quit)"
+  [[ -z "${leaked}" ]] || {
+    printf 'Docker provisioner control state leaked after updater exit: %s\n' "${leaked}" >&2
+    exit 1
+  }
+}
+
 run_update() {
   : > "${COMMAND_LOG}"
   : > "${DOCKER_LOG}"
@@ -237,9 +254,9 @@ run_update() {
   if [[ "${5:-1}" == 1 ]]; then rm -f -- "${ROOT}/omit-entrypoint"; else : > "${ROOT}/omit-entrypoint"; fi
   (
     cd "${SOURCE_ROOT}"
-    PATH="${FAKE_BIN}:${PATH}" MOCK_DOCKER_STATUS="${1:-0}" \
+    TMPDIR="${STICKY_TMP}" PATH="${FAKE_BIN}:${PATH}" MOCK_DOCKER_STATUS="${1:-0}" \
       MOCK_DOCKER_MODE="${2:-exit}" MOCK_SUDO_EXPIRE="${3:-0}" \
-      MOCK_SIGNAL_FAIL="${4:-0}" bash "${TRANSFORMED_UPDATE}"
+      MOCK_SIGNAL_FAIL="${4:-0}" MOCK_PROTECTED_REGULAR=1 bash "${TRANSFORMED_UPDATE}"
   )
 }
 
@@ -258,11 +275,13 @@ test -f "${SOURCE_ROOT}/dist/src/run-codex.js"
 grep -Fq "${BUILD_ROOT}" "${COMMAND_LOG}"
 grep -Fq "tsc -p ${SOURCE_ROOT}/tsconfig.runtime.json --outDir ${SOURCE_ROOT}/dist" "${COMMAND_LOG}"
 grep -Fq "sudo -n -u agent-relay-builder /usr/bin/test -f ${PRIVATE_DIST}/src/run-codex.js" "${COMMAND_LOG}"
+grep -Eq "^pgid-file ${STICKY_TMP}/agent-relay-provisioner\.[^/]+/pgid$" "${COMMAND_LOG}"
 grep -Fq 'docker provisioner' "${DOCKER_LOG}"
 grep -Fq 'systemctl stop actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
 grep -Fq 'systemctl enable actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
 grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
 grep -Fq 'Update completed. Runner is active with the finalized runtime and Docker access.' "${ROOT}/success.out"
+assert_control_clean
 
 set +e
 run_update 0 exit 0 0 0 > "${ROOT}/missing.out" 2> "${ROOT}/missing.err"
@@ -289,6 +308,7 @@ if grep -Eq 'systemctl (enable|start) actions\.runner\.Divorium\.gh-runner\.serv
   echo 'missing-entrypoint scenario restored the runner before finalization' >&2
   exit 1
 fi
+assert_control_clean
 
 set +e
 run_update 42 > "${ROOT}/failure.out" 2> "${ROOT}/failure.err"
@@ -302,6 +322,7 @@ if (( failure_status != 42 )); then
 fi
 grep -Fq 'Docker provisioning failed with status 42 after runtime finalization; the runner was restored with the finalized runtime.' "${ROOT}/failure.err"
 grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
+assert_control_clean
 
 rm -f -- "${ROOT}/provisioning"
 set +e
@@ -316,6 +337,7 @@ if [[ "${fail_status:-0}" == 1 ]]; then
 fi
 grep -Fq 'Docker provisioner exceeded its bounded deadline' "${ROOT}/deadline.err"
 grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
+assert_control_clean
 
 rm -f -- "${ROOT}/provisioning"
 set +e
@@ -332,6 +354,7 @@ grep -Eq 'Noninteractive .*sudo authority expired|Update interrupted by TERM' "$
   exit 1
 }
 grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
+assert_control_clean
 
 rm -f -- "${ROOT}/provisioning"
 set +e
@@ -345,5 +368,6 @@ if (( signal_failure_status != 70 )); then
 fi
 grep -Fq 'Docker provisioner exceeded its bounded deadline' "${ROOT}/signal-failure.err"
 grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
+assert_control_clean
 
 printf 'update.sh system integration passed\n'

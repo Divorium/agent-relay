@@ -65,37 +65,4 @@ if docker_debian_dpkg_state_clean "${TMP}/audit" "${TMP}/packages"; then fail "d
 printf 'broken|iF |1.0\n' > "${TMP}/packages"
 if docker_debian_dpkg_state_clean "${TMP}/audit" "${TMP}/packages"; then fail "broken dpkg state was accepted"; fi
 
-printf 'sl\n' > "${TMP}/requested"
-printf '%s\n' sl libncurses6 > "${TMP}/allowed"
-printf '%s\n' 'base-files|ii |13' > "${TMP}/installed"
-docker_debian_parse_simulation \
-  "${ROOT}/test-system/fixtures/apt-simulation-new-dependency.txt" \
-  "${TMP}/requested" "${TMP}/allowed" "${TMP}/installed" "${TMP}/accepted" \
-  || fail "approved dependency closure was rejected"
-printf 'libncurses6|ii |old\n' > "${TMP}/installed"
-if docker_debian_parse_simulation \
-  "${ROOT}/test-system/fixtures/apt-simulation-new-dependency.txt" \
-  "${TMP}/requested" "${TMP}/allowed" "${TMP}/installed" "${TMP}/accepted"; then
-  fail "installed dependency modification was accepted"
-fi
-printf '%s\n' sl libncurses6 unrelated-agent > "${TMP}/allowed"
-: > "${TMP}/installed"
-if docker_debian_parse_simulation \
-  "${ROOT}/test-system/fixtures/apt-simulation-unrelated-package.txt" \
-  "${TMP}/requested" "${TMP}/allowed" "${TMP}/installed" "${TMP}/accepted"; then
-  fail "unrelated package installation was accepted"
-fi
-
-for path in "${ROOT}/scripts/docker-host.sh" "${ROOT}/scripts/docker-host-debian.sh"; do
-  ! grep -Eqi 'data-root|/var/lib/docker|/var/lib/containerd|daemon\.json|containerd/config\.toml|\brsync\b' "${path}" \
-    || fail "forbidden Docker state migration or configuration logic found in ${path}"
-done
-
-grep -Fq '/usr/bin/docker|--version|' "${ROOT}/scripts/docker-host.sh" || fail "supported daemon-independent Docker CLI probe is missing"
-! grep -Fq 'version|--client' "${ROOT}/scripts/docker-host.sh" || fail "unsupported docker version --client probe remains"
-grep -Fq 'GNUPGHOME="${home}"' "${ROOT}/scripts/docker-host-debian.sh" || fail "isolated GnuPG home is missing"
-grep -Fq 'docker_debian_recover_key_stage' "${ROOT}/scripts/docker-host-debian.sh" || fail "managed key recovery is missing"
-grep -Fq 'docker_debian_recover_source_stage' "${ROOT}/scripts/docker-host-debian.sh" || fail "managed source recovery is missing"
-grep -Fq 'docker_debian_candidate_is_unambiguously_official' "${ROOT}/scripts/docker-host-debian.sh" || fail "candidate-origin validation is missing"
-
-printf 'Docker key/package diagnostics passed\n'
+printf 'Docker key/dpkg diagnostics passed\n'

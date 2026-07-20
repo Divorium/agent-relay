@@ -16,6 +16,7 @@ TRANSFORMED_UPDATE="${ROOT}/update-under-test.sh"
 FAKE_TSC="${ROOT}/fake-tsc"
 DOCKER_PROVISIONER="${SOURCE_ROOT}/scripts/docker-host.sh"
 DOCKER_ADAPTER="${SOURCE_ROOT}/scripts/docker-host-debian.sh"
+TEST_UID="$(/usr/bin/id -u)"
 
 mkdir -p "${SOURCE_ROOT}/scripts" "${BUILD_HOME}" "${FAKE_BIN}" "$(dirname "${ADMIN_FILE}")"
 printf 'test-admin\n' > "${ADMIN_FILE}"
@@ -40,29 +41,29 @@ printf 'compiled\n' > "\${out}/src/run-codex.js"
 EOF_TSC
 chmod 0755 "${FAKE_TSC}"
 
-cat > "${FAKE_BIN}/id" <<'EOF_ID'
+cat > "${FAKE_BIN}/id" <<EOF_ID
 #!/usr/bin/env bash
 set -euo pipefail
-case "$*" in
-  '-u') echo 1000 ;;
+case "\$*" in
+  '-u') echo ${TEST_UID} ;;
   '-un') echo test-admin ;;
   '-u agent-relay-builder') echo 2002 ;;
   '-u github-runner') echo 2001 ;;
-  *) exec /usr/bin/id "$@" ;;
+  *) exec /usr/bin/id "\$@" ;;
 esac
 EOF_ID
 
-cat > "${FAKE_BIN}/ps" <<'EOF_PS'
+cat > "${FAKE_BIN}/ps" <<EOF_PS
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$*" == '-p 1 -o comm=' ]]; then
+if [[ "\$*" == '-p 1 -o comm=' ]]; then
   printf 'systemd\n'
-elif [[ "$*" == '-e -o euid=,comm=' ]]; then
-  printf '1000 bash\n'
-elif [[ "$*" == -o\ pgid=* ]]; then
-  printf '%s\n' "${@: -1}"
+elif [[ "\$*" == '-e -o euid=,comm=' ]]; then
+  printf '${TEST_UID} bash\n'
+elif [[ "\$*" == -o\ pgid=* ]]; then
+  printf '%s\n' "\${@: -1}"
 else
-  exec /usr/bin/ps "$@"
+  exec /usr/bin/ps "\$@"
 fi
 EOF_PS
 
@@ -147,7 +148,7 @@ import sys
 
 source = pathlib.Path(sys.argv[1]).read_text()
 replacements = {
-    'BASE_ROOT=/srv/github-runner': 'BASE_ROOT=' + json.dumps(os.path.join(os.environ['SOURCE_ROOT'], '..', '..')),
+    'BASE_ROOT=/srv/github-runner': 'BASE_ROOT=' + json.dumps(os.path.realpath(os.path.join(os.environ['SOURCE_ROOT'], '..', '..'))),
     'ADMIN_FILE=/etc/agent-relay/administrator': 'ADMIN_FILE=' + json.dumps(os.environ['ADMIN_FILE']),
     '/usr/local/bin/tsc': os.environ['FAKE_TSC'],
     '/usr/bin/id': os.path.join(os.environ['FAKE_BIN'], 'id'),

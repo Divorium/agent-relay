@@ -100,10 +100,20 @@ test("a pull request with multiple active ExecPlans remains an error", async () 
   }
 });
 
-test("the Codex workflow skips execution and finalization when no plan was found", async () => {
+test("the Codex workflow skips only an explicit no-plan result", async () => {
   const workflow = await readFile(join(repositoryRoot, ".github", "workflows", "codex.yml"), "utf8");
   assert.match(workflow, /No active ExecPlan was found in this pull request\. Codex execution was skipped\./u);
-  assert.match(workflow, /if: steps\.plan\.outputs\.plan_found == 'true'\n        continue-on-error: true/u);
-  assert.match(workflow, /always\(\) && steps\.plan\.outputs\.plan_found == 'true'/u);
-  assert.match(workflow, /steps\.plan\.outputs\.plan_found == 'true' && steps\.codex\.outcome == 'success'/u);
+  assert.match(workflow, /if: steps\.plan\.outputs\.plan_found == 'false'/u);
+  assert.match(
+    workflow,
+    /if: steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != ''\n        continue-on-error: true/u,
+  );
+  assert.match(
+    workflow,
+    /always\(\) && steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != ''/u,
+  );
+  assert.match(
+    workflow,
+    /steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != '' && steps\.codex\.outcome == 'success'/u,
+  );
 });

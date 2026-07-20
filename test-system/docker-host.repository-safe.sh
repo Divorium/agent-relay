@@ -90,7 +90,9 @@ if docker_debian_repository_records_acceptable "${repo_records}"; then fail "con
 list_output="$(docker_debian_parse_list_source "${ROOT}/test-system/fixtures/docker-source-compatible.list")"
 [[ "${list_output}" == 'compatible|/etc/apt/keyrings/docker.gpg' ]] || fail "compatible list source parsing failed"
 list_output="$(docker_debian_parse_list_source "${ROOT}/test-system/fixtures/docker-source-insecure.list")"
-[[ "${list_output}" == 'conflicting|' ]] || fail "insecure list source was accepted"
+[[ "${list_output}" == 'conflicting|/etc/apt/keyrings/docker.gpg' ]] || fail "insecure list source parsing lost its referenced key path"
+printf '%s|%s\n' "${list_output}" "${ROOT}/test-system/fixtures/docker-source-insecure.list" > "${repo_records}"
+if docker_debian_repository_records_acceptable "${repo_records}"; then fail "insecure list source was accepted"; fi
 deb822_output="$(docker_debian_parse_deb822_source "${ROOT}/test-system/fixtures/docker-source-compatible.sources")"
 [[ "${deb822_output}" == 'compatible|/etc/apt/keyrings/docker.asc' ]] || fail "compatible deb822 source parsing failed"
 cat > "${TMP}/disabled.sources" <<'EOF'

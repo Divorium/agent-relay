@@ -222,7 +222,7 @@ sudo -n -u "${BUILD_USER}" /usr/bin/env -i \
   LC_ALL=C.UTF-8 \
   PATH=/usr/local/bin:/usr/bin:/bin \
   /usr/local/bin/tsc -p "${SOURCE_ROOT}/tsconfig.runtime.json" --outDir "${SOURCE_ROOT}/dist"
-[[ -f "${SOURCE_ROOT}/dist/src/run-codex.js" ]] || {
+sudo -n -u "${BUILD_USER}" /usr/bin/test -f "${SOURCE_ROOT}/dist/src/run-codex.js" || {
   echo "Compiled runtime entrypoint is missing; the runner remains stopped" >&2
   exit 1
 }

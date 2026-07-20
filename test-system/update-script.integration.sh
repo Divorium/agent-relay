@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(mktemp -d "${TMPDIR:-/tmp}/agent-relay-update.XXXXXX")"
-cleanup() { rm -rf -- "${ROOT}"; }
+cleanup() { chmod -R u+rwx "${ROOT}" 2>/dev/null || true; rm -rf -- "${ROOT}"; }
 trap cleanup EXIT
 
 SOURCE_ROOT="${ROOT}/srv/github-runner/storage/agent-relay"
@@ -16,6 +16,7 @@ TRANSFORMED_UPDATE="${ROOT}/update-under-test.sh"
 FAKE_TSC="${ROOT}/fake-tsc"
 DOCKER_PROVISIONER="${SOURCE_ROOT}/scripts/docker-host.sh"
 DOCKER_ADAPTER="${SOURCE_ROOT}/scripts/docker-host-debian.sh"
+PRIVATE_DIST="${SOURCE_ROOT}/dist"
 TEST_UID="$(/usr/bin/id -u)"
 
 mkdir -p "${SOURCE_ROOT}/scripts" "${BUILD_HOME}" "${FAKE_BIN}" "$(dirname "${ADMIN_FILE}")"
@@ -37,7 +38,9 @@ while (( \$# > 0 )); do
   if [[ "\$1" == '--outDir' ]]; then out=\$2; shift 2; else shift; fi
 done
 mkdir -p "\${out}/src"
-printf 'compiled\n' > "\${out}/src/run-codex.js"
+if [[ ! -e "${ROOT}/omit-entrypoint" ]]; then
+  printf 'compiled\n' > "\${out}/src/run-codex.js"
+fi
 EOF_TSC
 chmod 0755 "${FAKE_TSC}"
 
@@ -86,8 +89,22 @@ if [[ "\${1:-}" == '-k' ]]; then rm -f -- "${ROOT}/sudo-parent"; exit 0; fi
 [[ -f "${ROOT}/sudo-parent" && "\$(<"${ROOT}/sudo-parent")" == "\${PPID}" ]] || exit 1
 if [[ "\$*" == '-n true' && "\${MOCK_SUDO_EXPIRE:-0}" == 1 && -e "${ROOT}/provisioning" ]]; then exit 1; fi
 if [[ "\${1:-}" == '-n' ]]; then shift; fi
-if [[ "\${1:-}" == '-u' ]]; then shift 2; fi
+run_as_builder=0
+if [[ "\${1:-}" == '-u' ]]; then
+  [[ "\${2:-}" == agent-relay-builder ]] || exit 64
+  run_as_builder=1
+  shift 2
+fi
 if [[ "\${1:-}" == '--' ]]; then shift; fi
+if (( run_as_builder == 1 )); then
+  [[ ! -d "${PRIVATE_DIST}" ]] || chmod 0700 "${PRIVATE_DIST}"
+  set +e
+  "\$@"
+  status=\$?
+  set -e
+  [[ ! -d "${PRIVATE_DIST}" ]] || chmod 000 "${PRIVATE_DIST}"
+  exit "\${status}"
+fi
 case "\${1:-}" in
   '${FAKE_BIN}/setsid')
     pgid_file="\${@: -2:1}"
@@ -115,6 +132,11 @@ case "\${1:-}" in
     fi
     exit "\${MOCK_DOCKER_STATUS:-0}"
     ;;
+  rm|/usr/bin/rm)
+    [[ ! -d "${PRIVATE_DIST}" ]] || chmod 0700 "${PRIVATE_DIST}"
+    shift
+    exec /usr/bin/rm "\$@"
+    ;;
   install|/usr/bin/install)
     shift
     filtered=()
@@ -124,9 +146,14 @@ case "\${1:-}" in
         *) filtered+=("\$1"); shift ;;
       esac
     done
-    exec /usr/bin/install "\${filtered[@]}"
+    /usr/bin/install "\${filtered[@]}"
+    status=\$?
+    target="\${filtered[\${#filtered[@]}-1]}"
+    if [[ "\${target}" == '${PRIVATE_DIST}' ]]; then chmod 000 "${PRIVATE_DIST}"; fi
+    exit "\${status}"
     ;;
   find|/usr/bin/find)
+    [[ ! -d "${PRIVATE_DIST}" ]] || chmod 0700 "${PRIVATE_DIST}"
     if printf '%s\n' "\$*" | /usr/bin/grep -q -- '-exec /usr/bin/chown'; then exit 0; fi
     shift
     exec /usr/bin/find "\$@"
@@ -206,6 +233,8 @@ chmod 0755 "${TRANSFORMED_UPDATE}"
 run_update() {
   : > "${COMMAND_LOG}"
   : > "${DOCKER_LOG}"
+  rm -f -- "${ROOT}/sudo-parent"
+  if [[ "${5:-1}" == 1 ]]; then rm -f -- "${ROOT}/omit-entrypoint"; else : > "${ROOT}/omit-entrypoint"; fi
   (
     cd "${SOURCE_ROOT}"
     PATH="${FAKE_BIN}:${PATH}" MOCK_DOCKER_STATUS="${1:-0}" \
@@ -228,11 +257,38 @@ fi
 test -f "${SOURCE_ROOT}/dist/src/run-codex.js"
 grep -Fq "${BUILD_ROOT}" "${COMMAND_LOG}"
 grep -Fq "tsc -p ${SOURCE_ROOT}/tsconfig.runtime.json --outDir ${SOURCE_ROOT}/dist" "${COMMAND_LOG}"
+grep -Fq "sudo -n -u agent-relay-builder /usr/bin/test -f ${PRIVATE_DIST}/src/run-codex.js" "${COMMAND_LOG}"
 grep -Fq 'docker provisioner' "${DOCKER_LOG}"
 grep -Fq 'systemctl stop actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
 grep -Fq 'systemctl enable actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
 grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
 grep -Fq 'Update completed. Runner is active with the finalized runtime and Docker access.' "${ROOT}/success.out"
+
+set +e
+run_update 0 exit 0 0 0 > "${ROOT}/missing.out" 2> "${ROOT}/missing.err"
+missing_status=$?
+set -e
+if (( missing_status != 1 )); then
+  cat "${ROOT}/missing.out" >&2
+  cat "${ROOT}/missing.err" >&2
+  printf 'missing-entrypoint scenario exited with status %s instead of 1\n' "${missing_status}" >&2
+  exit 1
+fi
+grep -Fq 'Compiled runtime entrypoint is missing; the runner remains stopped' "${ROOT}/missing.err"
+grep -Fq 'Runner remains stopped because the replacement runtime was not fully finalized.' "${ROOT}/missing.err"
+grep -Fq "sudo -n -u agent-relay-builder /usr/bin/test -f ${PRIVATE_DIST}/src/run-codex.js" "${COMMAND_LOG}"
+if grep -Fq -- '-exec /usr/bin/chown -h root:root' "${COMMAND_LOG}"; then
+  echo 'missing-entrypoint scenario adopted an unvalidated runtime' >&2
+  exit 1
+fi
+if [[ -s "${DOCKER_LOG}" ]]; then
+  echo 'missing-entrypoint scenario invoked Docker provisioning' >&2
+  exit 1
+fi
+if grep -Eq 'systemctl (enable|start) actions\.runner\.Divorium\.gh-runner\.service' "${COMMAND_LOG}"; then
+  echo 'missing-entrypoint scenario restored the runner before finalization' >&2
+  exit 1
+fi
 
 set +e
 run_update 42 > "${ROOT}/failure.out" 2> "${ROOT}/failure.err"

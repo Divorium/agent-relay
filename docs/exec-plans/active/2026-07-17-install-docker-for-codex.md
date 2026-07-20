@@ -11,7 +11,7 @@ Docker Engine and containerd must use permanent state below `/srv/github-runner/
 - Docker Engine: `/srv/github-runner/storage/docker/engine`;
 - containerd: `/srv/github-runner/storage/docker/containerd`.
 
-The supported initial state is a fresh host without an existing Docker installation or Docker data. Later updates may reuse only the exact managed installation created by this feature.
+The supported initial state is a fresh host without an existing Docker installation or Docker data. The provisioner creates the final storage directories directly and configures both daemons to use them before their first activation. Package-created default directories are valid only when empty and are removed before startup. Later updates may reuse only the exact managed installation created by this feature.
 
 Agent Relay remains the execution bridge. Codex decides when to run Docker and Compose commands, inspect logs, execute commands in containers, restart services, and clean up application resources.
 
@@ -28,7 +28,7 @@ Codex implemented the first version of the persistent-storage design in commit `
 - Provision Docker only from `update.sh`.
 - Support the current Debian x86-64 package adapter through Docker's official apt repository.
 - Install `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, and `docker-compose-plugin` with the resolver-selected dependency closure.
-- Configure both permanent roots before any first service activation.
+- Create the final Engine and containerd storage directories directly under `/srv/github-runner/storage/docker` before first service activation.
 - Recognize only a fresh supported state or the exact managed state produced by this feature.
 - Reject unknown pre-existing Docker packages, effective commands, CLI plugins, configuration, units, sockets, or data before package mutation.
 - Ensure `github-runner` belongs to `docker`; ensure `agent-relay-builder` does not.
@@ -74,9 +74,10 @@ Codex implemented the first version of the persistent-storage design in commit `
 6. Replace the unsupported containerd command with a supported effective-root check.
 7. Maintain noninteractive privileged control for the full update, verify signal delivery, enforce a bounded provisioner deadline, and confirm the process group is gone before runner restoration.
 8. Preserve direct Docker access and Codex-owned application lifecycle. Keep the workspace ownership requirement before finalization.
-9. Add behavioral coverage for every current independent finding. Static assertions may supplement but not replace behavioral evidence.
-10. Restore current-state documentation until the feature has complete acceptance evidence.
-11. Run one complete `npm run check` after the last production edit, then review the final diff point by point against this plan.
+9. Keep only the fresh-host installation path, interrupted managed-transaction recovery, and exact managed-state validation in production code, tests, and documentation.
+10. Add behavioral coverage for every current independent finding. Static assertions may supplement but not replace behavioral evidence.
+11. Restore current-state documentation until the feature has complete acceptance evidence.
+12. Run one complete `npm run check` after the last production edit, then review the final diff point by point against this plan.
 
 ## Repository-Safe Tests
 
@@ -94,7 +95,7 @@ Required coverage includes:
 - exact official CLI/plugin ownership and effective resolution;
 - runner Docker membership, builder exclusion, local socket metadata, Buildx, Compose, and first-install `hello-world` policy;
 - sudo expiry, signal-delivery failure, descendant survival, provisioner deadline, TERM/KILL escalation, bounded reaping, and runner restoration ordering;
-- Docker bind-mount work leaving the repository fully owned by `github-runner`;
+- repository bind mounts used by Codex leaving the workspace fully owned by `github-runner`;
 - all current-main output, transcript, executor, finalizer, workflow, and sandbox regressions;
 - exactly one active ExecPlan and no workflow changes.
 
@@ -137,6 +138,7 @@ If this lifecycle is unavailable, keep the item blocked with its exact cause and
 
 - [x] Confirmed that the existing workflow can run Codex without workflow changes.
 - [x] Established the fresh-host permanent-storage architecture.
+- [x] Clarified that final storage directories are created directly before first activation and that only fresh or exact managed states are supported.
 - [x] Corrected the initial system-test harness and restored the complete validation gate.
 - [x] Ran Codex once on a green validated head; Codex pushed `f0131c2d535050b7f73705d55f7868786b31ac0e`.
 - [x] Completed independent review of that implementation and recorded the unresolved findings above.
@@ -156,7 +158,7 @@ If this lifecycle is unavailable, keep the item blocked with its exact cause and
 ## Decision Log
 
 - Use one permanent managed storage tree below `/srv/github-runner/storage/docker`.
-- Configure both roots before first service activation and revalidate them after package work.
+- Create both final roots directly before first service activation and revalidate them after package work.
 - Permit mutation only while completing the recorded initial transaction; completed state is validation-only.
 - Use one apt metadata snapshot and independently prove the selected dependency closure.
 - Keep verified privileged control until the provisioner group is gone.

@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 const repositoryRoot = process.cwd();
 const resolverPath = join(repositoryRoot, "runner", "resolve-plan.mjs");
+let repositoryCounter = 0;
 
 function run(command: string, args: string[], cwd: string): string {
   const result = spawnSync(command, args, { cwd, encoding: "utf8" });
@@ -19,7 +20,11 @@ async function createPullRequestRepository(planPaths: string[]): Promise<{
   baseSha: string;
   headSha: string;
 }> {
-  const root = await mkdtemp(join(tmpdir(), "agent-relay-resolve-plan-"));
+  const root = join(
+    tmpdir(),
+    `agent-relay-resolve-plan-${process.pid}-${Date.now()}-${repositoryCounter++}`,
+  );
+  await mkdir(root);
   run("git", ["init", "--quiet"], root);
   run("git", ["config", "user.name", "Agent Relay Test"], root);
   run("git", ["config", "user.email", "agent-relay-test@example.invalid"], root);

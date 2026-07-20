@@ -12,6 +12,7 @@ DOCKER_DEBIAN_MANAGED_KEY=/etc/apt/keyrings/docker.asc
 DOCKER_DEBIAN_MANAGED_SOURCE=/etc/apt/sources.list.d/agent-relay-docker.sources
 DOCKER_DEBIAN_MANAGED_KEY_STAGE_GLOB=/etc/apt/keyrings/.agent-relay-docker.asc.tmp.
 DOCKER_DEBIAN_MANAGED_SOURCE_STAGE_GLOB=/etc/apt/sources.list.d/.agent-relay-docker.sources.tmp.
+DOCKER_DEBIAN_RESIDUAL_PURGE_TIMEOUT_SECONDS=120
 
 docker_debian_require_host() {
   [[ "$(/usr/bin/uname -m)" == x86_64 ]] \
@@ -61,6 +62,39 @@ docker_debian_related_package_inventory() {
     > "${packages}" 2> "${DOCKER_HOST_STATE_ROOT}/related-package-database.err" \
     || docker_host_fail inspection "Could not inventory Docker-related package state"
   docker_debian_related_package_records "${packages}"
+}
+
+docker_debian_residual_package_records() {
+  /usr/bin/awk -F'|' '$2 == "rc " {print}' "$1"
+}
+
+docker_debian_active_package_records() {
+  /usr/bin/awk -F'|' '$2 != "rc " {print}' "$1"
+}
+
+docker_debian_run_residual_purge() {
+  /usr/bin/timeout --signal=TERM --kill-after=10s "${DOCKER_DEBIAN_RESIDUAL_PURGE_TIMEOUT_SECONDS}s" \
+    /usr/bin/dpkg --purge -- "$@"
+}
+
+docker_debian_purge_residual_packages() {
+  local records="$1" package status version
+  local -a packages=()
+  while IFS='|' read -r package status version; do
+    [[ -n "${package}" ]] || continue
+    [[ "${package}" =~ ^[a-z0-9][a-z0-9.+-]*$ && "${status}" == 'rc ' && -n "${version}" ]] \
+      || docker_host_fail package "Residual package cleanup input is malformed"
+    [[ "$(docker_debian_package_status "${package}")" == "${status}|${version}" ]] \
+      || docker_host_fail package "Residual package state changed before cleanup: ${package}"
+    packages+=("${package}")
+  done < "${records}"
+  (( ${#packages[@]} > 0 )) || docker_host_fail package "Residual package cleanup has no exact targets"
+  DEBIAN_FRONTEND=noninteractive LC_ALL=C LANG=C docker_debian_run_residual_purge "${packages[@]}" \
+    || docker_host_fail package "Could not purge exact residual Docker package configuration"
+  for package in "${packages[@]}"; do
+    [[ "$(docker_debian_package_status "${package}")" == not-installed\|* ]] \
+      || docker_host_fail package "Residual package remains after cleanup: ${package}"
+  done
 }
 
 docker_debian_command_owner() {

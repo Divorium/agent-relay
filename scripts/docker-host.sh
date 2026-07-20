@@ -294,13 +294,44 @@ docker_host_remove_empty_default_data() {
   done
 }
 
-docker_host_any_package_present() {
-  [[ -n "$(docker_debian_related_package_inventory)" ]]
+docker_host_classify_unmarked_packages() {
+  local related=${DOCKER_HOST_STATE_ROOT}/unmarked-related-packages
+  local residual=${DOCKER_HOST_STATE_ROOT}/unmarked-residual-packages
+  local active=${DOCKER_HOST_STATE_ROOT}/unmarked-active-packages
+  docker_debian_related_package_inventory | /usr/bin/sort -u > "${related}"
+  docker_debian_residual_package_records "${related}" > "${residual}"
+  docker_debian_active_package_records "${related}" > "${active}"
+  [[ ! -s "${active}" ]] \
+    || docker_host_fail inspection "Pre-existing installed or partial Docker or container runtime package state is unsupported"
+  DOCKER_HOST_RESIDUAL_PACKAGES=${residual}
+  if [[ -s "${residual}" ]]; then
+    DOCKER_HOST_CLASSIFICATION=residual
+  else
+    DOCKER_HOST_CLASSIFICATION=fresh
+  fi
+}
+
+docker_host_residual_configuration_safe() {
+  local directory target entry owner listing=${DOCKER_HOST_STATE_ROOT}/residual-configuration-entries.bin
+  for directory in "${DOCKER_HOST_DAEMON_DIRECTORY}" "${DOCKER_HOST_CONTAINERD_DIRECTORY}"; do
+    [[ "${directory}" == "${DOCKER_HOST_DAEMON_DIRECTORY}" ]] \
+      && target=${DOCKER_HOST_DAEMON_CONFIG} || target=${DOCKER_HOST_CONTAINERD_CONFIG}
+    docker_host_path_absent "${directory}" && continue
+    docker_host_secure_path "${directory}" directory || return 1
+    /usr/bin/find -P "${directory}" -mindepth 1 -maxdepth 1 -print0 > "${listing}" || return 1
+    while IFS= read -r -d '' entry; do
+      [[ "${entry}" == "${target}" ]] || return 1
+      docker_host_secure_path "${entry}" file || return 1
+      owner="$(docker_debian_command_owner "${entry}" 2>/dev/null || true)"
+      [[ -n "${owner}" ]] && docker_host_marker_package_contains "${owner}" "${DOCKER_HOST_RESIDUAL_PACKAGES}" \
+        || return 1
+    done < "${listing}"
+  done
 }
 
 docker_host_marker_package_contains() {
   local package="$1" marker_packages="$2"
-  /usr/bin/grep -Eq "^${package//./\\.}\\|" "${marker_packages}"
+  /usr/bin/awk -F'|' -v package="${package}" '$1==package{found++} END{exit found != 1}' "${marker_packages}"
 }
 
 docker_host_validate_phase_packages() {
@@ -674,14 +705,20 @@ docker_host_classify() {
     DOCKER_HOST_CLASSIFICATION=managed
     return
   fi
-  docker_host_any_package_present && docker_host_fail inspection "Pre-existing Docker or container runtime package state is unsupported"
+  docker_host_classify_unmarked_packages
   docker_host_command_state_absent || docker_host_fail inspection "Pre-existing Docker or containerd command state is unsupported"
   docker_host_plugin_overrides_absent || docker_host_fail inspection "Pre-existing Docker CLI plugin override state is unsupported"
-  docker_host_path_absent "${DOCKER_HOST_DAEMON_CONFIG}" && docker_host_path_absent "${DOCKER_HOST_CONTAINERD_CONFIG}" \
-    || docker_host_fail inspection "Pre-existing Docker or containerd configuration is unsupported"
-  docker_host_directory_empty "${DOCKER_HOST_DAEMON_DIRECTORY}" && docker_host_directory_empty "${DOCKER_HOST_CONTAINERD_DIRECTORY}" \
-    || docker_host_fail inspection "Pre-existing Docker or containerd configuration directory content is unsupported"
+  if [[ "${DOCKER_HOST_CLASSIFICATION}" == residual ]]; then
+    docker_host_residual_configuration_safe \
+      || docker_host_fail inspection "Residual Docker or containerd configuration is not owned by the cleanup packages"
+  else
+    docker_host_path_absent "${DOCKER_HOST_DAEMON_CONFIG}" && docker_host_path_absent "${DOCKER_HOST_CONTAINERD_CONFIG}" \
+      || docker_host_fail inspection "Pre-existing Docker or containerd configuration is unsupported"
+    docker_host_directory_empty "${DOCKER_HOST_DAEMON_DIRECTORY}" && docker_host_directory_empty "${DOCKER_HOST_CONTAINERD_DIRECTORY}" \
+      || docker_host_fail inspection "Pre-existing Docker or containerd configuration directory content is unsupported"
+  fi
   ! docker_host_runtime_socket_present || docker_host_fail inspection "Pre-existing Docker socket state is unsupported"
+  docker_host_processes_absent || docker_host_fail inspection "Pre-existing Docker or containerd process state is unsupported"
   docker_host_directory_empty "${DOCKER_HOST_STORAGE_ROOT}" || docker_host_fail inspection "Managed Docker storage is already populated without a marker"
   docker_host_directory_empty "${DOCKER_HOST_DEFAULT_ENGINE_ROOT}" && docker_host_directory_empty "${DOCKER_HOST_DEFAULT_CONTAINERD_ROOT}" \
     || docker_host_fail inspection "Pre-existing default Docker or containerd data is unsupported"
@@ -697,8 +734,18 @@ docker_host_classify() {
   for unit in docker.service docker.socket containerd.service; do docker_host_unit_absent "${unit}" || docker_host_fail inspection "Pre-existing ${unit} is unsupported"; done
   docker_host_path_absent "${DOCKER_HOST_POLICY}" || docker_host_fail inspection "A pre-existing policy-rc.d prevents controlled Docker installation"
   docker_host_validate_publication_stages fresh || docker_host_fail inspection "Pre-existing managed publication staging state is unsafe"
-  DOCKER_HOST_CLASSIFICATION=fresh
-  DOCKER_HOST_FRESH=1
+  [[ "${DOCKER_HOST_CLASSIFICATION}" == fresh ]] && DOCKER_HOST_FRESH=1
+}
+
+docker_host_classify_and_clean_unmarked() {
+  docker_host_classify
+  if [[ "${DOCKER_HOST_CLASSIFICATION}" == residual ]]; then
+    docker_debian_assert_clean_dpkg
+    docker_debian_purge_residual_packages "${DOCKER_HOST_RESIDUAL_PACKAGES}"
+    docker_host_classify
+    [[ "${DOCKER_HOST_CLASSIFICATION}" == fresh ]] \
+      || docker_host_fail inspection "Host did not become fresh after residual package cleanup"
+  fi
 }
 
 docker_host_prepare_storage_and_configuration() {
@@ -961,7 +1008,7 @@ docker_host_main() {
   # shellcheck source=scripts/docker-host-debian.sh
   source "${DOCKER_HOST_ADAPTER}"
   docker_host_preflight
-  docker_host_classify
+  docker_host_classify_and_clean_unmarked
   if [[ "${DOCKER_HOST_CLASSIFICATION}" == fresh ]]; then
     docker_debian_assert_clean_dpkg
     docker_host_remove_publication_stages

@@ -21,17 +21,40 @@ test("updater maintains noninteractive sudo authority through bounded provisioni
   assert.doesNotMatch(update, /start_sudo_keeper/u);
 });
 
-test("provisioner implements fresh-or-exact-managed state and permanent roots", async () => {
+test("provisioner implements fresh, residual-cleanup, or exact-managed state and permanent roots", async () => {
   const host = await source("scripts/docker-host.sh");
   assert.match(host, /DOCKER_HOST_STORAGE_ROOT=\/srv\/github-runner\/storage\/docker/u);
   assert.match(host, /DOCKER_HOST_ENGINE_ROOT=.*\/engine/u);
   assert.match(host, /DOCKER_HOST_CONTAINERD_ROOT=.*\/containerd/u);
   assert.match(host, /DOCKER_HOST_MARKER=\/etc\/agent-relay\/docker-host-state-v1/u);
   assert.match(host, /DOCKER_HOST_CLASSIFICATION=fresh/u);
+  assert.match(host, /DOCKER_HOST_CLASSIFICATION=residual/u);
   assert.match(host, /DOCKER_HOST_CLASSIFICATION=managed/u);
   assert.doesNotMatch(host, /complete-compatible|missing-plugin/u);
-  assert.match(host, /Pre-existing Docker or container runtime package state is unsupported/u);
+  assert.match(host, /Pre-existing installed or partial Docker or container runtime package state is unsupported/u);
+  assert.match(host, /Pre-existing Docker or containerd process state is unsupported/u);
   assert.match(host, /Managed Docker storage is already populated without a marker/u);
+});
+
+test("residual cleanup is exact, bounded, verified, and fully reclassified before publication", async () => {
+  const host = await source("scripts/docker-host.sh");
+  const adapter = await source("scripts/docker-host-debian.sh");
+  const cleanup = host.indexOf("docker_host_classify_and_clean_unmarked() {");
+  const firstClassification = host.indexOf("\n  docker_host_classify\n", cleanup);
+  const purge = host.indexOf("docker_debian_purge_residual_packages", firstClassification);
+  const secondClassification = host.indexOf("\n    docker_host_classify\n", purge);
+  const main = host.indexOf("docker_host_main() {");
+  const cleanupCall = host.indexOf("docker_host_classify_and_clean_unmarked", main);
+  const publishPreparing = host.indexOf("docker_host_publish_marker preparing", cleanupCall);
+  const configure = host.indexOf("docker_host_prepare_storage_and_configuration", publishPreparing);
+  assert.ok(cleanup >= 0 && firstClassification > cleanup && purge > firstClassification && secondClassification > purge);
+  assert.ok(main >= 0 && cleanupCall > main && publishPreparing > cleanupCall && configure > publishPreparing);
+  assert.match(adapter, /"\$\{status\}" == 'rc ' && -n "\$\{version\}"/u);
+  assert.match(adapter, /docker_debian_run_residual_purge "\$\{packages\[@\]\}"/u);
+  assert.match(adapter, /timeout --signal=TERM --kill-after=10s/u);
+  assert.match(adapter, /\/usr\/bin\/dpkg --purge -- "\$@"/u);
+  assert.match(adapter, /Residual package remains after cleanup/u);
+  assert.doesNotMatch(adapter, /apt-get[^\n]*purge/u);
 });
 
 test("configuration precedes controlled package installation and explicit startup", async () => {

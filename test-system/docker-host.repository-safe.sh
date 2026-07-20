@@ -385,6 +385,13 @@ related_records="$(docker_debian_related_package_records "${TMP}/related-package
 if /usr/bin/grep -Eq 'dockery|containerdb|unrelated' <<< "${related_records}"; then
   fail "similarly named unrelated package was included"
 fi
+printf '%s\n' "${related_records}" > "${TMP}/related-records"
+residual_records="$(docker_debian_residual_package_records "${TMP}/related-records")"
+active_records="$(docker_debian_active_package_records "${TMP}/related-records")"
+[[ "${residual_records}" == $'runc|rc |4\nrootlesskit|rc |5\ndocker-buildx-plugin|rc |6\ndocker-compose-plugin|rc |7\ncompose-switch|rc |8\nmoby-cli|rc |9' ]] \
+  || fail "residual package records were not split exactly"
+[[ "${active_records}" == $'docker-ce|ii |1\ndocker-scout-plugin|ii |2\ncontainerd.io|iU |3' ]] \
+  || fail "active and partial package records were not split exactly"
 
 printf 'sl|5.02-1+b1\n' > "${TMP}/requested"
 printf '%s\n' sl libncurses6 > "${TMP}/allowed"
@@ -520,30 +527,164 @@ if (
 ); then
   fail "fresh preparing state accepted an unrecorded related package"
 fi
+(
+  docker_debian_related_package_inventory() { return 0; }
+  docker_host_classify_unmarked_packages
+  [[ "${DOCKER_HOST_CLASSIFICATION}" == fresh && ! -s "${DOCKER_HOST_RESIDUAL_PACKAGES}" ]]
+) || fail "clean package inventory did not follow the fresh path"
+(
+  docker_debian_related_package_inventory() { printf '%s\n' 'runc|rc |1' 'docker-ce|rc |2'; }
+  docker_host_classify_unmarked_packages
+  [[ "${DOCKER_HOST_CLASSIFICATION}" == residual ]]
+  [[ "$(<"${DOCKER_HOST_RESIDUAL_PACKAGES}")" == $'docker-ce|rc |2\nrunc|rc |1' ]]
+) || fail "residual-only package inventory did not enter deterministic cleanup"
+set +e
+(
+  docker_debian_related_package_inventory() { printf '%s\n' 'docker-ce|rc |1' 'containerd.io|iU |2'; }
+  docker_host_fail() { [[ "$1" == inspection ]] && exit 42; exit 43; }
+  docker_host_classify_unmarked_packages
+)
+mixed_status=$?
+set -e
+(( mixed_status == 42 )) || fail "mixed residual and partial package state was accepted"
+
+residual_config_root=${TMP}/residual-config
+DOCKER_HOST_DAEMON_DIRECTORY=${residual_config_root}/docker
+DOCKER_HOST_CONTAINERD_DIRECTORY=${residual_config_root}/containerd
+DOCKER_HOST_DAEMON_CONFIG=${DOCKER_HOST_DAEMON_DIRECTORY}/daemon.json
+DOCKER_HOST_CONTAINERD_CONFIG=${DOCKER_HOST_CONTAINERD_DIRECTORY}/config.toml
+DOCKER_HOST_RESIDUAL_PACKAGES=${TMP}/residual-config-packages
+printf 'docker-ce|rc |1\n' > "${DOCKER_HOST_RESIDUAL_PACKAGES}"
+mkdir -p -m 0755 "${DOCKER_HOST_DAEMON_DIRECTORY}" "${DOCKER_HOST_CONTAINERD_DIRECTORY}"
+printf 'package residual\n' > "${DOCKER_HOST_DAEMON_CONFIG}"
+chmod 0644 "${DOCKER_HOST_DAEMON_CONFIG}"
+(
+  docker_debian_command_owner() { printf 'docker-ce\n'; }
+  docker_host_residual_configuration_safe
+) || fail "package-owned residual managed configuration target was rejected"
+printf 'unknown\n' > "${DOCKER_HOST_DAEMON_DIRECTORY}/extra.json"
+if (docker_debian_command_owner() { printf 'docker-ce\n'; }; docker_host_residual_configuration_safe); then
+  fail "unknown residual configuration file was accepted"
+fi
+rm "${DOCKER_HOST_DAEMON_DIRECTORY}/extra.json"
+if (docker_debian_command_owner() { printf 'unrelated-package\n'; }; docker_host_residual_configuration_safe); then
+  fail "configuration outside the exact residual package set was accepted"
+fi
+
+printf '%s\n' 'docker-ce|rc |1' 'runc|rc |2' > "${TMP}/purge-records"
+(
+  purge_complete=0
+  docker_debian_package_status() {
+    (( purge_complete == 1 )) && printf 'not-installed|\n' || {
+      [[ "$1" == docker-ce ]] && printf 'rc |1\n' || printf 'rc |2\n'
+    }
+  }
+  docker_debian_run_residual_purge() {
+    printf '%s\n' "$@" > "${TMP}/purge-arguments"
+    purge_complete=1
+  }
+  docker_debian_purge_residual_packages "${TMP}/purge-records"
+) || fail "exact residual package cleanup was rejected"
+[[ "$(<"${TMP}/purge-arguments")" == $'docker-ce\nrunc' ]] \
+  || fail "residual cleanup command did not receive only exact recorded names"
+for malformed_cleanup_record in 'docker-*|rc |1' 'docker-ce|ii |1' 'unrelated|rc |'; do
+  printf '%s\n' "${malformed_cleanup_record}" > "${TMP}/malformed-purge-record"
+  set +e
+  (
+    docker_debian_run_residual_purge() { printf 'purged\n' > "${TMP}/malformed-purge-ran"; }
+    docker_host_fail() { [[ "$1" == package ]] && exit 42; exit 43; }
+    docker_debian_purge_residual_packages "${TMP}/malformed-purge-record"
+  )
+  malformed_status=$?
+  set -e
+  (( malformed_status == 42 )) || fail "malformed residual cleanup input was accepted: ${malformed_cleanup_record}"
+  [[ ! -e "${TMP}/malformed-purge-ran" ]] || fail "malformed residual cleanup input reached dpkg"
+done
+set +e
+(
+  docker_debian_package_status() { printf 'rc |1\n'; }
+  docker_debian_run_residual_purge() { return 1; }
+  docker_host_fail() { [[ "$1" == package ]] && exit 42; exit 43; }
+  docker_debian_purge_residual_packages "${TMP}/purge-records"
+  printf 'mutated\n' > "${TMP}/after-failed-purge"
+)
+purge_failure_status=$?
+set -e
+(( purge_failure_status == 42 )) || fail "residual cleanup failure did not stop provisioning"
+[[ ! -e "${TMP}/after-failed-purge" ]] || fail "provisioning continued after residual cleanup failure"
+
+(
+  classification_count=0
+  : > "${TMP}/cleanup-sequence"
+  docker_host_classify() {
+    ((classification_count += 1))
+    printf 'classify-%s\n' "${classification_count}" >> "${TMP}/cleanup-sequence"
+    if (( classification_count == 1 )); then
+      DOCKER_HOST_CLASSIFICATION=residual
+      DOCKER_HOST_RESIDUAL_PACKAGES=${TMP}/purge-records
+    else
+      DOCKER_HOST_CLASSIFICATION=fresh
+    fi
+  }
+  docker_debian_assert_clean_dpkg() { printf 'audit\n' >> "${TMP}/cleanup-sequence"; }
+  docker_debian_purge_residual_packages() {
+    printf 'purge:%s\n' "$1" >> "${TMP}/cleanup-sequence"
+    rm -f -- "${DOCKER_HOST_DAEMON_CONFIG}" "${DOCKER_HOST_CONTAINERD_CONFIG}"
+  }
+  docker_host_classify_and_clean_unmarked
+) || fail "successful cleanup was not reclassified as a fresh host"
+[[ "$(<"${TMP}/cleanup-sequence")" == $'classify-1\naudit\npurge:'"${TMP}"$'/purge-records\nclassify-2' ]] \
+  || fail "residual cleanup did not rerun complete classification in order"
+[[ ! -e "${DOCKER_HOST_DAEMON_CONFIG}" && ! -e "${DOCKER_HOST_CONTAINERD_CONFIG}" ]] \
+  || fail "residual package configuration remained after cleanup"
+
+assert_unsafe_residual_state_blocks_cleanup() {
+  local unsafe="$1"
+  /usr/bin/rm -f -- "${TMP}/unsafe-purge"
+  set +e
+  (
+    DOCKER_HOST_MARKER=${TMP}/missing-unmarked-marker
+    docker_debian_related_package_inventory() { printf 'docker-ce|rc |1\n'; }
+    docker_host_command_state_absent() { [[ "${unsafe}" != command ]]; }
+    docker_host_plugin_overrides_absent() { return 0; }
+    docker_host_path_absent() { return 0; }
+    docker_host_runtime_socket_present() { [[ "${unsafe}" == socket ]]; }
+    docker_host_processes_absent() { [[ "${unsafe}" != process ]]; }
+    docker_host_directory_empty() {
+      [[ "${unsafe}" == managed-data && "$1" == "${DOCKER_HOST_STORAGE_ROOT}" ]] && return 1
+      [[ "${unsafe}" == default-data && "$1" == "${DOCKER_HOST_DEFAULT_ENGINE_ROOT}" ]] && return 1
+      return 0
+    }
+    docker_debian_inspect_repository_definitions() { DOCKER_DEBIAN_REPOSITORY_DEFINITION_COUNT=0; }
+    docker_debian_validate_repository_boundary() { return 0; }
+    docker_host_direct_unit_state_absent() { return 0; }
+    docker_host_unit_roots_safe() { return 0; }
+    docker_host_unit_aliases_absent() { return 0; }
+    docker_host_activation_links_validate() { return 0; }
+    docker_host_unit_absent() { [[ "${unsafe}" != service ]]; }
+    docker_host_validate_publication_stages() { return 0; }
+    docker_debian_purge_residual_packages() { printf 'purged\n' > "${TMP}/unsafe-purge"; }
+    docker_host_classify_and_clean_unmarked
+  )
+  unsafe_status=$?
+  set -e
+  (( unsafe_status != 0 )) || fail "unsafe residual ${unsafe} state was accepted"
+  [[ ! -e "${TMP}/unsafe-purge" ]] || fail "unsafe residual ${unsafe} state was deleted"
+}
+for unsafe_residual_state in command socket process managed-data default-data service; do
+  assert_unsafe_residual_state_blocks_cleanup "${unsafe_residual_state}"
+done
+
 residual_packages=(
   docker-ce containerd.io runc rootlesskit docker-buildx-plugin docker-compose-plugin
   docker-scout-plugin compose-switch moby-cli
 )
 for residual_package in "${residual_packages[@]}"; do
-  set +e
-  (
-    DOCKER_HOST_MARKER=${TMP}/missing-fresh-marker
-    docker_debian_related_package_inventory() { printf '%s|rc |1\n' "${residual_package}"; }
-    docker_host_fail() {
-      [[ "$1" == inspection && "$2" == "Pre-existing Docker or container runtime package state is unsupported" ]] \
-        && exit 42
-      exit 43
-    }
-    docker_host_classify
-  )
-  fresh_status=$?
-  set -e
-  (( fresh_status == 42 )) || fail "fresh state accepted residual-config package ${residual_package}"
   if (
     docker_debian_related_package_inventory() { printf '%s|rc |1\n' "${residual_package}"; }
     docker_host_validate_phase_packages preparing
   ); then
-    fail "preparing state accepted residual-config package ${residual_package}"
+    fail "managed preparing state accepted residual-config package ${residual_package}"
   fi
 done
 printf 'schema=1\nphase=transaction\npackage=docker-ce:1\n' > "${DOCKER_HOST_MARKER}"

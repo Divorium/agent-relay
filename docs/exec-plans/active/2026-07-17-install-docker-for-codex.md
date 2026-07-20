@@ -176,11 +176,13 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - [x] Codex revision `34d4d2bd2d6b367908ade9a284d126c522c8cdf7` passed the complete repository-safe validation in workflow run `29747072289`.
 - [x] Re-evaluated plugin-root and ancestor-chain hardening against the actual dedicated-VM trust model; they are not merge blockers.
 - [x] Revision `ce9e3cc6` made residual-config package records visible and added phase tests, but implemented rejection rather than the required cleanup compatibility path.
-- [ ] Implement safe unmarked residual-package cleanup and full post-cleanup reclassification.
-- [ ] Run final repository validation and Codex validation.
-- [ ] Publish a connector-authored exact final head and require normal CI to pass.
-- [ ] Complete independent final diff and job-log review.
-- [ ] Merge the PR after the acceptance criteria above pass.
+- [x] Implemented safe unmarked residual-package cleanup and full post-cleanup reclassification. The classifier now separates exact `rc` records from active or partial package state, completes the non-package safety inspection (including process absence), permits only package-owned residual copies of the two managed configuration targets, purges a sorted exact package-name list with a bounded direct `dpkg --purge`, verifies absence, and reruns classification from the beginning.
+- [x] Added deterministic repository-safe coverage for parsing and split classification, clean and residual paths, mixed-state rejection, exact purge arguments, purge failure, post-cleanup reclassification, package-owned residual configuration, and refusal to clean hosts with commands, sockets, processes, populated managed/default data, or active units. Focused contract and repository-safe tests passed on 2026-07-20.
+- [x] Ran final repository and Codex validation after the last production edit on 2026-07-20: `npm run check` passed with 137 tests, 100% source coverage, and all runtime-build, shell, Node-script, toolchain, and system-integration checks successful.
+- [x] Reviewed the final local diff against this plan. The cleanup path is restartable, every destructive target comes from the exact validated dpkg inventory, unsafe foreign runtime/data/configuration state remains fail-closed, and no workflow, public API, request contract, installation argument, routing, README, or operator-documentation change is required.
+- [blocked] Publish a connector-authored exact final head and require normal CI to pass. The current Codex sandbox exposes `.git` read-only (`git commit` failed creating `.git/index.lock`), while publishing through the connector before this workflow's finalizer would advance the branch and make its later push non-fast-forward. The concrete automated unblock is: let the workflow finalizer publish this validated Codex change, then create the connector-authored status commit and wait for normal CI on that exact head.
+- [blocked] Complete independent final job-log review. The final local diff review passed and all 32 existing inline review threads are resolved, but exact-head normal-CI logs do not exist until the connector-authored head is published and CI completes.
+- [blocked] Merge the PR after the acceptance criteria above pass. The concrete unblock condition is the connector-authored exact head, passing normal CI, and its successful job-log review.
 - [post-merge] Perform manual privileged host acceptance; open a new plan only if it exposes a defect.
 
 ## Decision Log
@@ -207,6 +209,7 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - Docker activation can be interrupted in multiple nonterminal systemd states; recovery must prove the exact fragment/socket/process relationship before stopping services.
 - Docker CLI searches several plugin directories, so exact entry inventory must cover every configured search root rather than only known filenames.
 - Dpkg residual-config state is globally clean and has no package payload, but it can retain package configuration. That makes it suitable for exact cleanup on an otherwise-safe unmarked host, not for silent omission or unconditional rejection.
+- The first residual-host inspection must allow package-owned residual copies of `/etc/docker/daemon.json` or `/etc/containerd/config.toml`; rejecting those files before `dpkg --purge` would make the promised residual-configuration compatibility path unusable. The exception is limited to safe regular target files owned by an exact cleanup package, and the second fresh classification requires them to be gone.
 - Codex-token pushes can leave normal CI as `action_required` with no jobs; a connector-authored final status commit is needed for exact-head CI evidence.
 
 ## Outcomes & Retrospective

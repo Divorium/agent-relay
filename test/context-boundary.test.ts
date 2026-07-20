@@ -75,12 +75,20 @@ test("workflows use installed direct execution, transcript output, and strict to
     assert.match(workflow, /persist-credentials: false/);
     assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ github\.token \}\}/);
     assert.match(workflow, /No active ExecPlan was found in this pull request\. Codex execution was skipped\./);
-    assert.match(workflow, /if: \$\{\{ always\(\) && steps\.plan\.outputs\.plan_found == 'true' \}\}[\s\S]*actions\/upload-artifact@v4/);
-    assert.match(workflow, /if: \$\{\{ steps\.plan\.outputs\.plan_found == 'true' && steps\.codex\.outcome == 'success' \}\}[\s\S]*runner\/finalize\.sh/);
+    assert.match(workflow, /if: steps\.plan\.outputs\.plan_found == 'false'/);
+    assert.match(
+      workflow,
+      /if: \$\{\{ always\(\) && steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != '' \}\}[\s\S]*actions\/upload-artifact@v4/,
+    );
+    assert.match(
+      workflow,
+      /if: \$\{\{ steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != '' && steps\.codex\.outcome == 'success' \}\}[\s\S]*runner\/finalize\.sh/,
+    );
     assert.doesNotMatch(workflow, /AGENT_RELAY_TOKEN|AGENT_RELAY_URL|runner\/client\.mjs/);
     assert.doesNotMatch(workflow, /(?:node|run:)\s+\/runner\//);
 
     const codexStep = workflow.match(/- name: Run Codex directly([\s\S]*?)(?=\n      - name:)/)?.[1] ?? "";
+    assert.match(codexStep, /plan_found != 'false' && steps\.plan\.outputs\.plan_path != ''/);
     assert.doesNotMatch(codexStep, /GITHUB_TOKEN|github\.token/);
   }
 });

@@ -100,24 +100,35 @@ test("a pull request with multiple active ExecPlans remains an error", async () 
   }
 });
 
-test("the Codex workflow skips only an explicit no-plan result", async () => {
+test("the Codex workflow bypasses the deployed resolver only for a diff-proven missing plan", async () => {
   const workflow = await readFile(join(repositoryRoot, ".github", "workflows", "codex.yml"), "utf8");
   assert.match(workflow, /No active ExecPlan was found in this pull request\. Codex execution was skipped\./u);
-  assert.match(workflow, /if: steps\.plan\.outputs\.plan_found == 'false'/u);
   assert.match(
     workflow,
-    /if: steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != ''\n        continue-on-error: true/u,
+    /- name: Detect missing pull-request ExecPlan[\s\S]*git diff --name-only --diff-filter=AM[\s\S]*docs\/exec-plans\/active\/\*\.md/u,
   );
   assert.match(
     workflow,
-    /always\(\) && steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != ''/u,
+    /if: github\.event_name != 'pull_request' \|\| steps\.plan_diff\.outputs\.plan_found != 'false'/u,
   );
   assert.match(
     workflow,
-    /steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != '' && steps\.codex\.outcome == 'failure'/u,
+    /if: steps\.plan_diff\.outputs\.plan_found == 'false' \|\| steps\.plan\.outputs\.plan_found == 'false'/u,
   );
   assert.match(
     workflow,
-    /steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != '' && steps\.codex\.outcome == 'success'/u,
+    /if: steps\.plan_diff\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != ''\n        continue-on-error: true/u,
+  );
+  assert.match(
+    workflow,
+    /always\(\) && steps\.plan_diff\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != ''/u,
+  );
+  assert.match(
+    workflow,
+    /steps\.plan_diff\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != '' && steps\.codex\.outcome == 'failure'/u,
+  );
+  assert.match(
+    workflow,
+    /steps\.plan_diff\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != '' && steps\.codex\.outcome == 'success'/u,
   );
 });

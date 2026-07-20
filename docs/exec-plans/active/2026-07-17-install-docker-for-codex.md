@@ -142,10 +142,11 @@ If this lifecycle is unavailable, keep the item blocked with its exact cause and
 - [x] Corrected the initial system-test harness and restored the complete validation gate.
 - [x] Ran Codex once on a green validated head; Codex pushed `f0131c2d535050b7f73705d55f7868786b31ac0e`.
 - [x] Completed independent review of that implementation and recorded the unresolved findings above.
-- [ ] Implement the current independent review fixes and behavioral tests.
-- [ ] Run exact-head repository validation and CI after the final production edit.
-- [ ] Complete another independent final diff and job-log review.
-- [blocked] Run automated privileged real-host acceptance if no disposable or designated host lifecycle is available.
+- [x] Implemented the current independent review fixes and behavioral tests in `scripts/docker-host.sh`, `scripts/docker-host-debian.sh`, `update.sh`, `test-system/docker-host.repository-safe.sh`, and `test-system/update-script.integration.sh`.
+- [x] Ran one complete `npm run check` after the final production edit on 2026-07-20: 135 tests passed with 100% source coverage; runtime compilation, shell and Node syntax, toolchain smoke, and all system harnesses passed.
+- [ ] [blocked] Run exact-final-commit CI after finalization. Cause: the requested changes are still a working-tree diff on detached pre-finalization commit `3986006`, so no final commit or exact-head CI run exists yet. Impact: local repository validation is complete, but the GitHub exact-head criterion is not. Unblock condition: automated finalization publishes the resulting commit and the existing unchanged CI workflow completes for that exact SHA.
+- [ ] [blocked] Complete another independent final diff and job-log review. Cause: no independent reviewer result or final-head job log exists for the unfinalized working-tree revision. Impact: the implementation has a local point-by-point self-review but not the required independent acceptance evidence. Unblock condition: review the published final diff and exact-head CI logs after finalization.
+- [ ] [blocked] Run automated privileged real-host acceptance. Cause: the current execution environment runs as UID 988, does not provide systemd as PID 1, and exposes no disposable or designated Debian 13 x86-64 host lifecycle. Impact: repository-safe tests cannot prove apt, dpkg, systemd, daemon, socket, registry, group, storage-root, or real Compose behavior. Unblock condition: provide the automated disposable/designated Debian 13 x86-64 systemd lifecycle described under Real-Host Acceptance.
 
 ## Surprises & Discoveries
 
@@ -154,6 +155,8 @@ If this lifecycle is unavailable, keep the item blocked with its exact cause and
 - A resolver simulation is authoritative output, but it cannot serve simultaneously as the independent allowlist validating itself.
 - `ctr` is a debugging CLI with a version-dependent command surface; validation must use a command supported by the installed package.
 - A sudo timestamp is not process authority and cannot guarantee later control over a root-owned process group.
+- Upstream containerd documents `ctr plugins ls -d` as multi-line `Type`, `ID`, and `Exports` blocks; the effective-root parser must not treat detailed output as the ordinary one-line table.
+- The repository-safe environment can execute every mocked failure boundary and the complete repository gate, but it is UID 988 without a systemd PID-1 host and therefore cannot substitute for privileged host acceptance.
 
 ## Decision Log
 
@@ -163,7 +166,12 @@ If this lifecycle is unavailable, keep the item blocked with its exact cause and
 - Use one apt metadata snapshot and independently prove the selected dependency closure.
 - Keep verified privileged control until the provisioner group is gone.
 - Keep the Docker feature in the active plan until exact-head CI, independent review, and privileged host acceptance are complete.
+- Use a two-hour bounded provisioner deadline with bounded 30-second TERM and KILL reaping windows; a signal-delivery failure is status 70 and runner restoration is forbidden until the process group is confirmed gone.
+- Keep current-state README, specification, and operator documentation at the accepted `main` contract until final CI, independent review, and privileged host acceptance complete.
+- No workflow, public API, request contract, installation argument, or routing change is required for these review fixes.
 
 ## Outcomes & Retrospective
 
-Not complete. Keep this plan active until implementation, exact-head CI, independent final review, and privileged real-host acceptance satisfy the criteria above.
+Implementation and repository-safe validation are complete. The final working tree now separates creation, transaction recovery, and completed-state validation; revalidates configuration immediately before activation; removes `policy-rc.d` before publishing `installed`; rejects effective command/plugin, direct unit/drop-in, socket, configuration, managed/default-data, and storage anomalies; resolves one apt snapshot with an independently checked selected dependency graph; parses supported detailed containerd plugin output; and bounds privileged provisioner control and termination.
+
+The plan remains active because exact-final-commit CI, independent final diff/job-log review, and privileged real-host acceptance are blocked for the concrete reasons recorded in Progress.

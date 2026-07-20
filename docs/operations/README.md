@@ -13,7 +13,6 @@ All Agent Relay and GitHub Runner application paths are grouped under `/srv/gith
 /srv/github-runner/storage/home         github-runner home and Codex authentication
 /srv/github-runner/storage/build        disposable update leftovers
 /srv/github-runner/storage/build-home   builder home
-/srv/github-runner/storage/docker       root-owned Docker Engine and containerd state
 ```
 
 `/srv/github-runner/storage/runner/_work` is a managed symlink to `../work`.
@@ -42,15 +41,7 @@ git pull --ff-only
 
 Git synchronization is explicit and remains outside `update.sh`. The pipeline validates the revision before it reaches `main`. The updater stops the runner listener, scans the complete process table for a `Runner.Worker` owned by the numeric `github-runner` UID, waits only while that worker exists, removes the old runtime, compiles `dist` directly from the checked-out sources with the pinned global TypeScript compiler, applies root ownership and read-only runtime modes, and starts the service. No processes owned by `github-runner`, or a listener without a worker, means the runner is idle and replacement continues.
 
-The updater does not require a clean checkout and does not run repository dependency installation, tests, coverage, syntax checks, or toolchain smoke. It does not retain or restore the old runtime. It does provision the host's exact managed Docker package transaction when necessary. If an update fails, correct the cause and run `./update.sh` again; the next invocation deletes `dist`, rebuilds it from zero, and resumes only provisioner state identified by the protected marker.
-
-## Docker host access
-
-On the supported fresh Debian x86-64 host, `update.sh` installs `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, and `docker-compose-plugin` from Docker's official apt repository. Before package installation it publishes `/etc/docker/daemon.json` and `/etc/containerd/config.toml`, creates the managed storage directories, and prevents package post-install scripts from starting Docker or containerd. It then explicitly enables and starts `containerd.service`, `docker.socket`, and `docker.service`.
-
-Docker Engine's effective root is `/srv/github-runner/storage/docker/engine`; containerd's effective root is `/srv/github-runner/storage/docker/containerd`. `github-runner` is a member of the root-equivalent `docker` group and uses `/var/run/docker.sock`; `agent-relay-builder` must not be a member. The first successful installation runs `hello-world`. Normal repeated updates validate the protected marker, exact package versions, configurations, roots, units, socket, plugins, and groups without requiring registry access or reinstalling packages.
-
-The provisioner intentionally rejects Docker packages, commands, configuration, units, sockets, repository definitions, or populated managed storage that were not created by this feature. This is a fresh-host contract; it does not migrate an existing Docker installation. Codex owns Compose and application-container lifecycle. Docker bind mounts must use an appropriate container user or restore all repository paths to `github-runner` ownership before workflow finalization.
+The updater does not require a clean checkout and does not run dependency installation, tests, coverage, syntax checks, or toolchain smoke. It does not retain or restore the old runtime. If an update fails, correct the cause and run `./update.sh` again; the next invocation deletes `dist` and rebuilds it from zero.
 
 ## Status
 

@@ -82,12 +82,21 @@ cat > "${FAKE_BIN}/sudo" <<EOF_SUDO
 set -euo pipefail
 printf 'sudo %s\n' "\$*" >> "${COMMAND_LOG}"
 if [[ "\${1:-}" == '-v' || "\${1:-}" == '-k' ]]; then exit 0; fi
+if [[ "\$*" == '-n true' && "\${MOCK_SUDO_EXPIRE:-0}" == 1 && -e "${ROOT}/provisioning" ]]; then exit 1; fi
 if [[ "\${1:-}" == '-n' ]]; then shift; fi
 if [[ "\${1:-}" == '-u' ]]; then shift 2; fi
 if [[ "\${1:-}" == '--' ]]; then shift; fi
 case "\${1:-}" in
   '${DOCKER_PROVISIONER}')
     printf 'docker provisioner\n' >> "${DOCKER_LOG}"
+    if [[ "\${MOCK_DOCKER_MODE:-exit}" == hang ]]; then
+      : > "${ROOT}/provisioning"
+      while true; do /bin/sleep 1; done
+    fi
+    if [[ "\${MOCK_DOCKER_MODE:-exit}" == linger ]]; then
+      : > "${ROOT}/provisioning"
+      /bin/sleep 2
+    fi
     exit "\${MOCK_DOCKER_STATUS:-0}"
     ;;
   install|/usr/bin/install)
@@ -123,7 +132,7 @@ exit 0
 EOF_FLOCK
 cat > "${FAKE_BIN}/sleep" <<'EOF_SLEEP'
 #!/usr/bin/env bash
-exit 0
+/bin/sleep 0.001
 EOF_SLEEP
 cat > "${FAKE_BIN}/setsid" <<'EOF_SETSID'
 #!/usr/bin/env bash
@@ -133,6 +142,10 @@ exec "$@"
 EOF_SETSID
 cat > "${FAKE_BIN}/kill" <<'EOF_KILL'
 #!/usr/bin/env bash
+if [[ "${MOCK_SIGNAL_FAIL:-0}" == 1 && "$*" == *TERM* && -e "${ROOT}/provisioning" ]]; then
+  rm -f -- "${ROOT}/provisioning"
+  exit 1
+fi
 exec /usr/bin/kill "$@"
 EOF_KILL
 chmod 0755 "${FAKE_BIN}"/*
@@ -167,6 +180,9 @@ source = source.replace('/usr/bin/sudo', fake_sudo)
 source = re.sub(r'(?<![/A-Za-z0-9_.-])sudo(?=\s)', fake_sudo, source)
 source = source.replace('PROCESS_GROUP_WAIT_STEPS=300', 'PROCESS_GROUP_WAIT_STEPS=2')
 source = source.replace('PROCESS_GROUP_WAIT_SECONDS=0.1', 'PROCESS_GROUP_WAIT_SECONDS=0')
+source = source.replace('PROVISIONER_DEADLINE_STEPS=7200', 'PROVISIONER_DEADLINE_STEPS=2')
+source = source.replace('PROVISIONER_DEADLINE_SECONDS=1', 'PROVISIONER_DEADLINE_SECONDS=0')
+source = source.replace('SUDO_KEEPALIVE_SECONDS=15', 'SUDO_KEEPALIVE_SECONDS=0')
 pathlib.Path(sys.argv[2]).write_text(source)
 PY
 chmod 0755 "${TRANSFORMED_UPDATE}"
@@ -176,7 +192,9 @@ run_update() {
   : > "${DOCKER_LOG}"
   (
     cd "${SOURCE_ROOT}"
-    PATH="${FAKE_BIN}:${PATH}" MOCK_DOCKER_STATUS="${1:-0}" bash "${TRANSFORMED_UPDATE}"
+    PATH="${FAKE_BIN}:${PATH}" MOCK_DOCKER_STATUS="${1:-0}" \
+      MOCK_DOCKER_MODE="${2:-exit}" MOCK_SUDO_EXPIRE="${3:-0}" \
+      MOCK_SIGNAL_FAIL="${4:-0}" bash "${TRANSFORMED_UPDATE}"
   )
 }
 
@@ -211,6 +229,46 @@ if (( failure_status != 42 )); then
   exit 1
 fi
 grep -Fq 'Docker provisioning failed with status 42 after runtime finalization; the runner was restored with the finalized runtime.' "${ROOT}/failure.err"
+grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
+
+rm -f -- "${ROOT}/provisioning"
+set +e
+run_update 0 hang 0 > "${ROOT}/deadline.out" 2> "${ROOT}/deadline.err"
+deadline_status=$?
+set -e
+(( deadline_status == 70 )) || fail_status=1
+if [[ "${fail_status:-0}" == 1 ]]; then
+  cat "${ROOT}/deadline.err" >&2
+  printf 'deadline scenario exited with status %s instead of 70\n' "${deadline_status}" >&2
+  exit 1
+fi
+grep -Fq 'Docker provisioner exceeded its bounded deadline' "${ROOT}/deadline.err"
+grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
+
+rm -f -- "${ROOT}/provisioning"
+set +e
+run_update 0 hang 1 > "${ROOT}/expiry.out" 2> "${ROOT}/expiry.err"
+expiry_status=$?
+set -e
+if (( expiry_status == 0 )); then
+  cat "${ROOT}/expiry.err" >&2
+  printf 'expired-authority scenario unexpectedly succeeded\n' >&2
+  exit 1
+fi
+grep -Eq 'Noninteractive sudo authority expired|Update interrupted by TERM' "${ROOT}/expiry.err"
+grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
+
+rm -f -- "${ROOT}/provisioning"
+set +e
+run_update 0 linger 0 1 > "${ROOT}/signal-failure.out" 2> "${ROOT}/signal-failure.err"
+signal_failure_status=$?
+set -e
+if (( signal_failure_status != 70 )); then
+  cat "${ROOT}/signal-failure.err" >&2
+  printf 'signal-failure scenario exited with status %s instead of 70\n' "${signal_failure_status}" >&2
+  exit 1
+fi
+grep -Fq 'Docker provisioner exceeded its bounded deadline' "${ROOT}/signal-failure.err"
 grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
 
 printf 'update.sh system integration passed\n'

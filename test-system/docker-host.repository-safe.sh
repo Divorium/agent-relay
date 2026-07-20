@@ -28,6 +28,35 @@ printf 'state\n' > "${TMP}/populated/entry"
 docker_host_directory_empty "${TMP}/empty" || fail "empty managed directory was rejected"
 if docker_host_directory_empty "${TMP}/populated"; then fail "populated unmanaged directory was accepted"; fi
 
+DOCKER_HOST_RUNNER_HOME=${TMP}/runner-home
+mkdir -p "${DOCKER_HOST_RUNNER_HOME}/.docker/cli-plugins"
+docker_host_local_plugin_overrides_absent || fail "empty local plugin state was rejected"
+printf '#!/bin/sh\n' > "${DOCKER_HOST_RUNNER_HOME}/.docker/cli-plugins/docker-compose"
+if docker_host_local_plugin_overrides_absent; then fail "user Compose plugin shadowing was accepted"; fi
+rm "${DOCKER_HOST_RUNNER_HOME}/.docker/cli-plugins/docker-compose"
+printf '{}\n' > "${DOCKER_HOST_RUNNER_HOME}/.docker/config.json"
+if docker_host_local_plugin_overrides_absent; then fail "user Docker CLI configuration was accepted"; fi
+rm "${DOCKER_HOST_RUNNER_HOME}/.docker/config.json"
+
+DOCKER_HOST_UNIT_ROOTS=("${TMP}/units-etc" "${TMP}/units-run")
+mkdir -p "${DOCKER_HOST_UNIT_ROOTS[@]}"
+docker_host_direct_unit_state_absent || fail "empty direct unit state was rejected"
+printf '[Unit]\n' > "${DOCKER_HOST_UNIT_ROOTS[1]}/docker.service"
+if docker_host_direct_unit_state_absent; then fail "direct Docker unit leftover was accepted"; fi
+rm "${DOCKER_HOST_UNIT_ROOTS[1]}/docker.service"
+mkdir "${DOCKER_HOST_UNIT_ROOTS[0]}/containerd.service.d"
+if docker_host_direct_unit_state_absent; then fail "direct containerd drop-in leftover was accepted"; fi
+
+DOCKER_HOST_DEFAULT_ENGINE_ROOT=${TMP}/default-docker
+DOCKER_HOST_DEFAULT_CONTAINERD_ROOT=${TMP}/default-containerd
+mkdir "${DOCKER_HOST_DEFAULT_ENGINE_ROOT}" "${DOCKER_HOST_DEFAULT_CONTAINERD_ROOT}"
+printf 'state\n' > "${DOCKER_HOST_DEFAULT_ENGINE_ROOT}/state"
+if docker_host_directory_empty "${DOCKER_HOST_DEFAULT_ENGINE_ROOT}"; then fail "populated default Docker data was accepted"; fi
+rm "${DOCKER_HOST_DEFAULT_ENGINE_ROOT}/state"
+docker_host_remove_empty_default_data
+[[ ! -e "${DOCKER_HOST_DEFAULT_ENGINE_ROOT}" && ! -e "${DOCKER_HOST_DEFAULT_CONTAINERD_ROOT}" ]] \
+  || fail "empty default data directories were not removed before activation"
+
 [[ "$(docker_host_membership_actions 0 0)" == add-runner ]] || fail "runner membership action missing"
 [[ "$(docker_host_membership_actions 1 1)" == remove-builder ]] || fail "builder removal action missing"
 [[ -z "$(docker_host_membership_actions 1 0)" ]] || fail "idempotent memberships emitted actions"
@@ -132,6 +161,117 @@ if docker_debian_parse_simulation \
   "${TMP}/requested" "${TMP}/allowed" "${TMP}/installed" "${TMP}/accepted"; then
   fail "installed dependency modification was accepted"
 fi
+
+printf '%s\n' 'docker-ce|1' 'docker-ce-cli|1' > "${TMP}/closure-requested"
+printf '%s\n' 'docker-ce|1' 'docker-ce-cli|1' 'libgood|1' > "${TMP}/closure-selected"
+printf '%s\n' \
+  'docker-ce|1|libgood' \
+  'docker-ce-cli|1|libalternative' \
+  'docker-ce-cli|1|libgood' > "${TMP}/closure-edges"
+docker_debian_selected_dependency_closure \
+  "${TMP}/closure-requested" "${TMP}/closure-selected" "${TMP}/closure-edges" \
+  || fail "valid selected dependency closure was rejected"
+printf '%s\n' 'docker-ce|1' 'docker-ce-cli|1' 'libgood|1' 'libalternative|1' > "${TMP}/closure-selected"
+if docker_debian_selected_dependency_closure \
+  "${TMP}/closure-requested" "${TMP}/closure-selected" "${TMP}/closure-edges"; then
+  fail "unselected dependency alternative was accepted"
+fi
+printf '%s\n' 'docker-ce|1' 'docker-ce-cli|1' 'unrelated|1' > "${TMP}/closure-selected"
+if docker_debian_selected_dependency_closure \
+  "${TMP}/closure-requested" "${TMP}/closure-selected" "${TMP}/closure-edges"; then
+  fail "unrelated selected package was accepted"
+fi
+
+printf '%s\n' \
+  'Type:          io.containerd.metadata.v1' \
+  'ID:            bolt' \
+  'Platforms:     -' \
+  'Exports:' \
+  '               root      /srv/github-runner/storage/docker/containerd/io.containerd.metadata.v1.bolt' \
+  '' \
+  'Type:          io.containerd.snapshotter.v1' \
+  'ID:            overlayfs' \
+  'Exports:' \
+  '               root      /srv/github-runner/storage/docker/containerd/io.containerd.snapshotter.v1.overlayfs' \
+  > "${TMP}/ctr-plugins"
+docker_host_containerd_metadata_root_exact "${TMP}/ctr-plugins" /srv/github-runner/storage/docker/containerd \
+  || fail "supported ctr plugins ls -d output was rejected"
+printf '%s\n' \
+  'Type:          io.containerd.metadata.v1' \
+  'ID:            bolt' \
+  'Exports:' \
+  '               root      /var/lib/containerd/io.containerd.metadata.v1.bolt' \
+  > "${TMP}/ctr-plugins"
+if docker_host_containerd_metadata_root_exact "${TMP}/ctr-plugins" /srv/github-runner/storage/docker/containerd; then
+  fail "default containerd metadata root was accepted"
+fi
+
+configure_exact_state() {
+  DOCKER_HOST_OWNER_UID=$(/usr/bin/id -u)
+  DOCKER_HOST_OWNER_GID=$(/usr/bin/id -g)
+  DOCKER_HOST_STORAGE_ROOT=${TMP}/managed-storage
+  DOCKER_HOST_ENGINE_ROOT=${DOCKER_HOST_STORAGE_ROOT}/engine
+  DOCKER_HOST_CONTAINERD_ROOT=${DOCKER_HOST_STORAGE_ROOT}/containerd
+  DOCKER_HOST_DAEMON_DIRECTORY=${TMP}/etc-docker
+  DOCKER_HOST_CONTAINERD_DIRECTORY=${TMP}/etc-containerd
+  DOCKER_HOST_DAEMON_CONFIG=${DOCKER_HOST_DAEMON_DIRECTORY}/daemon.json
+  DOCKER_HOST_CONTAINERD_CONFIG=${DOCKER_HOST_CONTAINERD_DIRECTORY}/config.toml
+  rm -rf -- "${DOCKER_HOST_STORAGE_ROOT}" "${DOCKER_HOST_DAEMON_DIRECTORY}" "${DOCKER_HOST_CONTAINERD_DIRECTORY}"
+  mkdir -m 0711 "${DOCKER_HOST_STORAGE_ROOT}"
+  mkdir -m 0700 "${DOCKER_HOST_ENGINE_ROOT}" "${DOCKER_HOST_CONTAINERD_ROOT}"
+  mkdir -m 0755 "${DOCKER_HOST_DAEMON_DIRECTORY}" "${DOCKER_HOST_CONTAINERD_DIRECTORY}"
+  docker_host_daemon_content > "${DOCKER_HOST_DAEMON_CONFIG}"
+  docker_host_containerd_content > "${DOCKER_HOST_CONTAINERD_CONFIG}"
+  chmod 0644 "${DOCKER_HOST_DAEMON_CONFIG}" "${DOCKER_HOST_CONTAINERD_CONFIG}"
+}
+
+assert_revalidation_blocks_activation() {
+  local label="$1"
+  : > "${TMP}/service-starts"
+  if (docker_host_ensure_membership_and_services() { printf 'started\n' >> "${TMP}/service-starts"; }; docker_host_activate_after_revalidation); then
+    fail "post-package ${label} mutation was accepted"
+  fi
+  [[ ! -s "${TMP}/service-starts" ]] || fail "services started after ${label} mutation"
+}
+
+configure_exact_state
+docker_host_validate_storage_and_configuration
+printf 'changed\n' > "${DOCKER_HOST_DAEMON_CONFIG}"
+assert_revalidation_blocks_activation daemon-file
+configure_exact_state
+printf 'changed\n' > "${DOCKER_HOST_CONTAINERD_CONFIG}"
+assert_revalidation_blocks_activation containerd-file
+configure_exact_state
+printf 'extra\n' > "${DOCKER_HOST_DAEMON_DIRECTORY}/extra.json"
+assert_revalidation_blocks_activation docker-directory
+configure_exact_state
+printf 'extra\n' > "${DOCKER_HOST_CONTAINERD_DIRECTORY}/extra.toml"
+assert_revalidation_blocks_activation containerd-directory
+configure_exact_state
+chmod 0755 "${DOCKER_HOST_ENGINE_ROOT}"
+assert_revalidation_blocks_activation storage-metadata
+configure_exact_state
+rm "${DOCKER_HOST_DAEMON_CONFIG}"
+if (docker_host_validate_storage_and_configuration); then fail "completed-state corruption was accepted"; fi
+[[ ! -e "${DOCKER_HOST_DAEMON_CONFIG}" ]] || fail "completed-state corruption was repaired"
+
+DOCKER_HOST_POLICY=${TMP}/policy-rc.d
+docker_host_policy_content > "${DOCKER_HOST_POLICY}"
+chmod 0755 "${DOCKER_HOST_POLICY}"
+DOCKER_HOST_POLICY_REMOVE_ON_EXIT=1
+docker_host_cleanup
+[[ ! -e "${DOCKER_HOST_POLICY}" ]] || fail "managed policy survived interruption before phase publication"
+docker_host_policy_content > "${DOCKER_HOST_POLICY}"
+chmod 0755 "${DOCKER_HOST_POLICY}"
+printf 'docker-ce|1\n' > "${TMP}/policy-packages"
+: > "${TMP}/phase-publications"
+docker_host_publish_marker() {
+  [[ ! -e "${DOCKER_HOST_POLICY}" ]] || fail "installed phase published before managed policy removal"
+  printf '%s\n' "$1" >> "${TMP}/phase-publications"
+}
+docker_host_finish_package_transaction "${TMP}/policy-packages"
+[[ "$(<"${TMP}/phase-publications")" == installed ]] || fail "installed phase was not published"
+[[ ! -e "${DOCKER_HOST_POLICY}" ]] || fail "managed policy survived installed phase publication"
 printf '%s\n' sl libncurses6 > "${TMP}/allowed"
 : > "${TMP}/installed"
 if docker_debian_parse_simulation \

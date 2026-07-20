@@ -14,12 +14,17 @@ DOCKER_PROVISIONER=${SOURCE_ROOT}/scripts/docker-host.sh
 DOCKER_ADAPTER=${SOURCE_ROOT}/scripts/docker-host-debian.sh
 PROCESS_GROUP_WAIT_STEPS=300
 PROCESS_GROUP_WAIT_SECONDS=0.1
+PROVISIONER_DEADLINE_STEPS=7200
+PROVISIONER_DEADLINE_SECONDS=1
+SUDO_KEEPALIVE_SECONDS=15
 
 runner_needs_restore=0
 runtime_finalized=0
 active_launcher_pid=
 active_child_pgid=
 provisioner_pgid_file=
+sudo_keeper_pid=
+sudo_keeper_failure_file=
 
 protected_source_file() {
   local path="$1" metadata mode owner_uid
@@ -39,8 +44,24 @@ restore_runner() {
 cleanup_update() {
   local status=$?
   trap - EXIT HUP INT TERM
+  if { [[ -n "${active_child_pgid}" ]] && process_group_running "${active_child_pgid}"; } \
+    || { [[ -n "${active_launcher_pid}" ]] && launcher_running; }; then
+    if ! stop_active_operation; then
+      printf 'The Docker provisioner process group could not be terminated; refusing runner restoration.\n' >&2
+      status=70
+      runtime_finalized=0
+    fi
+  fi
+  if [[ -n "${sudo_keeper_pid}" ]]; then
+    /usr/bin/kill -TERM "${sudo_keeper_pid}" 2>/dev/null || true
+    wait "${sudo_keeper_pid}" 2>/dev/null || true
+    sudo_keeper_pid=
+  fi
   if [[ -n "${provisioner_pgid_file}" ]]; then
     /usr/bin/rm -f -- "${provisioner_pgid_file}" || true
+  fi
+  if [[ -n "${sudo_keeper_failure_file}" ]]; then
+    /usr/bin/rm -f -- "${sudo_keeper_failure_file}" || true
   fi
   if (( runner_needs_restore == 1 )); then
     if (( runtime_finalized == 1 )); then
@@ -59,9 +80,8 @@ trap cleanup_update EXIT
 
 process_group_signal() {
   local signal="$1" pgid="$2"
-  /usr/bin/kill -s "${signal}" -- "-${pgid}" 2>/dev/null \
-    || sudo -n /usr/bin/kill -s "${signal}" -- "-${pgid}" 2>/dev/null \
-    || true
+  process_group_running "${pgid}" || return 0
+  sudo -n /usr/bin/kill -s "${signal}" -- "-${pgid}" 2>/dev/null
 }
 
 launcher_running() {
@@ -92,19 +112,7 @@ wait_for_operation_bounded() {
 terminate_active_operation() {
   local signal="$1" status="$2"
   trap - HUP INT TERM
-  if [[ -n "${active_child_pgid}" ]]; then
-    process_group_signal TERM "${active_child_pgid}"
-    if ! wait_for_operation_bounded "${active_child_pgid}"; then
-      process_group_signal KILL "${active_child_pgid}"
-      wait_for_operation_bounded "${active_child_pgid}" || true
-    fi
-  elif [[ -n "${active_launcher_pid}" ]]; then
-    /usr/bin/kill -TERM "${active_launcher_pid}" 2>/dev/null || true
-    if ! wait_for_operation_bounded; then
-      /usr/bin/kill -KILL "${active_launcher_pid}" 2>/dev/null || true
-      wait_for_operation_bounded || true
-    fi
-  fi
+  stop_active_operation || status=70
   if [[ -n "${active_launcher_pid}" ]] && ! launcher_running; then
     wait "${active_launcher_pid}" 2>/dev/null || true
   fi
@@ -112,6 +120,42 @@ terminate_active_operation() {
   active_child_pgid=
   printf 'Update interrupted by %s\n' "${signal}" >&2
   exit "${status}"
+}
+
+stop_active_operation() {
+  local failed=0
+  if [[ -n "${active_child_pgid}" ]] && process_group_running "${active_child_pgid}"; then
+    process_group_signal TERM "${active_child_pgid}" || failed=1
+    if (( failed == 0 )) && ! wait_for_operation_bounded "${active_child_pgid}"; then
+      process_group_signal KILL "${active_child_pgid}" || failed=1
+      if (( failed == 0 )); then wait_for_operation_bounded "${active_child_pgid}" || failed=1; fi
+    fi
+  elif [[ -n "${active_launcher_pid}" ]] && launcher_running; then
+    /usr/bin/kill -TERM "${active_launcher_pid}" 2>/dev/null || failed=1
+    if (( failed == 0 )) && ! wait_for_operation_bounded; then
+      /usr/bin/kill -KILL "${active_launcher_pid}" 2>/dev/null || failed=1
+      if (( failed == 0 )); then wait_for_operation_bounded || failed=1; fi
+    fi
+  fi
+  if [[ -n "${active_child_pgid}" ]] && process_group_running "${active_child_pgid}"; then failed=1; fi
+  if [[ -n "${active_launcher_pid}" ]] && ! launcher_running; then wait "${active_launcher_pid}" 2>/dev/null || true; fi
+  (( failed == 0 ))
+}
+
+start_sudo_keeper() {
+  local parent=$$ failure="$1"
+  (
+    while /usr/bin/kill -0 "${parent}" 2>/dev/null; do
+      /usr/bin/sleep "${SUDO_KEEPALIVE_SECONDS}"
+      /usr/bin/kill -0 "${parent}" 2>/dev/null || exit 0
+      if ! sudo -n true; then
+        printf 'expired\n' > "${failure}"
+        /usr/bin/kill -TERM "${parent}" 2>/dev/null || exit 1
+        exit 1
+      fi
+    done
+  ) &
+  sudo_keeper_pid=$!
 }
 trap 'terminate_active_operation HUP 129' HUP
 trap 'terminate_active_operation INT 130' INT
@@ -167,6 +211,9 @@ if ! /usr/bin/flock --nonblock 9; then
 fi
 
 sudo -v
+sudo_keeper_failure_file="$(/usr/bin/mktemp)"
+/usr/bin/chmod 0600 "${sudo_keeper_failure_file}"
+start_sudo_keeper "${sudo_keeper_failure_file}"
 runner_needs_restore=1
 sudo -n systemctl stop "${SERVICE_NAME}"
 runner_uid="$(/usr/bin/id -u "${RUNNER_USER}")"
@@ -182,9 +229,7 @@ while true; do
   /usr/bin/sleep 5
 done
 
-# The worker wait can outlive sudo's credential timestamp. Refresh it once,
-# then require every remaining privileged operation to be non-interactive.
-sudo -v
+sudo -n true || { echo "Noninteractive sudo authority expired while the runner was stopped" >&2; exit 70; }
 
 sudo -n /usr/bin/rm -rf --one-file-system -- "${BUILD_ROOT}"
 sudo -n /usr/bin/install -d -o "${BUILD_USER}" -g "${BUILD_USER}" -m 0700 "${BUILD_ROOT}"
@@ -243,17 +288,41 @@ elif launcher_running; then
 fi
 
 set +e
-wait "${active_launcher_pid}"
-docker_status=$?
+deadline_expired=1
+operation_control_failed=0
+for ((step = 0; step < PROVISIONER_DEADLINE_STEPS; step += 1)); do
+  if ! launcher_running; then deadline_expired=0; break; fi
+  if [[ -s "${sudo_keeper_failure_file}" ]]; then
+    echo "Noninteractive sudo authority expired during Docker provisioning" >&2
+    break
+  fi
+  /usr/bin/sleep "${PROVISIONER_DEADLINE_SECONDS}"
+done
+if (( deadline_expired == 1 )) && launcher_running; then
+  echo "Docker provisioner exceeded its bounded deadline" >&2
+  if ! stop_active_operation; then
+    echo "Docker provisioner could not be terminated after deadline" >&2
+    operation_control_failed=1
+  fi
+fi
+if (( operation_control_failed == 0 )); then
+  wait "${active_launcher_pid}"
+  docker_status=$?
+else
+  docker_status=70
+fi
+if (( deadline_expired == 1 )); then docker_status=70; fi
 set -e
 if [[ -n "${active_child_pgid}" ]] && process_group_running "${active_child_pgid}"; then
   printf 'Docker provisioner launcher exited while descendants remained in process group %s\n' "${active_child_pgid}" >&2
-  process_group_signal TERM "${active_child_pgid}"
-  if ! wait_for_operation_bounded "${active_child_pgid}"; then
-    process_group_signal KILL "${active_child_pgid}"
-    wait_for_operation_bounded "${active_child_pgid}" || true
-  fi
+  stop_active_operation || operation_control_failed=1
   docker_status=70
+fi
+if (( operation_control_failed == 1 )) \
+  || { [[ -n "${active_child_pgid}" ]] && process_group_running "${active_child_pgid}"; } \
+  || { [[ -n "${active_launcher_pid}" ]] && launcher_running; }; then
+  echo "Docker provisioner process group remains alive; the runner will stay stopped" >&2
+  exit 70
 fi
 active_launcher_pid=
 active_child_pgid=

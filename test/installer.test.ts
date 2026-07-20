@@ -196,11 +196,11 @@ test("README files mirror the native runner filesystem decision", async () => {
     }
     assert.match(document, /\.\/install\.sh/);
     assert.match(document, /\.\/update\.sh/);
-    assert.match(document, /\/srv\/github-runner\/storage\/docker(?:\/|\s|$)/u);
+    assert.doesNotMatch(document, /\/srv\/github-runner\/storage\/docker(?:\/|\s|$)/u);
     assert.doesNotMatch(document, /\/srv\/github-runner\/(?:runner|home|build|build-home)(?:\/|\s|$)/u);
     assert.doesNotMatch(document, /\/opt\/agent-relay|AGENT_RELAY_TOKEN/iu);
   }
-  assert.match(specification, /\/srv\/github-runner\/storage\/docker/u);
+  assert.doesNotMatch(specification, /\/srv\/github-runner\/storage\/docker/u);
   assert.match(plan, /README files may summarize it but must not introduce additional filesystem decisions/);
   assert.match(plan, /runner\/_work` is a managed symlink to `\.\.\/work/);
 });

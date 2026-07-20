@@ -4,18 +4,20 @@ import { readFile } from "node:fs/promises";
 
 const source = (path: string): Promise<string> => readFile(path, "utf8");
 
-test("updater refreshes sudo after the worker wait and uses non-interactive privilege", async () => {
+test("updater maintains noninteractive sudo authority through bounded provisioning", async () => {
   const update = await source("update.sh");
   const wait = update.indexOf('process_table="$(/usr/bin/ps -e -o euid=,comm=)"');
-  const refresh = update.indexOf("sudo -v", wait);
-  const compile = update.indexOf('/usr/local/bin/tsc -p "${SOURCE_ROOT}/tsconfig.runtime.json"', refresh);
+  const authority = update.indexOf("sudo -n true", wait);
+  const compile = update.indexOf('/usr/local/bin/tsc -p "${SOURCE_ROOT}/tsconfig.runtime.json"', authority);
   const finalized = update.indexOf("runtime_finalized=1", compile);
   const provision = update.indexOf("/usr/bin/setsid --wait", finalized);
   const restore = update.indexOf("\nrestore_runner\nrunner_status=", provision);
-  assert.ok(wait >= 0 && refresh > wait && compile > refresh && finalized > compile && provision > finalized && restore > provision);
+  assert.ok(wait >= 0 && authority > wait && compile > authority && finalized > compile && provision > finalized && restore > provision);
   assert.match(update, /sudo -n -u "\$\{BUILD_USER\}"/u);
   assert.match(update, /process_group_running/u);
   assert.match(update, /substr\(\$2,1,1\)!="Z"/u);
+  assert.match(update, /PROVISIONER_DEADLINE_STEPS/u);
+  assert.match(update, /start_sudo_keeper/u);
 });
 
 test("provisioner implements fresh-or-exact-managed state and permanent roots", async () => {
@@ -36,7 +38,7 @@ test("configuration precedes controlled package installation and explicit startu
   const configure = host.lastIndexOf("docker_host_prepare_storage_and_configuration");
   const policy = host.indexOf("docker_host_install_policy", configure);
   const install = host.indexOf("docker_debian_install_components", policy);
-  const start = host.indexOf("docker_host_ensure_membership_and_services", install);
+  const start = host.indexOf("docker_host_activate_after_revalidation", install);
   assert.ok(configure >= 0 && policy > configure && install > policy && start > install);
   assert.match(host, /docker_host_policy_content/u);
   assert.match(host, /Package installation activated Docker despite policy-rc\.d/u);
@@ -65,7 +67,7 @@ test("package transaction pins requested and resolver-selected packages", async 
 test("effective roots, plugins, groups, socket and first-install registry check are validated", async () => {
   const host = await source("scripts/docker-host.sh");
   assert.match(host, /info --format '\{\{\.DockerRootDir\}\}'/u);
-  assert.match(host, /ctr plugins info io\.containerd\.metadata\.v1\.bolt/u);
+  assert.match(host, /ctr plugins ls -d/u);
   assert.match(host, /buildx version/u);
   assert.match(host, /compose version/u);
   assert.match(host, /DOCKER_HOST_FRESH == 1.*DOCKER_HOST_ACCEPTANCE/u);

@@ -64,6 +64,9 @@ test("Docker provisioner process group is race-safe and signal handling is bound
   assert.match(update, /Docker provisioner did not publish its process group/u);
   assert.match(update, /observed_pgid=.*\/usr\/bin\/ps -o pgid=/u);
   assert.match(update, /PROCESS_GROUP_WAIT_STEPS=300/u);
+  assert.match(update, /PROVISIONER_DEADLINE_STEPS=7200/u);
+  assert.match(update, /Docker provisioner exceeded its bounded deadline/u);
+  assert.match(update, /start_sudo_keeper/u);
   assert.match(update, /process_group_signal TERM/u);
   assert.match(update, /process_group_signal KILL/u);
   assert.match(update, /wait "\$\{active_launcher_pid\}"/u);

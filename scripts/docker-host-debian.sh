@@ -395,6 +395,28 @@ docker_debian_ensure_repository() {
     || docker_host_fail repository "Managed Docker repository publication is incomplete"
 }
 
+docker_debian_validate_repository() {
+  docker_debian_inspect_repository_definitions
+  (( DOCKER_DEBIAN_REPOSITORY_DEFINITION_COUNT == 1 )) \
+    && [[ "${DOCKER_DEBIAN_REPOSITORY_SOURCE_PATH}" == "${DOCKER_DEBIAN_MANAGED_SOURCE}" \
+      && "${DOCKER_DEBIAN_REPOSITORY_KEY_PATH}" == "${DOCKER_DEBIAN_MANAGED_KEY}" ]] \
+    || docker_host_fail repository "Completed managed Docker repository is not exact"
+  docker_debian_published_key_valid "${DOCKER_DEBIAN_MANAGED_KEY}" \
+    || docker_host_fail repository "Completed managed Docker signing key is unsafe or unexpected"
+  docker_debian_managed_source_valid "${DOCKER_DEBIAN_MANAGED_SOURCE}" \
+    || docker_host_fail repository "Completed managed Docker source is unsafe or unexpected"
+  local directory orphan listing=${DOCKER_HOST_STATE_ROOT}/completed-repository-stages.bin
+  : > "${listing}"
+  for directory in /etc/apt/keyrings /etc/apt/sources.list.d; do
+    [[ -d "${directory}" ]] || docker_host_fail repository "Completed managed apt directory is absent"
+    /usr/bin/find -P "${directory}" -maxdepth 1 -type f -name '.agent-relay-docker.*.tmp.*' -print0 >> "${listing}" \
+      || docker_host_fail repository "Could not inspect completed repository staging state"
+  done
+  while IFS= read -r -d '' orphan; do
+    docker_host_fail repository "Interrupted repository publication remains after completion: ${orphan}"
+  done < "${listing}"
+}
+
 docker_debian_candidate_is_unambiguously_official() {
   local package="$1" candidate="$2"
   /usr/bin/env LC_ALL=C LANG=C /usr/bin/apt-cache madison "${package}" | /usr/bin/awk -F'|' -v version="${candidate}" '
@@ -435,21 +457,71 @@ docker_debian_parse_simulation() {
   done < "${requested}"
 }
 
+docker_debian_dependency_edges() {
+  local selected="$1" edges="$2" package version detail
+  : > "${edges}"
+  while IFS='|' read -r package version; do
+    [[ -n "${package}" ]] || continue
+    detail=${DOCKER_HOST_STATE_ROOT}/depends-${package//[^a-zA-Z0-9]/_}.txt
+    /usr/bin/env LC_ALL=C LANG=C /usr/bin/apt-cache depends --important --no-recommends --no-suggests \
+      --no-conflicts --no-breaks --no-replaces --no-enhances "${package}=${version}" > "${detail}" \
+      || return 1
+    /usr/bin/awk -v parent="${package}" '
+      /^[[:space:]]*[|]?(Pre)?Depends:/ {
+        line=$0
+        pipe=(line ~ /^[[:space:]]*[|]/)
+        sub(/^[[:space:]]*[|]?(Pre)?Depends:[[:space:]]*/, "", line)
+        gsub(/[<>]/, "", line); sub(/:.*/, "", line); sub(/[[:space:]].*/, "", line)
+        if(line=="") next
+        if(pipe) {if(!alternative) group++; alternative=1}
+        else if(alternative) alternative=0
+        else group++
+        print parent "|" group "|" line
+      }
+    ' "${detail}" >> "${edges}"
+  done < "${selected}"
+}
+
+docker_debian_selected_dependency_closure() {
+  local requested="$1" selected="$2" edges="$3"
+  /usr/bin/awk -F'|' '
+    FILENAME==ARGV[1] {requested[$1]=1; reachable[$1]=1; next}
+    FILENAME==ARGV[2] {selected[$1]=1; next}
+    {
+      edge_parent[++edges]=$1; edge_group[edges]=$2; edge_child[edges]=$3
+    }
+    END {
+      changed=1
+      while(changed) {
+        changed=0
+        delete group_count; delete group_child
+        for(i=1;i<=edges;i++) if(reachable[edge_parent[i]] && (edge_child[i] in selected)) {
+          key=edge_parent[i] SUBSEP edge_group[i]
+          group_count[key]++; group_child[key]=edge_child[i]
+        }
+        for(key in group_count) {
+          if(group_count[key]!=1) exit 1
+          child=group_child[key]
+          if(!reachable[child]) {reachable[child]=1; changed=1}
+        }
+      }
+      for(package in selected) if(!reachable[package]) exit 1
+    }
+  ' "${requested}" "${selected}" "${edges}"
+}
+
 docker_debian_install_components() {
   (( $# > 0 )) || return 0
   docker_debian_assert_clean_dpkg
   docker_debian_ensure_repository
-  (( DOCKER_DEBIAN_REPOSITORY_CHANGED == 0 )) || /usr/bin/env LC_ALL=C LANG=C /usr/bin/apt-get update
+  /usr/bin/env LC_ALL=C LANG=C /usr/bin/apt-get update \
+    || docker_host_fail package "Could not refresh the Docker apt metadata snapshot"
   local package candidate status installed_version
   local -a exact=()
   : > "${DOCKER_HOST_STATE_ROOT}/requested.txt"
   /usr/bin/env LC_ALL=C LANG=C /usr/bin/dpkg-query -W -f='${Package}|${db:Status-Abbrev}|${Version}\n' > "${DOCKER_HOST_STATE_ROOT}/packages-before.txt"
   for package in "$@"; do
     candidate="$(/usr/bin/env LC_ALL=C LANG=C /usr/bin/apt-cache policy "${package}" | /usr/bin/awk '$1=="Candidate:"{count++;value=$2} END{if(count==1&&value!="(none)")print value}')"
-    if [[ -z "${candidate}" ]]; then
-      /usr/bin/env LC_ALL=C LANG=C /usr/bin/apt-get update
-      candidate="$(/usr/bin/env LC_ALL=C LANG=C /usr/bin/apt-cache policy "${package}" | /usr/bin/awk '$1=="Candidate:"{count++;value=$2} END{if(count==1&&value!="(none)")print value}')"
-    fi
     [[ -n "${candidate}" ]] || docker_host_fail package "No Docker apt candidate is available for ${package}"
     docker_debian_candidate_is_unambiguously_official "${package}" "${candidate}" \
       || docker_host_fail package "Candidate ${package}=${candidate} is absent from or ambiguous outside Docker's official repository"
@@ -465,13 +537,14 @@ docker_debian_install_components() {
   done
   /usr/bin/env LC_ALL=C LANG=C /usr/bin/apt-get --simulate --no-install-recommends install "${exact[@]}" > "${DOCKER_HOST_STATE_ROOT}/simulation.txt" 2>&1 \
     || docker_host_fail package "Docker package simulation failed"
-  # The solver's Inst records are the selected dependency path. Do not use
-  # the recursive dependency listing here: it expands every alternative, including
-  # packages the resolver did not select.
   /usr/bin/awk '/^Inst /{name=$2;sub(/:.*/,"",name);print name}' "${DOCKER_HOST_STATE_ROOT}/simulation.txt" \
-    | /usr/bin/sort -u > "${DOCKER_HOST_STATE_ROOT}/allowed.txt"
-  docker_debian_parse_simulation "${DOCKER_HOST_STATE_ROOT}/simulation.txt" "${DOCKER_HOST_STATE_ROOT}/requested.txt" "${DOCKER_HOST_STATE_ROOT}/allowed.txt" "${DOCKER_HOST_STATE_ROOT}/packages-before.txt" "${DOCKER_HOST_STATE_ROOT}/accepted.txt" \
+    | /usr/bin/sort -u > "${DOCKER_HOST_STATE_ROOT}/selected-names.txt"
+  docker_debian_parse_simulation "${DOCKER_HOST_STATE_ROOT}/simulation.txt" "${DOCKER_HOST_STATE_ROOT}/requested.txt" "${DOCKER_HOST_STATE_ROOT}/selected-names.txt" "${DOCKER_HOST_STATE_ROOT}/packages-before.txt" "${DOCKER_HOST_STATE_ROOT}/accepted.txt" \
     || docker_host_fail package "Docker package simulation contains an unapproved change"
+  docker_debian_dependency_edges "${DOCKER_HOST_STATE_ROOT}/accepted.txt" "${DOCKER_HOST_STATE_ROOT}/dependency-edges.txt" \
+    || docker_host_fail package "Could not inspect resolver-selected package dependencies"
+  docker_debian_selected_dependency_closure "${DOCKER_HOST_STATE_ROOT}/requested.txt" "${DOCKER_HOST_STATE_ROOT}/accepted.txt" "${DOCKER_HOST_STATE_ROOT}/dependency-edges.txt" \
+    || docker_host_fail package "Resolver selected a package outside the requested dependency closure"
   local selected_package selected_version
   local -a selected_exact=()
   while IFS='|' read -r selected_package selected_version; do

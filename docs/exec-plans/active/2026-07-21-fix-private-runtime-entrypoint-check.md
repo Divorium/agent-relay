@@ -2,20 +2,20 @@
 
 ## Purpose
 
-`update.sh` currently creates `${SOURCE_ROOT}/dist` as `agent-relay-builder` with mode `0700`, compiles the runtime as that account, and then checks for `dist/src/run-codex.js` as the administrator running `update.sh`. The administrator cannot traverse a private builder-owned directory, so the shell test reports that the entrypoint is missing even when TypeScript emitted it successfully. The updater then leaves the GitHub runner stopped because runtime finalization did not complete.
+Before this PR, `update.sh` created `${SOURCE_ROOT}/dist` as `agent-relay-builder` with mode `0700`, compiled the runtime as that account, and then checked for `dist/src/run-codex.js` as the administrator running `update.sh`. The administrator could not traverse a private builder-owned directory, so the shell test reported that the entrypoint was missing even when TypeScript emitted it successfully. The updater then left the GitHub runner stopped because runtime finalization did not complete.
 
-Fix the ownership-boundary error without weakening the private build directory. A valid compiled runtime must continue to finalization and Docker provisioning, while a genuinely missing entrypoint must still fail safely and leave the runner stopped.
+This change fixes the ownership-boundary error without weakening the private build directory. A valid compiled runtime continues to finalization and Docker provisioning, while a genuinely missing entrypoint still fails safely and leaves the runner stopped.
 
 ## Current State
 
 - `update.sh` removes the previous build and runtime directories.
 - It creates `${BUILD_ROOT}` and `${SOURCE_ROOT}/dist` as `${BUILD_USER}` with mode `0700`.
 - It invokes TypeScript as `${BUILD_USER}` and emits the production runtime into `${SOURCE_ROOT}/dist`.
-- Immediately after compilation, the administrator process evaluates `[[ -f "${SOURCE_ROOT}/dist/src/run-codex.js" ]]`.
-- Because the administrator is not `${BUILD_USER}`, that check cannot traverse the `0700` directory and returns false.
-- The failure path prints `Compiled runtime entrypoint is missing; the runner remains stopped`, keeps `runtime_finalized=0`, and intentionally does not restart the runner.
-- A production update on `codex-gh-runner` reproduced this exact failure after a successful fast-forward to `main`.
-- The existing runtime-build CI check compiles and inspects the output as one user, so it does not exercise this ownership boundary.
+- Immediately after compilation, it validates `dist/src/run-codex.js` through `sudo -n -u "${BUILD_USER}" /usr/bin/test -f` while the directory remains private.
+- Only after successful validation does it adopt the runtime tree as `root:root`, normalize directory and file modes, and set `runtime_finalized=1`.
+- If the entrypoint is genuinely absent, the existing failure message is emitted, `runtime_finalized` remains false, and the runner remains stopped.
+- A production update on `codex-gh-runner` reproduced the original false-negative failure after a successful fast-forward to `main`.
+- The existing runtime-build CI check compiles and inspects the output as one user, so focused regression coverage was added for the ownership boundary.
 
 ## Scope and Decisions
 
@@ -57,8 +57,8 @@ Fix the ownership-boundary error without weakening the private build directory. 
 ## Surprises & Discoveries
 
 - The compiler output path is correct: `tsconfig.runtime.json` preserves `src/run-codex.ts` as `dist/src/run-codex.js`.
-- The failure is an access-control false negative, not evidence that TypeScript failed to emit the runtime.
-- The updater's safety behavior after the false negative is working as designed: because `runtime_finalized` remains false, the runner stays stopped rather than restarting against an unvalidated replacement runtime.
+- The failure was an access-control false negative, not evidence that TypeScript failed to emit the runtime.
+- The updater's safety behavior after the false negative worked as designed: because `runtime_finalized` remained false, the runner stayed stopped rather than restarting against an unvalidated replacement runtime.
 - A focused system test can reproduce the identity boundary without weakening production code: ordinary access is denied, the mocked builder check succeeds for the compiled file, permissions remain private, and the same builder check fails when the file is removed.
 - The production failure also prevents the self-hosted runner from executing the PR that fixes it, so full CI evidence requires one manual recovery cycle on the host.
 
@@ -72,4 +72,4 @@ Fix the ownership-boundary error without weakening the private build directory. 
 
 ## Outcomes & Retrospective
 
-The implementation and focused regressions are present on the PR branch. Local validation passed for the new TypeScript contract under TypeScript 5.8.3, `bash -n` passed for the new system test, and the focused private-directory integration scenario passed for both present and missing entrypoints. Full repository validation remains blocked only by the intentionally stopped self-hosted runner and must be recorded before this plan can move to `completed`.
+The implementation and focused regressions are present on the PR branch. Local validation passed for the new TypeScript contract under TypeScript 5.8.3, `bash -n` passed for the new system test, and the focused private-directory integration scenario passed for both present and missing entrypoints. Full repository validation remains pending on the intentionally stopped self-hosted runner and must be recorded before this plan can move to `completed`.

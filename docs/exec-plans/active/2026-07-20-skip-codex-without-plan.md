@@ -36,7 +36,8 @@ Change the pull-request path so that zero matching active ExecPlans is a valid n
 4. Run Codex-only steps when the result is not explicitly false and `plan_path` is non-empty. This supports both the new resolver and the currently deployed resolver during rollout.
 5. Gate transcript upload, failure propagation, and finalization with the same plan-presence contract.
 6. Keep the production and example workflows identical.
-7. Add integration coverage for zero, one, and multiple active-plan candidates, workflow gating, and deployed-resolver compatibility.
+7. Add integration coverage for zero, one, and multiple active-plan candidates, workflow gating, deployed-resolver compatibility, and both Codex success and failure propagation.
+8. Update the implemented runner specification so it no longer claims that every pull request must contain exactly one active plan.
 
 ## Acceptance Criteria
 
@@ -58,15 +59,18 @@ Change the pull-request path so that zero matching active ExecPlans is a valid n
 - [x] CI run `29775376796` (#857) passed before the rollout-compatibility correction.
 - [x] Codex run `29775431500` (#33) exposed that the pull-request workflow executes against the resolver currently deployed from `main`.
 - [x] Add compatibility for a deployed resolver that emits `plan_path` without `plan_found`.
-- [ ] Normal pull-request CI passes on the exact final branch head.
-- [ ] The Codex workflow detects this active plan and actually executes Codex.
-- [ ] Review the final diff and workflow logs.
+- [x] CI run `29775666642` (#862) passed on the rollout-compatible implementation head.
+- [x] Codex run `29775731689` (#34) detected this active plan, skipped the no-plan notice, executed Codex successfully, and uploaded the transcript.
+- [x] Review and preserve the Codex-authored specification and failure-gating test corrections after its final push step failed.
+- [ ] Normal pull-request CI passes on the exact final branch head containing the preserved Codex corrections.
+- [ ] Review the final diff and exact-head workflow logs.
 
 ## Surprises & Discoveries
 
 - The baseline workflow already fails safely before running Codex; the defect is semantic rather than an unintended execution path. Zero plans should be a valid no-op, while multiple plans must remain an error.
 - Artifact upload and finalization require explicit plan gating. Merely skipping the Codex step would otherwise allow later success-path steps to evaluate independently.
 - Codex run `29775431500` used the workflow YAML from the branch but the resolver installed under `/srv/github-runner/storage/agent-relay` from `main`. That resolver successfully returned `plan_path` without the new `plan_found` output, so a strict `plan_found == 'true'` condition incorrectly skipped Codex. The workflow therefore needs a rollout-compatible condition until the new resolver is deployed by `update.sh`.
+- Codex run `29775731689` proved the rollout-compatible execution path: plan resolution succeeded, the missing-plan notice was skipped, Codex ran successfully, and the transcript upload succeeded. Its later `Commit and push` step failed, so the reviewed changes were recovered from the transcript and committed through the repository connector rather than discarded.
 
 ## Decision Log
 
@@ -75,7 +79,8 @@ Change the pull-request path so that zero matching active ExecPlans is a valid n
 - Keep the user-facing message in the workflow so the resolver remains responsible only for deterministic plan selection and validation.
 - Preserve strict manual dispatch because the caller explicitly supplies a required task path.
 - Keep the example workflow synchronized with the production workflow because repository tests and operator usage treat it as the maintained reference.
+- Preserve reviewed Codex changes through the connector when finalization fails after successful Codex execution and artifact publication.
 
 ## Outcomes & Retrospective
 
-The no-plan behavior, explicit English notice, strict multiple-plan behavior, tests, and rollout compatibility are implemented. Exact-head CI, a Codex run that actually executes this active plan, and final review remain pending.
+The no-plan behavior, explicit English notice, strict multiple-plan behavior, rollout compatibility, specification correction, and focused tests are implemented. CI #862 passed before the final Codex-authored corrections, and Codex run #34 executed the active plan successfully. Exact-head CI and final log review remain pending, so this plan stays active.

@@ -1,10 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 
 async function read(path: string): Promise<string> {
   return readFile(path, "utf8");
 }
+
+test("Docker host scripts are executable in the repository checkout", async () => {
+  for (const path of ["scripts/docker-host.sh", "scripts/docker-host-debian.sh"]) {
+    const metadata = await stat(path);
+    assert.notEqual(metadata.mode & 0o111, 0, `${path} must retain an executable bit in Git`);
+  }
+});
 
 test("update leaves Git and repository validation outside deployment", async () => {
   const update = await read("update.sh");

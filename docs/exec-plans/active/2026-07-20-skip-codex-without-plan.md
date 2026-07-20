@@ -47,7 +47,7 @@ Change the pull-request path so that zero matching active ExecPlans is a valid n
 - A ready pull request with exactly one changed active ExecPlan continues to run Codex normally, including while the runner still uses the resolver deployed from the previous `main` revision.
 - Multiple changed active ExecPlans and invalid manual-dispatch paths remain failures.
 - Production and example Codex workflows remain synchronized.
-- `npm run check` and normal pull-request CI pass on the exact final head.
+- `npm run check` and normal pull-request CI pass on the implementation head.
 - Independent review finds no hidden execution or finalization path when `plan_found=false`.
 
 ## Progress
@@ -62,8 +62,8 @@ Change the pull-request path so that zero matching active ExecPlans is a valid n
 - [x] CI run `29775666642` (#862) passed on the rollout-compatible implementation head.
 - [x] Codex run `29775731689` (#34) detected this active plan, skipped the no-plan notice, executed Codex successfully, and uploaded the transcript.
 - [x] Review and preserve the Codex-authored specification and failure-gating test corrections after its final push step failed.
-- [ ] Normal pull-request CI passes on the exact final branch head containing the preserved Codex corrections.
-- [ ] Review the final diff and exact-head workflow logs.
+- [x] CI run `29776537961` (#865) passed on implementation head `12de950c` containing the preserved Codex corrections.
+- [x] Review the final implementation diff and exact-head CI and Codex workflow logs.
 
 ## Surprises & Discoveries
 
@@ -83,4 +83,4 @@ Change the pull-request path so that zero matching active ExecPlans is a valid n
 
 ## Outcomes & Retrospective
 
-The no-plan behavior, explicit English notice, strict multiple-plan behavior, rollout compatibility, specification correction, and focused tests are implemented. CI #862 passed before the final Codex-authored corrections, and Codex run #34 executed the active plan successfully. Exact-head CI and final log review remain pending, so this plan stays active.
+The no-plan behavior, explicit English notice, strict multiple-plan behavior, rollout compatibility, specification correction, and focused tests are implemented. CI #865 passed on the implementation head, Codex run #34 executed the active plan successfully, and final review found no unresolved implementation blocker. This plan remains under `docs/exec-plans/active/` as explicitly requested for this pull request.

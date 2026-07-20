@@ -74,7 +74,9 @@ test("workflows use installed direct execution, transcript output, and strict to
     assert.doesNotMatch(workflow, /\btee\b/);
     assert.match(workflow, /persist-credentials: false/);
     assert.match(workflow, /GITHUB_PUSH_TOKEN: \$\{\{ github\.token \}\}/);
-    assert.match(workflow, /if: always\(\)[\s\S]*actions\/upload-artifact@v4/);
+    assert.match(workflow, /No active ExecPlan was found in this pull request\. Codex execution was skipped\./);
+    assert.match(workflow, /if: \$\{\{ always\(\) && steps\.plan\.outputs\.plan_found == 'true' \}\}[\s\S]*actions\/upload-artifact@v4/);
+    assert.match(workflow, /if: \$\{\{ steps\.plan\.outputs\.plan_found == 'true' && steps\.codex\.outcome == 'success' \}\}[\s\S]*runner\/finalize\.sh/);
     assert.doesNotMatch(workflow, /AGENT_RELAY_TOKEN|AGENT_RELAY_URL|runner\/client\.mjs/);
     assert.doesNotMatch(workflow, /(?:node|run:)\s+\/runner\//);
 

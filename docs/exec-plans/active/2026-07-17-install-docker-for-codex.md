@@ -6,169 +6,162 @@ This ExecPlan follows `.agent/PLANS.md` and is the only active plan for this pul
 
 Make `./update.sh` install and maintain rootful Docker Engine, Buildx, and Compose v2 for `github-runner`, so Codex can use the ordinary `/usr/bin/docker` CLI and the local Unix socket.
 
-Docker Engine and containerd must store their persistent state below `/srv/github-runner/storage/docker`:
+Docker Engine and containerd must use permanent state below `/srv/github-runner/storage/docker` from their first start:
 
 - Docker Engine: `/srv/github-runner/storage/docker/engine`;
 - containerd: `/srv/github-runner/storage/docker/containerd`.
 
-This is a fresh-host installation contract. There is no previous Docker state to migrate. The first successful update configures the permanent storage locations before Docker or containerd starts for the first time. Later updates validate and reuse the exact managed installation created by this feature.
+The supported initial state is a fresh host without an existing Docker installation or Docker data. Later updates may reuse only the exact managed installation created by this feature.
 
-Agent Relay remains only the execution bridge. It does not parse Docker commands, proxy the Docker API, register Compose projects, or manage application-container lifecycle. Codex decides when to run `compose up`, `logs`, `exec`, `restart`, and `down`.
+Agent Relay remains the execution bridge. Codex decides when to run Docker and Compose commands, inspect logs, execute commands in containers, restart services, and clean up application resources.
 
 ## Current Baseline
 
-The branch is based on current `main` commit `7c148c242feb421b59647f144ab6b78fe691af28`. Preserve the current normalized Codex output, transcript, timeout, finalization, and workflow behavior.
+The branch is based on `main` commit `7c148c242feb421b59647f144ab6b78fe691af28`. Preserve its normalized Codex output, transcript, timeout, finalization, workflow, API, and routing behavior.
 
-The existing `.github/workflows/codex.yml` already supports manual execution through `workflow_dispatch`, validates the selected PR head, and runs Codex directly in the dedicated `codex` job. No workflow change is required to make this branch capable of running Codex.
+The existing `.github/workflows/codex.yml` supports manual dispatch and direct Codex execution. No workflow change is required.
 
-The checked-in Docker implementation is not aligned with the target architecture. It preserves package-default storage locations and attempts to support arbitrary compatible existing installations. Replace that behavior with the fresh-or-exact-managed-state contract defined here.
+Codex implemented the first version of the persistent-storage design in commit `f0131c2d535050b7f73705d55f7868786b31ac0e`. Repository validation passed locally, but independent review found unresolved production and acceptance blockers below. Treat the current implementation as incomplete.
 
 ## Binding Decisions
 
-- Docker provisioning runs only from `update.sh`. `install.sh` only protects the checked-in provisioner scripts and installs generic host prerequisites.
-- The current package adapter supports Debian x86-64 and Docker's official apt repository.
-- The initial supported state is a host without Docker Engine, Docker CLI, containerd, Buildx, Compose, Docker configuration, or Docker data.
-- A later update may reuse only the exact managed installation and storage configuration produced by this feature.
-- Unknown pre-existing Docker packages, commands, configuration, units, sockets, or non-empty managed storage directories fail before package mutation with a clear diagnostic.
-- Install `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, and `docker-compose-plugin` from the official repository.
-- Configure Docker `data-root` as `/srv/github-runner/storage/docker/engine`.
-- Configure containerd top-level `root` as `/srv/github-runner/storage/docker/containerd`.
-- Package installation must not allow Docker or containerd to start before both configurations and managed directories are complete and validated.
-- After configuration, enable and start the required service and socket units explicitly.
+- Provision Docker only from `update.sh`.
+- Support the current Debian x86-64 package adapter through Docker's official apt repository.
+- Install `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, and `docker-compose-plugin` with the resolver-selected dependency closure.
+- Configure both permanent roots before any first service activation.
+- Recognize only a fresh supported state or the exact managed state produced by this feature.
+- Reject unknown pre-existing Docker packages, effective commands, CLI plugins, configuration, units, sockets, or data before package mutation.
 - Ensure `github-runner` belongs to `docker`; ensure `agent-relay-builder` does not.
-- Validate Docker, Buildx, Compose, daemon access, storage roots, group membership, and the local socket as `github-runner` with a clean environment and private `DOCKER_CONFIG`.
-- Run `hello-world` only on the first successful installation or an explicit host-acceptance run. Repeated managed updates must not depend on registry access.
-- Docker group membership is intentionally root-equivalent access on the dedicated runner VM.
-- Add the conventional `/var/run/docker.sock` and `/run/docker.sock` write permissions to the existing Codex filesystem policy.
-- Preserve the existing public API, request contract, routing, result semantics, commit decision, finalization decision, and GitHub Actions workflows.
+- Validate the ordinary Docker CLI, Buildx, Compose, local socket, effective storage roots, package ownership, unit ownership, and group boundaries.
+- Run `hello-world` on the first successful installation or explicit host acceptance. A completed repeated update must not require registry access.
+- Docker group membership is intentionally root-equivalent on the dedicated runner VM.
+- Keep application-container lifecycle under Codex control.
+- Keep the current GitHub Actions workflows unchanged.
 
-## Blocking Review Findings
+## Current Independent Review Findings
 
-1. `scripts/docker-host.sh` currently leaves Docker and containerd on package-default storage. It must create, configure, and validate the required `/srv/github-runner/storage/docker` layout before first service startup.
-2. The current classification model accepts arbitrary complete installations and missing-plugin states. Limit reuse to an exact managed state created by this feature; reject unrelated existing installations instead of expanding compatibility logic.
-3. Docker packages can start services from package post-install scripts. Add a bounded installation phase that prevents service activation until the managed directories and both configuration files are atomically installed and validated.
-4. Define an exact managed-state marker or equivalent deterministic evidence binding the installed package set, storage configuration, and managed directory layout. A second `update.sh` run must distinguish the feature's own installation from an unrelated pre-existing installation.
-5. Managed apt key and source files are written through fixed staging paths. An interruption during the write can leave a partial file that blocks every later run. Write complete content to a unique same-directory temporary file, validate it, then publish it atomically. Add rerun tests for interruption before and after each publication boundary.
-6. The updater obtains sudo credentials before waiting for `Runner.Worker`. Refresh credentials after that wait and ensure remaining privileged operations, signal handling, cleanup, and runner restoration cannot prompt interactively.
-7. Provisioner termination currently checks launcher liveness rather than the process-group state and ends with an unbounded `wait`. Implement bounded TERM, bounded KILL, process-group liveness checks, and bounded reaping without leaving the runner permanently stopped after a finalized runtime.
-8. The system test harness must intercept the exact production command paths and retain child stdout/stderr on failure. Tests must exercise production helpers and real temporary filesystem/process behavior rather than proving behavior through source-string assertions alone.
-9. Direct Docker bind mounts can create files not owned by `github-runner`, while `runner/finalize.sh` correctly rejects foreign-owned workspace content. Update the Codex instruction and tests so Docker-based work leaves the repository fully owned by the runner before finalization.
-10. Earlier exact-head CI runs failed in `npm run check:system` because the updater harness did not model absolute privileged command paths and one package test marked `unrelated-agent` as allowed while expecting rejection. Those harness defects are corrected; preserve the complete system gate and do not weaken production assertions.
-11. `docker_debian_install_components` derives `allowed.txt` from recursive apt dependency output, which may contain dependency alternatives that the resolver did not select. Bind every newly installed dependency to the exact requested candidate versions and the resolver-selected dependency path. Reject unselected alternatives or unrelated packages even when they appear in a broad dependency listing, and retain acceptance of genuinely selected dependencies.
+1. **Configuration can change after the last validation.** The implementation validates `daemon.json`, `config.toml`, and their directories before apt package work, then starts services without validating them again. Package post-install scripts can replace files or add entries before the first start. Revalidate exact file bytes, canonical paths, ownership, modes, directory contents, and storage-directory metadata after package or recovery work and immediately before service activation. Add a behavioral case where package work mutates each managed file or directory and prove no service starts.
+
+2. **Completed managed state is repaired instead of verified.** With a `complete` marker, missing configuration or storage directories are recreated. A completed update must fail before mutation unless the exact managed files and directories already exist with the required canonical paths and metadata. Controlled creation is valid only while completing the recorded initial transaction.
+
+3. **The managed service-start policy can remain globally installed.** Transaction recovery publishes phase `installed` before removing `/usr/sbin/policy-rc.d`. Interruption at that boundary leaves the policy on a later `installed` or `complete` run, where it is never removed. Remove the exact managed policy before publishing the post-transaction phase, and validate on every non-transaction run that no managed policy remains. Add interruption tests on both sides of this boundary.
+
+4. **Fresh-state inspection misses effective command and plugin shadowing.** The implementation checks selected `/usr/bin` paths but not earlier PATH entries such as `/usr/local/bin`, nor Docker CLI plugin override directories. Codex uses a PATH where `/usr/local/bin` precedes `/usr/bin`; Buildx and Compose also have documented user/local plugin search locations. Reject any pre-existing effective Docker/containerd command or Buildx/Compose plugin that could shadow the official package files. After installation, prove the effective CLI and plugins are the managed package files.
+
+5. **Fresh-state inspection misses filesystem unit leftovers and default data.** `systemctl show` alone can miss unit files or drop-ins added after the manager last loaded them. Inspect the future-active service/socket files and drop-in locations directly before apt mutation. Also reject populated `/var/lib/docker` or `/var/lib/containerd` state on the fresh path and verify that first startup did not write data outside the managed roots.
+
+6. **Package selection is not one coherent apt snapshot.** Candidate lookup can execute `apt-get update` inside the per-package loop, after earlier candidates were already selected. Refresh apt metadata once before selecting any package whenever installation is required, then resolve every candidate, origin, simulation, and exact installation from that snapshot.
+
+7. **Dependency validation is tautological.** `allowed.txt` is generated from the same simulation `Inst` rows that it is supposed to validate, so an injected unrelated package is automatically allowed. Independently prove that every selected package is reachable from the exact requested packages through the resolver-selected dependency alternatives. Do not derive the allowlist from the rows being checked. Test the production transaction helper with a valid dependency, an unselected alternative, and an unrelated package.
+
+8. **Root authority can expire while the runner is stopped.** A single `sudo -v` after the worker wait does not keep noninteractive authority valid during long package work. Signal delivery and runner restoration can later fail because the provisioner is root-owned. Maintain bounded noninteractive authority for the full privileged operation, verify TERM and KILL delivery, and never restore the runner while the provisioner process group may still be alive. A failed signal is a hard update failure, not success. Add long-wait and expired-credential behavioral tests.
+
+9. **Provisioner completion remains unbounded.** The normal path waits indefinitely while the runner is stopped. Add a defined bounded provisioner deadline or bounded phase deadlines. On expiry, terminate the verified process group, reap it within bounded TERM/KILL grace periods, and restore the runner only after the group is confirmed gone.
+
+10. **The containerd validation command is invalid.** Current containerd CLI exposes detailed plugin data through `ctr plugins ls -d`; `ctr plugins info io.containerd.metadata.v1.bolt` is not a supported command in the current 1.x or 2.x command surface. Use a supported command and parse one unambiguous metadata-plugin root export, or use another supported effective-configuration interface. Add an exact command/output behavioral test.
+
+11. **Repository-safe tests do not exercise the failure boundaries above.** Current TypeScript tests mostly assert source strings, and the shell helper tests do not execute post-install mutation, policy interruption, effective command/plugin shadowing, direct unit leftovers, complete-state corruption, sudo expiry, signal failure, deadline expiry, or the actual containerd command. Add deterministic behavioral tests around production helpers and process/filesystem behavior.
+
+12. **Current documentation claims unaccepted behavior.** `README.md`, `docs/native-github-runner-specification.md`, and `docs/operations/README.md` describe Docker as current host behavior while this active plan still lacks exact-head CI, independent acceptance, and privileged host acceptance. Restore current documentation to the accepted `main` contract. Keep the Docker behavior in this active plan and host-acceptance documentation until all acceptance criteria are complete.
 
 ## Implementation Work
 
-1. Re-read the current branch, current `main`, and this plan before editing.
-2. Simplify the provisioner state model to:
-   - fresh supported host;
-   - exact managed installation produced by this feature;
-   - unsupported or ambiguous state that fails before mutation.
-3. Create `/srv/github-runner/storage/docker`, `engine`, and `containerd` with root ownership and restrictive modes suitable for daemon-managed data.
-4. Install the official Docker packages while preventing premature service and socket activation.
-5. Atomically publish and validate:
-   - Docker's official apt key and source definition;
-   - `/etc/docker/daemon.json` with the managed `data-root`;
-   - `/etc/containerd/config.toml` with the managed top-level `root`;
-   - the managed-state evidence needed for safe repeated updates.
-6. Resolve one exact package transaction from one repository snapshot. Prove each new dependency belongs to the resolver-selected closure for the exact requested candidate versions before installation.
-7. Start services only after package, configuration, directory, and unit validation succeeds.
-8. Verify the effective Docker and containerd roots after startup, not only the configuration-file text.
-9. Enforce runner/builder group membership and validate the ordinary CLI through the local socket and private client state.
-10. Correct updater sudo lifetime, process-group termination, bounded reaping, runtime-finalization, and runner-restoration behavior.
-11. Keep Docker and Compose lifecycle decisions in Codex. Add only the ownership guidance needed for successful repository finalization.
-12. Replace obsolete tests for arbitrary existing installations with tests for fresh installation, exact managed reuse, unsupported-state rejection, and selected dependency closure.
-13. Run one final `npm run check` and review every plan item against the final diff.
-14. Update PR-facing documentation only after the implementation and repository-safe validation are complete.
+1. Correct the phase model so fresh installation can create state, interrupted installation can recover only its recorded transaction, and completed state is validation-only.
+2. Validate managed configuration and storage both before package mutation and after package work immediately before service activation.
+3. Make `policy-rc.d` recovery interruption-safe and prove it cannot persist after transaction completion.
+4. Inspect effective command resolution, Docker CLI plugin search paths, direct unit/drop-in files, sockets, managed storage, and default Docker/containerd data before package mutation.
+5. Resolve one exact apt transaction from one metadata refresh and independently validate its selected dependency graph.
+6. Replace the unsupported containerd command with a supported effective-root check.
+7. Maintain noninteractive privileged control for the full update, verify signal delivery, enforce a bounded provisioner deadline, and confirm the process group is gone before runner restoration.
+8. Preserve direct Docker access and Codex-owned application lifecycle. Keep the workspace ownership requirement before finalization.
+9. Add behavioral coverage for every current independent finding. Static assertions may supplement but not replace behavioral evidence.
+10. Restore current-state documentation until the feature has complete acceptance evidence.
+11. Run one complete `npm run check` after the last production edit, then review the final diff point by point against this plan.
 
 ## Repository-Safe Tests
 
 Required coverage includes:
 
-- fresh-host classification and exact official package request;
-- rejection of pre-existing packages, commands, configuration, units, sockets, or populated managed directories that were not created by this feature;
-- creation and metadata of the managed `/srv/github-runner/storage/docker` directory tree;
-- prevention of Docker, containerd, and socket activation before managed configuration publication;
-- atomic apt key/source and daemon/containerd configuration publication with deterministic rerun after interruption;
-- exact managed-state recognition on the second update without package reinstall or registry access;
-- effective Docker root `/srv/github-runner/storage/docker/engine` and effective containerd root `/srv/github-runner/storage/docker/containerd`;
-- exact candidate versions and resolver-selected dependency closure, including rejection of an unselected alternative and an unrelated package;
-- official package ownership, service/socket state, local socket access, Buildx, Compose, and first-install `hello-world` policy;
-- `github-runner` Docker membership and `agent-relay-builder` exclusion;
-- private per-run `DOCKER_CONFIG` and exact socket filesystem permissions;
-- sudo refresh after the runner-worker wait;
-- fast provisioner completion, unidentifiable process-group failure, descendant survival, TERM/KILL escalation, bounded reaping, and runner restoration;
-- Docker workspace operations leaving every repository path owned by `github-runner` before finalization;
+- fresh classification and exact managed-state reuse;
+- rejection of pre-existing effective commands, local/user CLI plugins, units, drop-ins, sockets, configuration, managed storage, and default data;
+- exact canonical storage directories and configuration metadata;
+- no service activation before configuration and post-package revalidation;
+- completed-state corruption failing without repair;
+- atomic repository/configuration/marker publication and deterministic interruption recovery;
+- managed `policy-rc.d` removal across every phase boundary;
+- one apt metadata refresh, exact candidates, official requested-package origin, and independently validated selected dependency closure;
+- supported containerd effective-root inspection with exact command and output parsing;
+- exact official CLI/plugin ownership and effective resolution;
+- runner Docker membership, builder exclusion, local socket metadata, Buildx, Compose, and first-install `hello-world` policy;
+- sudo expiry, signal-delivery failure, descendant survival, provisioner deadline, TERM/KILL escalation, bounded reaping, and runner restoration ordering;
+- Docker bind-mount work leaving the repository fully owned by `github-runner`;
 - all current-main output, transcript, executor, finalizer, workflow, and sandbox regressions;
-- exactly one active ExecPlan and no workflow change.
+- exactly one active ExecPlan and no workflow changes.
 
 ## Real-Host Acceptance
 
-Repository-safe tests cannot prove privileged apt, systemd, daemon, socket, group, storage-root, or end-to-end Docker behavior.
+Repository-safe tests cannot prove privileged apt, dpkg, systemd, daemon, socket, group, storage-root, registry, or real Compose behavior.
 
-The automated disposable or designated Debian 13 x86-64 systemd host acceptance must cover:
+The automated disposable or designated Debian 13 x86-64 systemd host lifecycle must cover:
 
-- a clean host with no Docker state;
-- first installation without premature service startup;
+- a clean host with no Docker installation or data;
+- first installation without premature service activation;
 - effective Engine and containerd roots below `/srv/github-runner/storage/docker`;
+- absence of data written to default roots;
 - first-install `hello-world`;
-- a second update with registry access disabled;
-- service, socket, package, configuration, ownership, and group evidence;
-- interruption and rerun during repository/configuration publication and package installation;
-- runtime failure and Docker failure restoration behavior;
-- TERM, INT, and HUP handling;
+- a repeated update with registry access disabled;
+- package, repository, configuration, unit, socket, ownership, and group evidence;
+- interruption and rerun at repository, configuration, marker, policy, apt, dpkg, and post-install boundaries;
+- expired sudo credentials and TERM, INT, HUP, timeout, and failed-signal behavior;
 - a real Agent Relay request where Codex starts Compose, reads logs, executes a command, leaves the workspace runner-owned, and shuts the project down.
 
-If this automated host lifecycle is unavailable, keep this acceptance item blocked with the exact cause and unblock condition. Do not claim real-host success.
+If this lifecycle is unavailable, keep the item blocked with its exact cause and unblock condition. Do not claim host acceptance.
 
 ## Acceptance Criteria
 
-- The existing GitHub Action remains able to validate the PR and run Codex directly.
-- `update.sh` installs Docker Engine, Buildx, and Compose on the supported fresh host.
-- Docker Engine uses `/srv/github-runner/storage/docker/engine` from its first start.
-- containerd uses `/srv/github-runner/storage/docker/containerd` from its first start.
-- A repeated update recognizes and reuses the exact managed installation without registry access or unnecessary package mutation.
-- The exact package transaction cannot install an unselected dependency alternative or unrelated package.
-- Unknown pre-existing Docker state fails before mutation.
-- `github-runner` can use Docker through the ordinary CLI and local socket; `agent-relay-builder` cannot.
-- The runner is never started against an incomplete replacement runtime.
-- Docker application lifecycle remains Codex's responsibility.
+- The existing GitHub Action validates the exact final head and runs Codex directly.
+- `update.sh` installs the exact managed Docker stack on the supported fresh host.
+- Engine and containerd use the required permanent roots from their first start.
+- Completed updates validate rather than repair the managed state.
+- A repeated update performs no unnecessary package mutation or registry access.
+- Unknown pre-existing Docker state fails before package mutation.
+- Package selection uses one apt snapshot and cannot admit an unselected alternative or unrelated package.
+- The service-start policy cannot persist after the managed transaction.
+- The updater cannot restore the runner while a root provisioner process may still be alive.
+- `github-runner` can use the effective official Docker CLI, Buildx, Compose, and socket; `agent-relay-builder` cannot.
+- Current documentation does not claim the feature before acceptance is complete.
 - `npm run check` and normal CI pass on the exact final head.
-- Independent final review finds no unresolved correctness, restartability, security, maintainability, or current-main regression issue.
+- Independent final review finds no unresolved correctness, security, restartability, maintainability, or current-main regression issue.
 
 ## Progress
 
-- [x] Confirmed that the current Codex workflow already supports manual dispatch and direct Codex execution; no workflow change is required.
-- [x] Re-reviewed the current implementation against the corrected fresh-host persistent-storage requirement.
-- [x] Replaced the previous no-storage-change plan with the required permanent `/srv` storage design.
-- [x] Corrected the system-test harness command interception, canonical-path simulation, contradictory repository assertion, and restored the complete system validation gate.
-- [x] Implemented the corrected provisioner, persistent storage, fresh-or-managed state marker, controlled package transaction and recovery, updater behavior, socket permissions, ownership guidance, and repository-safe tests.
-- [x] Ran final repository validation: `npm run check` passed on the working tree on 2026-07-20, including 135 Node tests with 100% source coverage, runtime compilation, shell and Node syntax checks, toolchain smoke, and all three system harnesses.
-- [blocked] Run exact-head GitHub CI. Cause: this execution environment has no readable GitHub workflow skill and no `gh` executable or other authenticated job interface. Impact: no exact-head remote job logs can be captured here. Unblock condition: an automated authenticated GitHub CI interface becomes available for this checkout.
-- [x] Completed a final local diff review covering fresh-state rejection, marker phases, interrupted dpkg recovery, atomic publication, configuration and storage validation, effective roots, package/unit/socket ownership, sudo lifetime, process-group cleanup, documentation, and absence of workflow changes; `git diff --check` passed.
-- [blocked] Obtain an independent final review. Cause: no independent automated reviewer was authorized or available in this execution. Impact: the local review is not independent acceptance evidence. Unblock condition: make an independent agent or automated review job available to review the exact final diff and validation evidence.
-- [blocked] Run automated privileged real-host acceptance. Cause: no disposable or explicitly designated Debian 13 x86-64 systemd host lifecycle is available to this execution environment. Impact: privileged apt, systemd, daemon, socket, storage-root, interruption, signal, and real Compose behavior are not accepted. Unblock condition: provide an automated disposable or designated host lifecycle with permission to install packages and exercise the required failure matrix.
+- [x] Confirmed that the existing workflow can run Codex without workflow changes.
+- [x] Established the fresh-host permanent-storage architecture.
+- [x] Corrected the initial system-test harness and restored the complete validation gate.
+- [x] Ran Codex once on a green validated head; Codex pushed `f0131c2d535050b7f73705d55f7868786b31ac0e`.
+- [x] Completed independent review of that implementation and recorded the unresolved findings above.
+- [ ] Implement the current independent review fixes and behavioral tests.
+- [ ] Run exact-head repository validation and CI after the final production edit.
+- [ ] Complete another independent final diff and job-log review.
+- [blocked] Run automated privileged real-host acceptance if no disposable or designated host lifecycle is available.
 
 ## Surprises & Discoveries
 
-- The current implementation solves a broader existing-installation compatibility problem, while the requested host is a fresh installation with fixed persistent storage.
-- Package post-install service activation must be controlled, otherwise Docker can create state in package-default locations before the permanent roots are configured.
-- The Codex workflow is present and executable; an individual failed validation run is not evidence that the branch lacks a Codex execution path.
-- A recursive apt dependency listing is not equivalent to the resolver-selected dependency closure when alternatives exist.
-- A durable transaction-phase marker is required before apt mutation; otherwise an interrupted dpkg operation cannot be safely distinguished from unrelated dirty global package state on rerun.
-- The local validation environment denies `/tmp`; CI helper scripts now honor the trusted `TMPDIR` fallback when `RUNNER_TEMP` is absent.
-- The checkout has no `gh` executable, so local validation cannot be supplemented with exact-head GitHub job-log evidence.
+- Package post-install scripts create a second trust boundary after the pre-package configuration check.
+- Docker command and plugin resolution can differ from the absolute paths used by the provisioner.
+- A resolver simulation is authoritative output, but it cannot serve simultaneously as the independent allowlist validating itself.
+- `ctr` is a debugging CLI with a version-dependent command surface; validation must use a command supported by the installed package.
+- A sudo timestamp is not process authority and cannot guarantee later control over a root-owned process group.
 
 ## Decision Log
 
 - Use one permanent managed storage tree below `/srv/github-runner/storage/docker`.
-- Configure both roots before the first daemon start because the target host has no prior Docker state to migrate.
-- Reuse only the exact managed installation created by this feature; fail on unrelated existing Docker state.
-- Bind package mutation to exact candidates and the selected dependency closure.
-- Record the resolver-selected package/version transaction before apt mutation, retain the exact service-start suppression policy across an interrupted transaction, and permit recovery only when every non-clean dpkg package belongs to that marker.
-- Use `preparing`, `transaction`, `installed`, and `complete` marker phases so `hello-world` runs on the first successful installation, including a retry after a post-install validation failure, while completed updates remain registry-independent.
-- Keep the existing Codex workflow and direct Docker CLI model.
-- Keep application-container lifecycle under Codex control.
+- Configure both roots before first service activation and revalidate them after package work.
+- Permit mutation only while completing the recorded initial transaction; completed state is validation-only.
+- Use one apt metadata snapshot and independently prove the selected dependency closure.
+- Keep verified privileged control until the provisioner group is gone.
+- Keep the Docker feature in the active plan until exact-head CI, independent review, and privileged host acceptance are complete.
 
 ## Outcomes & Retrospective
 
-Implementation and repository-safe validation are complete. The final working-tree gate passed on 2026-07-20 and no GitHub Actions workflow changed. The plan remains active because exact-head GitHub CI, independent final review, and the automated privileged real-host acceptance matrix are blocked by unavailable execution interfaces. Do not treat the Docker host contract as deployment-accepted until all three blockers are resolved.
+Not complete. Keep this plan active until implementation, exact-head CI, independent final review, and privileged real-host acceptance satisfy the criteria above.

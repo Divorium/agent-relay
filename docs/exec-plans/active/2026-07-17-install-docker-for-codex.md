@@ -53,7 +53,8 @@ The checked-in Docker implementation is not aligned with the target architecture
 7. Provisioner termination currently checks launcher liveness rather than the process-group state and ends with an unbounded `wait`. Implement bounded TERM, bounded KILL, process-group liveness checks, and bounded reaping without leaving the runner permanently stopped after a finalized runtime.
 8. The system test harness must intercept the exact production command paths and retain child stdout/stderr on failure. Tests must exercise production helpers and real temporary filesystem/process behavior rather than proving behavior through source-string assertions alone.
 9. Direct Docker bind mounts can create files not owned by `github-runner`, while `runner/finalize.sh` correctly rejects foreign-owned workspace content. Update the Codex instruction and tests so Docker-based work leaves the repository fully owned by the runner before finalization.
-10. The observed exact-head CI run failed in `npm run check:system`. Correct the implementation and harness while keeping the existing Codex workflow unchanged; do not describe the branch as unable to run Codex.
+10. Earlier exact-head CI runs failed in `npm run check:system` because the updater harness did not model absolute privileged command paths and one package test marked `unrelated-agent` as allowed while expecting rejection. Those harness defects are corrected; preserve the complete system gate and do not weaken production assertions.
+11. `docker_debian_install_components` derives `allowed.txt` from recursive apt dependency output, which may contain dependency alternatives that the resolver did not select. Bind every newly installed dependency to the exact requested candidate versions and the resolver-selected dependency path. Reject unselected alternatives or unrelated packages even when they appear in a broad dependency listing, and retain acceptance of genuinely selected dependencies.
 
 ## Implementation Work
 
@@ -69,14 +70,15 @@ The checked-in Docker implementation is not aligned with the target architecture
    - `/etc/docker/daemon.json` with the managed `data-root`;
    - `/etc/containerd/config.toml` with the managed top-level `root`;
    - the managed-state evidence needed for safe repeated updates.
-6. Start services only after package, configuration, directory, and unit validation succeeds.
-7. Verify the effective Docker and containerd roots after startup, not only the configuration-file text.
-8. Enforce runner/builder group membership and validate the ordinary CLI through the local socket and private client state.
-9. Correct updater sudo lifetime, process-group termination, bounded reaping, runtime-finalization, and runner-restoration behavior.
-10. Keep Docker and Compose lifecycle decisions in Codex. Add only the ownership guidance needed for successful repository finalization.
-11. Replace obsolete tests for arbitrary existing installations with tests for fresh installation, exact managed reuse, and unsupported-state rejection.
-12. Fix the current system-test failures, run one final `npm run check`, and review every plan item against the final diff.
-13. Update PR-facing documentation only after the implementation and repository-safe validation are complete.
+6. Resolve one exact package transaction from one repository snapshot. Prove each new dependency belongs to the resolver-selected closure for the exact requested candidate versions before installation.
+7. Start services only after package, configuration, directory, and unit validation succeeds.
+8. Verify the effective Docker and containerd roots after startup, not only the configuration-file text.
+9. Enforce runner/builder group membership and validate the ordinary CLI through the local socket and private client state.
+10. Correct updater sudo lifetime, process-group termination, bounded reaping, runtime-finalization, and runner-restoration behavior.
+11. Keep Docker and Compose lifecycle decisions in Codex. Add only the ownership guidance needed for successful repository finalization.
+12. Replace obsolete tests for arbitrary existing installations with tests for fresh installation, exact managed reuse, unsupported-state rejection, and selected dependency closure.
+13. Run one final `npm run check` and review every plan item against the final diff.
+14. Update PR-facing documentation only after the implementation and repository-safe validation are complete.
 
 ## Repository-Safe Tests
 
@@ -89,6 +91,7 @@ Required coverage includes:
 - atomic apt key/source and daemon/containerd configuration publication with deterministic rerun after interruption;
 - exact managed-state recognition on the second update without package reinstall or registry access;
 - effective Docker root `/srv/github-runner/storage/docker/engine` and effective containerd root `/srv/github-runner/storage/docker/containerd`;
+- exact candidate versions and resolver-selected dependency closure, including rejection of an unselected alternative and an unrelated package;
 - official package ownership, service/socket state, local socket access, Buildx, Compose, and first-install `hello-world` policy;
 - `github-runner` Docker membership and `agent-relay-builder` exclusion;
 - private per-run `DOCKER_CONFIG` and exact socket filesystem permissions;
@@ -124,6 +127,7 @@ If this automated host lifecycle is unavailable, keep this acceptance item block
 - Docker Engine uses `/srv/github-runner/storage/docker/engine` from its first start.
 - containerd uses `/srv/github-runner/storage/docker/containerd` from its first start.
 - A repeated update recognizes and reuses the exact managed installation without registry access or unnecessary package mutation.
+- The exact package transaction cannot install an unselected dependency alternative or unrelated package.
 - Unknown pre-existing Docker state fails before mutation.
 - `github-runner` can use Docker through the ordinary CLI and local socket; `agent-relay-builder` cannot.
 - The runner is never started against an incomplete replacement runtime.
@@ -136,8 +140,9 @@ If this automated host lifecycle is unavailable, keep this acceptance item block
 - [x] Confirmed that the current Codex workflow already supports manual dispatch and direct Codex execution; no workflow change is required.
 - [x] Re-reviewed the current implementation against the corrected fresh-host persistent-storage requirement.
 - [x] Replaced the previous no-storage-change plan with the required permanent `/srv` storage design.
-- [ ] Implement the corrected provisioner, updater behavior, and behavioral tests.
-- [ ] Run final repository validation and exact-head CI.
+- [x] Corrected the system-test harness command interception, canonical-path simulation, contradictory repository assertion, and restored the complete system validation gate.
+- [ ] Implement the corrected provisioner, updater behavior, package transaction proof, and behavioral tests.
+- [ ] Run final repository validation and exact-head CI after the production implementation.
 - [ ] Complete independent final diff and job-log review.
 - [blocked] Run automated privileged real-host acceptance if no disposable or designated host lifecycle is available.
 
@@ -146,12 +151,14 @@ If this automated host lifecycle is unavailable, keep this acceptance item block
 - The current implementation solves a broader existing-installation compatibility problem, while the requested host is a fresh installation with fixed persistent storage.
 - Package post-install service activation must be controlled, otherwise Docker can create state in package-default locations before the permanent roots are configured.
 - The Codex workflow is present and executable; an individual failed validation run is not evidence that the branch lacks a Codex execution path.
+- A recursive apt dependency listing is not equivalent to the resolver-selected dependency closure when alternatives exist.
 
 ## Decision Log
 
 - Use one permanent managed storage tree below `/srv/github-runner/storage/docker`.
 - Configure both roots before the first daemon start because the target host has no prior Docker state to migrate.
 - Reuse only the exact managed installation created by this feature; fail on unrelated existing Docker state.
+- Bind package mutation to exact candidates and the selected dependency closure.
 - Keep the existing Codex workflow and direct Docker CLI model.
 - Keep application-container lifecycle under Codex control.
 

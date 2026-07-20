@@ -40,16 +40,15 @@ test("unmarked Docker remnant cleanup is exact, restartable, and fully reclassif
   const host = await source("scripts/docker-host.sh");
   const adapter = await source("scripts/docker-host-debian.sh");
   const cleanup = host.indexOf("docker_host_classify_and_clean_unmarked() {");
-  const firstClassification = host.indexOf("\n  docker_host_classify\n", cleanup);
+  const loop = host.indexOf("\n  while :; do\n", cleanup);
+  const firstClassification = host.indexOf("\n    docker_host_classify\n", loop);
   const purge = host.indexOf("docker_debian_purge_residual_packages", firstClassification);
-  const reinventory = host.indexOf("docker_host_inventory_unmarked_remnants", purge);
-  const remove = host.indexOf("docker_host_remove_cleanup_remnants", reinventory);
-  const secondClassification = host.indexOf("\n    docker_host_classify\n", remove);
+  const remove = host.indexOf("docker_host_remove_cleanup_remnants", purge);
   const main = host.indexOf("docker_host_main() {");
   const cleanupCall = host.indexOf("docker_host_classify_and_clean_unmarked", main);
   const publishPreparing = host.indexOf("docker_host_publish_marker preparing", cleanupCall);
   const configure = host.indexOf("docker_host_prepare_storage_and_configuration", publishPreparing);
-  assert.ok(cleanup >= 0 && firstClassification > cleanup && purge > firstClassification && reinventory > purge && remove > reinventory && secondClassification > remove);
+  assert.ok(cleanup >= 0 && loop > cleanup && firstClassification > loop && purge > firstClassification && remove > purge);
   assert.ok(main >= 0 && cleanupCall > main && publishPreparing > cleanupCall && configure > publishPreparing);
   assert.match(adapter, /"\$\{status\}" == 'rc ' && -n "\$\{version\}"/u);
   assert.match(adapter, /docker_debian_run_residual_purge "\$\{packages\[@\]\}"/u);
@@ -63,6 +62,8 @@ test("unmarked Docker remnant cleanup is exact, restartable, and fully reclassif
   assert.match(adapter, /docker_debian_filter_list_source/u);
   assert.match(adapter, /docker_debian_filter_sources_file/u);
   assert.match(adapter, /\.agent-relay-docker-cleanup\.tmp\./u);
+  assert.match(adapter, /DOCKER_DEBIAN_APT_DIRECTORY=\/etc\/apt/u);
+  assert.match(host, /rm -rf --one-file-system -- "\$\{path\}"/u);
   assert.doesNotMatch(adapter, /apt-get[^\n]*purge/u);
 });
 

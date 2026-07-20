@@ -358,7 +358,6 @@ docker_host_inventory_cleanup_plugins() {
     /usr/bin/find -P "${directory}" -mindepth 1 -maxdepth 1 -print0 >> "${listing}" || return 1
   done
   while IFS= read -r -d '' entry; do
-    [[ -f "${entry}" || -L "${entry}" ]] || return 1
     ((DOCKER_HOST_REMNANT_COUNT += 1))
   done < "${listing}"
 }
@@ -474,7 +473,13 @@ docker_host_remove_cleanup_remnants() {
   done \
     < "${DOCKER_HOST_STATE_ROOT}/cleanup-key-files"
   while IFS= read -r -d '' path; do
-    /usr/bin/rm -f -- "${path}" || docker_host_fail configuration "Could not remove Docker CLI plugin remnant: ${path}"
+    if [[ -d "${path}" && ! -L "${path}" ]]; then
+      /usr/bin/rm -rf --one-file-system -- "${path}" \
+        || docker_host_fail configuration "Could not remove Docker CLI plugin remnant: ${path}"
+    else
+      /usr/bin/rm -f -- "${path}" \
+        || docker_host_fail configuration "Could not remove Docker CLI plugin remnant: ${path}"
+    fi
   done \
     < "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-entries.bin"
   while IFS= read -r -d '' path; do
@@ -898,17 +903,16 @@ docker_host_classify() {
 }
 
 docker_host_classify_and_clean_unmarked() {
-  docker_host_classify
-  if [[ "${DOCKER_HOST_CLASSIFICATION}" == residual ]]; then
-    docker_debian_assert_clean_dpkg
-    [[ ! -s "${DOCKER_HOST_RESIDUAL_PACKAGES}" ]] || docker_debian_purge_residual_packages "${DOCKER_HOST_RESIDUAL_PACKAGES}"
-    docker_host_inventory_unmarked_remnants \
-      || docker_host_fail inspection "Docker remnant state became unsafe during residual package cleanup"
-    docker_host_remove_cleanup_remnants
+  while :; do
     docker_host_classify
-    [[ "${DOCKER_HOST_CLASSIFICATION}" == fresh ]] \
-      || docker_host_fail inspection "Host did not become fresh after residual package cleanup"
-  fi
+    [[ "${DOCKER_HOST_CLASSIFICATION}" == residual ]] || break
+    docker_debian_assert_clean_dpkg
+    if [[ -s "${DOCKER_HOST_RESIDUAL_PACKAGES}" ]]; then
+      docker_debian_purge_residual_packages "${DOCKER_HOST_RESIDUAL_PACKAGES}"
+    else
+      docker_host_remove_cleanup_remnants
+    fi
+  done
 }
 
 docker_host_prepare_storage_and_configuration() {

@@ -13,6 +13,7 @@ DOCKER_DEBIAN_MANAGED_SOURCE=/etc/apt/sources.list.d/agent-relay-docker.sources
 DOCKER_DEBIAN_MANAGED_KEY_STAGE_GLOB=/etc/apt/keyrings/.agent-relay-docker.asc.tmp.
 DOCKER_DEBIAN_MANAGED_SOURCE_STAGE_GLOB=/etc/apt/sources.list.d/.agent-relay-docker.sources.tmp.
 DOCKER_DEBIAN_RESIDUAL_PURGE_TIMEOUT_SECONDS=120
+DOCKER_DEBIAN_APT_DIRECTORY=/etc/apt
 
 docker_debian_require_host() {
   [[ "$(/usr/bin/uname -m)" == x86_64 ]] \
@@ -326,7 +327,13 @@ docker_debian_inventory_cleanup_repository_files() {
     [[ "${path}" != *.sources ]] || docker_debian_sources_docker_stanzas_cleanup_safe "${path}" || return 1
   done < "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"
   : > "${listing}"
-  for path in /etc/apt/keyrings /etc/apt/sources.list.d; do
+  path=${DOCKER_DEBIAN_APT_DIRECTORY}
+  if ! docker_host_path_absent "${path}"; then
+    docker_debian_secure_path "${path}" directory || return 1
+    /usr/bin/find -P "${path}" -mindepth 1 -maxdepth 1 \
+      -name '.agent-relay-docker-cleanup.tmp.*' -print0 >> "${listing}" || return 1
+  fi
+  for path in "${DOCKER_DEBIAN_APT_DIRECTORY}/keyrings" "${DOCKER_DEBIAN_APT_DIRECTORY}/sources.list.d"; do
     docker_host_path_absent "${path}" && continue
     docker_debian_secure_path "${path}" directory || return 1
     /usr/bin/find -P "${path}" -mindepth 1 -maxdepth 1 \

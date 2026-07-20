@@ -201,11 +201,11 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - [x] `f38f03e9` implemented exact bounded package cleanup and post-purge reclassification.
 - [x] `4da52b3` implemented non-package-owned Docker-remnant cleanup, shared-source preservation, configuration-only recovery, and associated tests; its Codex validation passed with 137 tests and 100% measured TypeScript coverage.
 - [x] Independently reviewed `4da52b3` and recorded the three current cleanup/restartability gaps.
-- [ ] Implement the three current findings with behavioral tests.
-- [ ] Run final repository and Codex validation.
-- [ ] Publish a connector-authored exact final status commit and require normal CI to pass.
-- [ ] Complete independent final diff and job-log review.
-- [ ] Merge the PR after the acceptance criteria pass.
+- [x] Implemented the three current findings with behavioral tests: cleanup now classifies before every mutation stage, exact `/etc/apt` rewrite stages are recovered, and every direct plugin entry type is removed without deleting the search root.
+- [x] Ran final repository and Codex validation on the implementation tree: `npm run check` passed with 137 tests, 100% measured TypeScript source coverage, and all runtime, shell, toolchain, and system integration checks.
+- [ ] [blocked] Publish a connector-authored exact final status commit and require normal CI to pass. Two GitHub connector blob-write attempts returned `user cancelled MCP tool call`, and the checkout's read-only `.git` directory rejected `index.lock`; unblock by allowing connector repository writes for this task.
+- [ ] [blocked] Complete independent final job-log review. Local final diff review passed, but exact-head normal CI and its job logs cannot exist until the blocked status commit is published.
+- [ ] [blocked] Merge the PR after the acceptance criteria pass. Merge remains gated on the blocked exact-head commit, normal CI, and final job-log review.
 - [post-merge] Perform manual privileged host acceptance; open a new plan only if it exposes a defect.
 
 ## Decision Log
@@ -240,6 +240,9 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - Shared apt-source cleanup requires same-directory atomic rewriting and explicit recovery of the temporary file in every possible source directory, including `/etc/apt`.
 - A cleanup inventory that supports only regular plugin files does not satisfy a compatibility path intended to remove arbitrary stale direct plugin entries.
 - Codex-token pushes may leave normal CI as `action_required`; a connector-authored final status commit is needed for exact-head CI evidence.
+- Making the complete classifier the cleanup stage controller removes the need for a separate reduced post-purge inventory and gives package purge and configuration cleanup the same restart path.
+- A test-only apt directory boundary permits a real interrupted `/etc/apt/sources.list` stage fixture without weakening the production constant, which remains `/etc/apt`.
+- The execution checkout exposes `.git` read-only, and connector write requests were cancelled. This preserves the validated working tree but prevents the plan-required publication, exact-head CI, job-log review, merge, and plan archival. The concrete unblock condition is successful GitHub connector write authorization.
 
 ## Outcomes & Retrospective
 

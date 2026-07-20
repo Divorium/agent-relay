@@ -117,6 +117,8 @@ Normal CI run `29763709695` (#847) passed on connector-authored head `6ad04b2dce
 
 The exact-head CI job log was reviewed. Typecheck, tests and coverage, production runtime build validation, shell-script validation, Node-script validation, toolchain validation, and system-script validation completed successfully. The failure-artifact upload was skipped only because the tests succeeded. No hidden failure or skipped required validation was found.
 
+After the unchanged plan was moved from `active` to `completed`, normal CI run `29772512231` (#850) passed on head `ed51a971db891267ac1d6dc56b8b50fdef737521`. All required steps succeeded; only the failure-artifact upload was skipped because tests passed.
+
 No manual host task is required before merge.
 
 ## Acceptance Criteria
@@ -164,4 +166,4 @@ No manual host task is required before merge.
 
 ## Outcome
 
-Implementation and repository acceptance are complete. Normal CI #847 passed on connector-authored head `6ad04b2d`, its job log was reviewed without finding a hidden failure or skipped required validation, and independent review found no unresolved implementation or acceptance blocker. PR #26 is ready to merge.
+Implementation and repository acceptance are complete. Normal CI #847 passed on connector-authored head `6ad04b2d`, its job log was reviewed without finding a hidden failure or skipped required validation, the original plan was moved from `active` to `completed`, and final CI #850 passed on the resulting head. Independent review found no unresolved implementation or acceptance blocker. PR #26 is ready to merge.

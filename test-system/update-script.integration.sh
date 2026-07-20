@@ -1,172 +1,121 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(mktemp -d /tmp/agent-relay-update.XXXXXX)"
+ROOT="$(mktemp -d "${TMPDIR:-/tmp}/agent-relay-update.XXXXXX")"
 cleanup() { rm -rf -- "${ROOT}"; }
 trap cleanup EXIT
 
-BASE_ROOT="${ROOT}/host"
-STORAGE_ROOT="${BASE_ROOT}/storage"
-SOURCE_ROOT="${STORAGE_ROOT}/agent-relay"
-BUILD_ROOT="${STORAGE_ROOT}/build"
-BUILD_HOME="${STORAGE_ROOT}/build-home"
+SOURCE_ROOT="${ROOT}/srv/github-runner/storage/agent-relay"
+BUILD_ROOT="${ROOT}/srv/github-runner/storage/build"
+BUILD_HOME="${ROOT}/srv/github-runner/storage/build-home"
+ADMIN_FILE="${ROOT}/etc/agent-relay/administrator"
 FAKE_BIN="${ROOT}/bin"
-ADMIN_FILE="${ROOT}/administrator"
-LOG_FILE="${ROOT}/commands.log"
-SERVICE_STATE="${ROOT}/service.state"
-PROCESS_MODE="${ROOT}/process-mode"
-WORKER_POLLS="${ROOT}/worker-polls"
-FAIL_NEXT_BUILD="${ROOT}/fail-next-build"
-FAIL_PROCESS_INSPECTION="${ROOT}/fail-process-inspection"
+COMMAND_LOG="${ROOT}/commands.log"
+DOCKER_LOG="${ROOT}/docker.log"
+TRANSFORMED_UPDATE="${ROOT}/update-under-test.sh"
+FAKE_TSC="${ROOT}/fake-tsc"
+DOCKER_PROVISIONER="${SOURCE_ROOT}/scripts/docker-host.sh"
+DOCKER_ADAPTER="${SOURCE_ROOT}/scripts/docker-host-debian.sh"
+TEST_UID="$(/usr/bin/id -u)"
 
-mkdir -p "${SOURCE_ROOT}" "${BUILD_ROOT}" "${BUILD_HOME}" "${FAKE_BIN}"
-rsync -a --exclude=.git --exclude=node_modules --exclude=dist ./ "${SOURCE_ROOT}/"
-printf '%s\n' "$(id -un)" > "${ADMIN_FILE}"
-printf 'active\n' > "${SERVICE_STATE}"
-printf 'idle\n' > "${PROCESS_MODE}"
-printf '0\n' > "${WORKER_POLLS}"
-: > "${LOG_FILE}"
+mkdir -p "${SOURCE_ROOT}/scripts" "${BUILD_HOME}" "${FAKE_BIN}" "$(dirname "${ADMIN_FILE}")"
+printf 'test-admin\n' > "${ADMIN_FILE}"
+chmod 0600 "${ADMIN_FILE}"
+cp scripts/docker-host.sh "${DOCKER_PROVISIONER}"
+cp scripts/docker-host-debian.sh "${DOCKER_ADAPTER}"
+chmod 0755 "${DOCKER_PROVISIONER}" "${DOCKER_ADAPTER}"
+printf '{"extends":"./tsconfig.json"}\n' > "${SOURCE_ROOT}/tsconfig.runtime.json"
+: > "${COMMAND_LOG}"
+: > "${DOCKER_LOG}"
 
-BASE_ROOT="${BASE_ROOT}" ADMIN_FILE="${ADMIN_FILE}" SOURCE_ROOT="${SOURCE_ROOT}" \
-FAKE_TSC="${FAKE_BIN}/tsc" FAKE_PS="${FAKE_BIN}/ps" \
-python3 - "${SOURCE_ROOT}/update.sh" <<'PY'
-import json
-import os
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-source = path.read_text()
-source = source.replace("BASE_ROOT=/srv/github-runner", f"BASE_ROOT={json.dumps(os.environ['BASE_ROOT'])}")
-source = source.replace("ADMIN_FILE=/etc/agent-relay/administrator", f"ADMIN_FILE={json.dumps(os.environ['ADMIN_FILE'])}")
-source = source.replace(
-    'SCRIPT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"',
-    f"SCRIPT_ROOT={json.dumps(os.environ['SOURCE_ROOT'])}",
-)
-source = source.replace("/usr/local/bin/tsc", os.environ["FAKE_TSC"])
-source = source.replace("/usr/bin/ps", os.environ["FAKE_PS"])
-path.write_text(source)
-PY
-
-cat > "${FAKE_BIN}/id" <<'EOF_ID'
+cat > "${FAKE_TSC}" <<EOF_TSC
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "${1:-}" == "-u" && "${2:-}" == "agent-relay-builder" ]]; then
-  printf '1001\n'
-  exit 0
-fi
-if [[ "${1:-}" == "-u" && "${2:-}" == "github-runner" ]]; then
-  printf '1002\n'
-  exit 0
-fi
-exec /usr/bin/id "$@"
+printf 'tsc %s\n' "\$*" >> "${COMMAND_LOG}"
+out=
+while (( \$# > 0 )); do
+  if [[ "\$1" == '--outDir' ]]; then out=\$2; shift 2; else shift; fi
+done
+mkdir -p "\${out}/src"
+printf 'compiled\n' > "\${out}/src/run-codex.js"
+EOF_TSC
+chmod 0755 "${FAKE_TSC}"
+
+cat > "${FAKE_BIN}/id" <<EOF_ID
+#!/usr/bin/env bash
+set -euo pipefail
+case "\$*" in
+  '-u') echo ${TEST_UID} ;;
+  '-un') echo test-admin ;;
+  '-u agent-relay-builder') echo 2002 ;;
+  '-u github-runner') echo 2001 ;;
+  *) exec /usr/bin/id "\$@" ;;
+esac
 EOF_ID
 
 cat > "${FAKE_BIN}/ps" <<EOF_PS
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "\$*" == *"-p 1 -o comm="* ]]; then
+if [[ "\$*" == '-p 1 -o comm=' ]]; then
   printf 'systemd\n'
-  exit 0
+elif [[ "\$*" == '-e -o euid=,comm=' ]]; then
+  printf '${TEST_UID} bash\n'
+elif [[ "\$*" == -o\ pgid=* ]]; then
+  printf '%s\n' "\${@: -1}"
+else
+  exec /usr/bin/ps "\$@"
 fi
-if [[ "\$*" == "-e -o euid=,comm=" ]]; then
-  printf 'process-table %s\n' "\$*" >> "${LOG_FILE}"
-  if [[ -f "${FAIL_PROCESS_INSPECTION}" ]]; then
-    exit 42
-  fi
-
-  printf '0 init\n'
-  mode="\$(cat "${PROCESS_MODE}")"
-  case "\${mode}" in
-    idle)
-      ;;
-    listener)
-      printf '1002 Runner.Listener\n'
-      ;;
-    foreign-worker)
-      printf '2002 Runner.Worker\n'
-      ;;
-    worker)
-      printf '1002 Runner.Listener\n'
-      remaining="\$(cat "${WORKER_POLLS}")"
-      if (( remaining > 0 )); then
-        printf '%s\n' "\$((remaining - 1))" > "${WORKER_POLLS}"
-        printf '1002 Runner.Worker\n'
-      fi
-      ;;
-    *)
-      echo "unexpected process mode: \${mode}" >&2
-      exit 1
-      ;;
-  esac
-  exit 0
-fi
-exec /bin/ps "\$@"
 EOF_PS
 
 cat > "${FAKE_BIN}/stat" <<EOF_STAT
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "\$*" == "-c %U|%G|%a -- ${ADMIN_FILE}" ]]; then
-  printf 'root|root|644\n'
+if (( \$# == 3 )) && [[ "\$1" == '-c' && "\$2" == '%u:%g|%a' && "\$3" == '${ADMIN_FILE}' ]]; then
+  printf '0:0|600\n'
   exit 0
 fi
 exec /usr/bin/stat "\$@"
 EOF_STAT
 
-cat > "${FAKE_BIN}/systemctl" <<EOF_SYSTEMCTL
-#!/usr/bin/env bash
-set -euo pipefail
-printf 'systemctl %s\n' "\$*" >> "${LOG_FILE}"
-while [[ "\${1:-}" == -* ]]; do shift; done
-case "\${1:-}" in
-  stop) printf 'inactive\n' > "${SERVICE_STATE}" ;;
-  enable) ;;
-  start) printf 'active\n' > "${SERVICE_STATE}" ;;
-  is-active) grep -qx active "${SERVICE_STATE}" ;;
-  status) ;;
-  *) echo "unexpected systemctl command: \$*" >&2; exit 1 ;;
-esac
-EOF_SYSTEMCTL
-
-cat > "${FAKE_BIN}/tsc" <<EOF_TSC
-#!/usr/bin/env bash
-set -euo pipefail
-printf 'tsc %s\n' "\$*" >> "${LOG_FILE}"
-out=""
-while (( \$# > 0 )); do
-  if [[ "\$1" == "--outDir" ]]; then
-    out="\$2"
-    shift 2
-  else
-    shift
-  fi
-done
-[[ -n "\${out}" ]]
-mkdir -p "\${out}/src"
-if [[ -f "${FAIL_NEXT_BUILD}" ]]; then
-  rm -f "${FAIL_NEXT_BUILD}"
-  printf 'partial\n' > "\${out}/src/partial.js"
-  exit 1
-fi
-printf 'new runtime\n' > "\${out}/src/run-codex.js"
-EOF_TSC
-
 cat > "${FAKE_BIN}/sudo" <<EOF_SUDO
 #!/usr/bin/env bash
 set -euo pipefail
-printf 'sudo %s\n' "\$*" >> "${LOG_FILE}"
-if [[ "\${1:-}" == "-v" || "\${1:-}" == "-k" ]]; then exit 0; fi
-while [[ "\${1:-}" == "-u" || "\${1:-}" == "-H" ]]; do
-  if [[ "\$1" == "-u" ]]; then shift 2; else shift; fi
-done
+printf 'sudo %s\n' "\$*" >> "${COMMAND_LOG}"
+if [[ "\${1:-}" == '-v' ]]; then printf '%s\n' "\${PPID}" > "${ROOT}/sudo-parent"; exit 0; fi
+if [[ "\${1:-}" == '-k' ]]; then rm -f -- "${ROOT}/sudo-parent"; exit 0; fi
+[[ -f "${ROOT}/sudo-parent" && "\$(<"${ROOT}/sudo-parent")" == "\${PPID}" ]] || exit 1
+if [[ "\$*" == '-n true' && "\${MOCK_SUDO_EXPIRE:-0}" == 1 && -e "${ROOT}/provisioning" ]]; then exit 1; fi
+if [[ "\${1:-}" == '-n' ]]; then shift; fi
+if [[ "\${1:-}" == '-u' ]]; then shift 2; fi
+if [[ "\${1:-}" == '--' ]]; then shift; fi
 case "\${1:-}" in
-  find)
-    if printf '%s\n' "\$*" | grep -q -- '-exec chown'; then exit 0; fi
-    shift
-    exec /usr/bin/find "\$@"
+  '${FAKE_BIN}/setsid')
+    pgid_file="\${@: -2:1}"
+    printf '%s\n' "\${BASHPID}" > "\${pgid_file}"
+    printf 'docker provisioner\n' >> "${DOCKER_LOG}"
+    if [[ "\${MOCK_DOCKER_MODE:-exit}" == hang ]]; then
+      : > "${ROOT}/provisioning"
+      while true; do /bin/sleep 1; done
+    fi
+    if [[ "\${MOCK_DOCKER_MODE:-exit}" == linger ]]; then
+      : > "${ROOT}/provisioning"
+      /bin/sleep 2
+    fi
+    exit "\${MOCK_DOCKER_STATUS:-0}"
     ;;
-  install)
+  '${DOCKER_PROVISIONER}')
+    printf 'docker provisioner\n' >> "${DOCKER_LOG}"
+    if [[ "\${MOCK_DOCKER_MODE:-exit}" == hang ]]; then
+      : > "${ROOT}/provisioning"
+      while true; do /bin/sleep 1; done
+    fi
+    if [[ "\${MOCK_DOCKER_MODE:-exit}" == linger ]]; then
+      : > "${ROOT}/provisioning"
+      /bin/sleep 2
+    fi
+    exit "\${MOCK_DOCKER_STATUS:-0}"
+    ;;
+  install|/usr/bin/install)
     shift
     filtered=()
     while (( \$# > 0 )); do
@@ -177,120 +126,168 @@ case "\${1:-}" in
     done
     exec /usr/bin/install "\${filtered[@]}"
     ;;
+  find|/usr/bin/find)
+    if printf '%s\n' "\$*" | /usr/bin/grep -q -- '-exec /usr/bin/chown'; then exit 0; fi
+    shift
+    exec /usr/bin/find "\$@"
+    ;;
   *) exec "\$@" ;;
 esac
 EOF_SUDO
 
-chmod 0700 "${FAKE_BIN}"/*
-export PATH="${FAKE_BIN}:/usr/bin:/bin"
-export HOME="${ROOT}/home"
-mkdir -p "${HOME}"
+cat > "${FAKE_BIN}/systemctl" <<EOF_SYSTEMCTL
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'systemctl %s\n' "\$*" >> "${COMMAND_LOG}"
+exit 0
+EOF_SYSTEMCTL
+
+cat > "${FAKE_BIN}/flock" <<'EOF_FLOCK'
+#!/usr/bin/env bash
+exit 0
+EOF_FLOCK
+cat > "${FAKE_BIN}/sleep" <<'EOF_SLEEP'
+#!/usr/bin/env bash
+/bin/sleep 0.001
+EOF_SLEEP
+cat > "${FAKE_BIN}/setsid" <<'EOF_SETSID'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-}" == '--wait' ]] && shift
+exec "$@"
+EOF_SETSID
+cat > "${FAKE_BIN}/kill" <<'EOF_KILL'
+#!/usr/bin/env bash
+if [[ "${MOCK_SIGNAL_FAIL:-0}" == 1 && "$*" == *TERM* && -e "${ROOT}/provisioning" ]]; then
+  rm -f -- "${ROOT}/provisioning"
+  exit 1
+fi
+exec /usr/bin/kill "$@"
+EOF_KILL
+chmod 0755 "${FAKE_BIN}"/*
+
+SOURCE_ROOT="${SOURCE_ROOT}" BUILD_ROOT="${BUILD_ROOT}" BUILD_HOME="${BUILD_HOME}" \
+ADMIN_FILE="${ADMIN_FILE}" FAKE_TSC="${FAKE_TSC}" FAKE_BIN="${FAKE_BIN}" \
+python3 - update.sh "${TRANSFORMED_UPDATE}" <<'PY'
+import json
+import os
+import pathlib
+import re
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text()
+replacements = {
+    'BASE_ROOT=/srv/github-runner': 'BASE_ROOT=' + json.dumps(os.path.realpath(os.path.join(os.environ['SOURCE_ROOT'], '..', '..'))),
+    'ADMIN_FILE=/etc/agent-relay/administrator': 'ADMIN_FILE=' + json.dumps(os.environ['ADMIN_FILE']),
+    '/usr/local/bin/tsc': os.environ['FAKE_TSC'],
+    '/usr/bin/id': os.path.join(os.environ['FAKE_BIN'], 'id'),
+    '/usr/bin/ps': os.path.join(os.environ['FAKE_BIN'], 'ps'),
+    '/usr/bin/stat': os.path.join(os.environ['FAKE_BIN'], 'stat'),
+    '/usr/bin/flock': os.path.join(os.environ['FAKE_BIN'], 'flock'),
+    '/usr/bin/setsid': os.path.join(os.environ['FAKE_BIN'], 'setsid'),
+    '/usr/bin/sleep': os.path.join(os.environ['FAKE_BIN'], 'sleep'),
+    '/usr/bin/kill': os.path.join(os.environ['FAKE_BIN'], 'kill'),
+}
+for old, new in replacements.items():
+    source = source.replace(old, new)
+
+fake_sudo = os.path.join(os.environ['FAKE_BIN'], 'sudo')
+source = source.replace('/usr/bin/sudo', fake_sudo)
+source = re.sub(r'(?<![/A-Za-z0-9_.-])sudo(?=\s)', fake_sudo, source)
+source = source.replace('PROCESS_GROUP_WAIT_STEPS=300', 'PROCESS_GROUP_WAIT_STEPS=2')
+source = source.replace('PROCESS_GROUP_WAIT_SECONDS=0.1', 'PROCESS_GROUP_WAIT_SECONDS=0')
+source = source.replace('PROVISIONER_DEADLINE_STEPS=7200', 'PROVISIONER_DEADLINE_STEPS=2')
+source = source.replace('PROVISIONER_DEADLINE_SECONDS=1', 'PROVISIONER_DEADLINE_SECONDS=0')
+source = source.replace('SUDO_REFRESH_STEPS=15', 'SUDO_REFRESH_STEPS=1')
+pathlib.Path(sys.argv[2]).write_text(source)
+PY
+chmod 0755 "${TRANSFORMED_UPDATE}"
 
 run_update() {
-  (cd "${SOURCE_ROOT}" && bash "${SOURCE_ROOT}/update.sh")
+  : > "${COMMAND_LOG}"
+  : > "${DOCKER_LOG}"
+  (
+    cd "${SOURCE_ROOT}"
+    PATH="${FAKE_BIN}:${PATH}" MOCK_DOCKER_STATUS="${1:-0}" \
+      MOCK_DOCKER_MODE="${2:-exit}" MOCK_SUDO_EXPIRE="${3:-0}" \
+      MOCK_SIGNAL_FAIL="${4:-0}" bash "${TRANSFORMED_UPDATE}"
+  )
 }
 
-reset_log() {
-  : > "${LOG_FILE}"
+set +e
+run_update 0 > "${ROOT}/success.out" 2> "${ROOT}/success.err"
+success_status=$?
+set -e
+if (( success_status != 0 )); then
+  cat "${ROOT}/success.out" >&2
+  cat "${ROOT}/success.err" >&2
+  printf 'successful updater scenario exited with status %s\n' "${success_status}" >&2
+  exit "${success_status}"
+fi
+
+test -f "${SOURCE_ROOT}/dist/src/run-codex.js"
+grep -Fq "${BUILD_ROOT}" "${COMMAND_LOG}"
+grep -Fq "tsc -p ${SOURCE_ROOT}/tsconfig.runtime.json --outDir ${SOURCE_ROOT}/dist" "${COMMAND_LOG}"
+grep -Fq 'docker provisioner' "${DOCKER_LOG}"
+grep -Fq 'systemctl stop actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
+grep -Fq 'systemctl enable actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
+grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
+grep -Fq 'Update completed. Runner is active with the finalized runtime and Docker access.' "${ROOT}/success.out"
+
+set +e
+run_update 42 > "${ROOT}/failure.out" 2> "${ROOT}/failure.err"
+failure_status=$?
+set -e
+if (( failure_status != 42 )); then
+  cat "${ROOT}/failure.out" >&2
+  cat "${ROOT}/failure.err" >&2
+  printf 'failing updater scenario exited with status %s instead of 42\n' "${failure_status}" >&2
+  exit 1
+fi
+grep -Fq 'Docker provisioning failed with status 42 after runtime finalization; the runner was restored with the finalized runtime.' "${ROOT}/failure.err"
+grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
+
+rm -f -- "${ROOT}/provisioning"
+set +e
+run_update 0 hang 0 > "${ROOT}/deadline.out" 2> "${ROOT}/deadline.err"
+deadline_status=$?
+set -e
+(( deadline_status == 70 )) || fail_status=1
+if [[ "${fail_status:-0}" == 1 ]]; then
+  cat "${ROOT}/deadline.err" >&2
+  printf 'deadline scenario exited with status %s instead of 70\n' "${deadline_status}" >&2
+  exit 1
+fi
+grep -Fq 'Docker provisioner exceeded its bounded deadline' "${ROOT}/deadline.err"
+grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
+
+rm -f -- "${ROOT}/provisioning"
+set +e
+run_update 0 hang 1 > "${ROOT}/expiry.out" 2> "${ROOT}/expiry.err"
+expiry_status=$?
+set -e
+if (( expiry_status == 0 )); then
+  cat "${ROOT}/expiry.err" >&2
+  printf 'expired-authority scenario unexpectedly succeeded\n' >&2
+  exit 1
+fi
+grep -Eq 'Noninteractive .*sudo authority expired|Update interrupted by TERM' "${ROOT}/expiry.err" || {
+  cat "${ROOT}/expiry.err" >&2
+  exit 1
 }
+grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
 
-assert_no_wait_message() {
-  local output="$1"
-  if grep -q 'Waiting for the active GitHub runner job to finish' "${output}"; then
-    echo "Update waited for a worker that should have been ignored" >&2
-    exit 1
-  fi
-}
-
-# An idle host with no github-runner processes must continue after listener stop.
-printf 'local change\n' > "${SOURCE_ROOT}/local-untracked.txt"
-mkdir -p "${SOURCE_ROOT}/dist/src"
-printf 'old runtime\n' > "${SOURCE_ROOT}/dist/src/run-codex.js"
-printf 'idle\n' > "${PROCESS_MODE}"
-reset_log
-run_update > "${ROOT}/idle.out" 2> "${ROOT}/idle.err"
-
-test -f "${SOURCE_ROOT}/local-untracked.txt"
-test "$(cat "${SOURCE_ROOT}/dist/src/run-codex.js")" = 'new runtime'
-grep -qx active "${SERVICE_STATE}"
-grep -q 'Agent Relay runtime rebuilt and activated successfully' "${ROOT}/idle.out"
-test "$(grep -c '^process-table ' "${LOG_FILE}")" -eq 1
-assert_no_wait_message "${ROOT}/idle.out"
-
-# A runner-owned listener without a worker is also idle.
-printf 'listener\n' > "${PROCESS_MODE}"
-reset_log
-run_update > "${ROOT}/listener.out" 2> "${ROOT}/listener.err"
-test "$(grep -c '^process-table ' "${LOG_FILE}")" -eq 1
-assert_no_wait_message "${ROOT}/listener.out"
-grep -qx active "${SERVICE_STATE}"
-
-# A process with the worker name but a different UID must not block replacement.
-printf 'foreign-worker\n' > "${PROCESS_MODE}"
-reset_log
-run_update > "${ROOT}/foreign-worker.out" 2> "${ROOT}/foreign-worker.err"
-test "$(grep -c '^process-table ' "${LOG_FILE}")" -eq 1
-assert_no_wait_message "${ROOT}/foreign-worker.out"
-grep -qx active "${SERVICE_STATE}"
-
-# A worker owned by github-runner delays replacement until it exits.
-printf 'worker\n' > "${PROCESS_MODE}"
-printf '2\n' > "${WORKER_POLLS}"
-reset_log
-run_update > "${ROOT}/worker.out" 2> "${ROOT}/worker.err"
-test "$(grep -c '^process-table ' "${LOG_FILE}")" -eq 3
-test "$(grep -c 'Waiting for the active GitHub runner job to finish' "${ROOT}/worker.out")" -eq 2
-
-stop_line="$(grep -n 'systemctl stop' "${LOG_FILE}" | head -n 1 | cut -d: -f1)"
-first_process_line="$(grep -n '^process-table ' "${LOG_FILE}" | head -n 1 | cut -d: -f1)"
-tsc_line="$(grep -n '^tsc ' "${LOG_FILE}" | head -n 1 | cut -d: -f1)"
-start_line="$(grep -n 'systemctl start' "${LOG_FILE}" | head -n 1 | cut -d: -f1)"
-(( stop_line < first_process_line && first_process_line < tsc_line && tsc_line < start_line ))
-
-# A real process-table failure is fatal before build or runtime deletion.
-mkdir -p "${BUILD_ROOT}"
-printf 'keep build\n' > "${BUILD_ROOT}/sentinel"
-mkdir -p "${SOURCE_ROOT}/dist/src"
-printf 'keep runtime\n' > "${SOURCE_ROOT}/dist/src/run-codex.js"
-printf 'idle\n' > "${PROCESS_MODE}"
-: > "${FAIL_PROCESS_INSPECTION}"
-reset_log
-if run_update > "${ROOT}/ps-failure.out" 2> "${ROOT}/ps-failure.err"; then
-  echo 'Process inspection failure unexpectedly succeeded' >&2
+rm -f -- "${ROOT}/provisioning"
+set +e
+run_update 0 linger 0 1 > "${ROOT}/signal-failure.out" 2> "${ROOT}/signal-failure.err"
+signal_failure_status=$?
+set -e
+if (( signal_failure_status != 70 )); then
+  cat "${ROOT}/signal-failure.err" >&2
+  printf 'signal-failure scenario exited with status %s instead of 70\n' "${signal_failure_status}" >&2
   exit 1
 fi
-rm -f "${FAIL_PROCESS_INSPECTION}"
-grep -q 'Could not inspect GitHub runner worker processes' "${ROOT}/ps-failure.err"
-grep -qx inactive "${SERVICE_STATE}"
-test "$(cat "${BUILD_ROOT}/sentinel")" = 'keep build'
-test "$(cat "${SOURCE_ROOT}/dist/src/run-codex.js")" = 'keep runtime'
-if grep -q '^tsc ' "${LOG_FILE}"; then
-  echo 'TypeScript ran after process inspection failed' >&2
-  exit 1
-fi
-if grep -q 'sudo rm -rf' "${LOG_FILE}"; then
-  echo 'Runtime directories were removed after process inspection failed' >&2
-  exit 1
-fi
-
-# A build failure performs no rollback. The service remains stopped and the
-# partial runtime remains until the next invocation deletes it and starts over.
-: > "${FAIL_NEXT_BUILD}"
-reset_log
-if run_update > "${ROOT}/build-failure.out" 2> "${ROOT}/build-failure.err"; then
-  echo 'Build failure unexpectedly succeeded' >&2
-  exit 1
-fi
-grep -qx inactive "${SERVICE_STATE}"
-test ! -e "${SOURCE_ROOT}/dist/src/run-codex.js"
-test -f "${SOURCE_ROOT}/dist/src/partial.js"
-
-printf 'idle\n' > "${PROCESS_MODE}"
-reset_log
-run_update > "${ROOT}/retry.out" 2> "${ROOT}/retry.err"
-grep -qx active "${SERVICE_STATE}"
-test "$(cat "${SOURCE_ROOT}/dist/src/run-codex.js")" = 'new runtime'
-test ! -e "${SOURCE_ROOT}/dist/src/partial.js"
-grep -q 'Agent Relay runtime rebuilt and activated successfully' "${ROOT}/retry.out"
+grep -Fq 'Docker provisioner exceeded its bounded deadline' "${ROOT}/signal-failure.err"
+grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
 
 printf 'update.sh system integration passed\n'

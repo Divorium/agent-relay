@@ -125,6 +125,8 @@ secure_source_checkout() {
     runner/resolve-request.mjs \
     runner/run-codex.mjs \
     scripts/codex-run \
+    scripts/docker-host.sh \
+    scripts/docker-host-debian.sh \
     scripts/toolchain-environment.sh \
     scripts/toolchain-smoke.sh; do
     if [[ ! -f "${SOURCE_ROOT}/${path}" || -L "${SOURCE_ROOT}/${path}" ]]; then
@@ -144,6 +146,8 @@ secure_source_checkout() {
     "${SOURCE_ROOT}/runner/resolve-request.mjs" \
     "${SOURCE_ROOT}/runner/run-codex.mjs" \
     "${SOURCE_ROOT}/scripts/codex-run" \
+    "${SOURCE_ROOT}/scripts/docker-host.sh" \
+    "${SOURCE_ROOT}/scripts/docker-host-debian.sh" \
     "${SOURCE_ROOT}/scripts/toolchain-smoke.sh"
 }
 
@@ -232,7 +236,7 @@ sudo apt-get install -y --no-install-recommends \
   ca-certificates curl wget jq git git-lfs gnupg sudo \
   python3 python3-pip python3-venv \
   build-essential clang cmake pkg-config \
-  zip unzip xz-utils zstd rsync file findutils diffutils
+  zip unzip xz-utils zstd file findutils diffutils
 curl -fsS --max-time 20 https://api.github.com/meta >/dev/null
 
 if [[ ! -x /usr/bin/node ]] || [[ "$(/usr/bin/node --version)" != v22.* ]]; then

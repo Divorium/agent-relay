@@ -1,0 +1,12 @@
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following NEW packages will be installed:
+  libncurses6 sl unrelated-agent
+0 upgraded, 3 newly installed, 0 to remove and 0 not upgraded.
+Inst libncurses6 (6.5+20250216-2 Debian:13.6/stable [amd64])
+Inst unrelated-agent (1.0 Debian:13.6/stable [amd64])
+Inst sl (5.02-1+b1 Debian:13.6/stable [amd64])
+Conf libncurses6 (6.5+20250216-2 Debian:13.6/stable [amd64])
+Conf unrelated-agent (1.0 Debian:13.6/stable [amd64])
+Conf sl (5.02-1+b1 Debian:13.6/stable [amd64])

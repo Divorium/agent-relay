@@ -7,7 +7,7 @@ TOOLCHAIN_RUST_BIN=${TOOLCHAIN_RUST_CARGO_HOME}/bin
 TOOLCHAIN_RUSTUP_HOME=/opt/rust/rustup
 TOOLCHAIN_SYSTEM_PATH=/usr/local/bin:/usr/bin:/bin
 TOOLCHAIN_PATH=${TOOLCHAIN_JAVA_HOME}/bin:${TOOLCHAIN_GO_ROOT}/bin:${TOOLCHAIN_RUST_BIN}:${TOOLCHAIN_SYSTEM_PATH}
-TOOLCHAIN_STATE_SUBDIRECTORIES=(cargo go go-cache gradle npm pip cache config data tmp)
+TOOLCHAIN_STATE_SUBDIRECTORIES=(cargo go go-cache gradle npm pip cache config data tmp docker)
 
 toolchain_validate_absolute_path() {
   local label="$1"
@@ -65,6 +65,7 @@ toolchain_environment_build() {
     "TMPDIR=${state_root}/tmp"
     "TMP=${state_root}/tmp"
     "TEMP=${state_root}/tmp"
+    "DOCKER_CONFIG=${state_root}/docker"
     "PATH=${TOOLCHAIN_PATH}"
   )
 }

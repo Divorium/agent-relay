@@ -110,18 +110,9 @@ test("one trusted profile defines the complete host toolchain environment", asyn
   assert.match(profile, /TOOLCHAIN_PATH=\$\{TOOLCHAIN_JAVA_HOME\}\/bin:\$\{TOOLCHAIN_GO_ROOT\}\/bin:\$\{TOOLCHAIN_RUST_BIN\}:\$\{TOOLCHAIN_SYSTEM_PATH\}/);
   assert.match(profile, /toolchain_environment_build\(\)/);
   for (const binding of [
-    "JAVA_HOME",
-    "RUSTUP_HOME",
-    "CARGO_HOME",
-    "GOPATH",
-    "GOCACHE",
-    "GRADLE_USER_HOME",
-    "NPM_CONFIG_CACHE",
-    "PIP_CACHE_DIR",
-    "XDG_CACHE_HOME",
-    "XDG_CONFIG_HOME",
-    "XDG_DATA_HOME",
-    "TMPDIR",
+    "JAVA_HOME", "RUSTUP_HOME", "CARGO_HOME", "GOPATH", "GOCACHE", "GRADLE_USER_HOME",
+    "NPM_CONFIG_CACHE", "PIP_CACHE_DIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+    "TMPDIR", "DOCKER_CONFIG",
   ]) {
     assert.ok(profile.includes(`"${binding}=`), `profile must define ${binding}`);
   }
@@ -140,30 +131,35 @@ test("one trusted profile defines the complete host toolchain environment", asyn
   assert.match(update, /\/usr\/local\/bin\/tsc/);
 });
 
-test("update directly rebuilds the runtime without repository validation", async () => {
+test("update finalizes the runtime before Docker provisioning and runner restoration", async () => {
   const { update } = await scripts();
-  const stop = update.indexOf('sudo systemctl stop "${SERVICE_NAME}"');
-  const wait = update.indexOf("wait_for_runner_worker", stop);
-  const removeRuntime = update.indexOf('sudo rm -rf -- "${RUNTIME_ROOT}"', wait);
-  const createRuntime = update.indexOf('sudo install -d -o "${BUILD_USER}"', removeRuntime);
-  const compile = update.indexOf("/usr/local/bin/tsc", createRuntime);
-  const adopt = update.indexOf('sudo find -P "${RUNTIME_ROOT}" -xdev -exec chown -h root:root', compile);
-  const start = update.indexOf('sudo systemctl start "${SERVICE_NAME}"', adopt);
-  assert.ok(stop >= 0 && wait > stop && removeRuntime > wait && createRuntime > removeRuntime);
-  assert.ok(compile > createRuntime && adopt > compile && start > adopt);
-  assert.match(update, /sudo -u "\$\{BUILD_USER\}" -H \/usr\/bin\/env -i/);
-  assert.match(update, /-p "\$\{RUNTIME_CONFIG\}"/);
-  assert.match(update, /--outDir "\$\{RUNTIME_ROOT\}"/);
+  const stop = update.indexOf('sudo -n systemctl stop "${SERVICE_NAME}"');
+  const wait = update.indexOf('process_table="$(/usr/bin/ps -e -o euid=,comm=)"', stop);
+  const removeBuild = update.indexOf('sudo -n /usr/bin/rm -rf --one-file-system -- "${BUILD_ROOT}"', wait);
+  const removeRuntime = update.indexOf('sudo -n /usr/bin/rm -rf --one-file-system -- "${SOURCE_ROOT}/dist"', removeBuild);
+  const createRuntime = update.indexOf('sudo -n /usr/bin/install -d -o "${BUILD_USER}"', removeRuntime);
+  const compile = update.indexOf('/usr/local/bin/tsc -p "${SOURCE_ROOT}/tsconfig.runtime.json"', createRuntime);
+  const entrypoint = update.indexOf('[[ -f "${SOURCE_ROOT}/dist/src/run-codex.js" ]]', compile);
+  const adopt = update.indexOf('sudo -n /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -exec /usr/bin/chown -h root:root', entrypoint);
+  const finalized = update.indexOf("runtime_finalized=1", adopt);
+  const provision = update.indexOf("/usr/bin/setsid --wait", finalized);
+  const restore = update.indexOf("\nrestore_runner\nrunner_status=", provision);
+  assert.ok(stop >= 0 && wait > stop && removeBuild > wait && removeRuntime > removeBuild);
+  assert.ok(createRuntime > removeRuntime && compile > createRuntime && entrypoint > compile);
+  assert.ok(adopt > entrypoint && finalized > adopt && provision > finalized && restore > provision);
+  assert.match(update, /sudo -n -u "\$\{BUILD_USER\}" \/usr\/bin\/env -i/);
+  assert.match(update, /-p "\$\{SOURCE_ROOT\}\/tsconfig\.runtime\.json"/);
+  assert.match(update, /--outDir "\$\{SOURCE_ROOT\}\/dist"/);
   assert.doesNotMatch(update, /npm ci|node --test|test-coverage|bash -n|node --check|toolchain-smoke/);
 });
 
-test("update performs no Git synchronization, staging, backup or rollback", async () => {
+test("update performs no Git synchronization, runtime staging or rollback", async () => {
   const { update } = await scripts();
   assert.doesNotMatch(update, /\bgit\s+(?:-C\s+\S+\s+)?(?:pull|status|reset|fetch|switch|checkout|rev-parse)\b/u);
   assert.doesNotMatch(update, /AGENT_RELAY_UPDATE_PHASE|original_head|reexec|previous_dist|activation_stage|dist_swapped|rollback/u);
-  assert.doesNotMatch(update, /\bmv\b|\.agent-relay-dist|\.dist\.previous|workspace\./u);
-  assert.match(update, /sudo rm -rf -- "\$\{BUILD_ROOT\}"/);
-  assert.match(update, /sudo rm -rf -- "\$\{RUNTIME_ROOT\}"/);
+  assert.doesNotMatch(update, /\.agent-relay-dist|\.dist\.previous|workspace\./u);
+  assert.match(update, /sudo -n \/usr\/bin\/rm -rf --one-file-system -- "\$\{BUILD_ROOT\}"/);
+  assert.match(update, /sudo -n \/usr\/bin\/rm -rf --one-file-system -- "\$\{SOURCE_ROOT\}\/dist"/);
 });
 
 test("runtime adoption does not follow links and applies production modes", async () => {
@@ -172,21 +168,23 @@ test("runtime adoption does not follow links and applies production modes", asyn
   assert.match(install, /Required source file must be a regular non-symlink file/);
   assert.match(install, /scripts\/toolchain-environment\.sh/);
   assert.doesNotMatch(install, /chown -R "\$\{owner\}:\$\{group\}" "\$\{SOURCE_ROOT\}"/);
-  assert.match(update, /find -P "\$\{RUNTIME_ROOT\}" -xdev -exec chown -h root:root \{\} \+/);
-  assert.match(update, /-type d -exec chmod 0755/);
-  assert.match(update, /-type f -exec chmod 0644/);
+  assert.match(update, /\/usr\/bin\/find -P "\$\{SOURCE_ROOT\}\/dist" -xdev -exec \/usr\/bin\/chown -h root:root \{\} \+/);
+  assert.match(update, /-type d -exec \/usr\/bin\/chmod 0755/);
+  assert.match(update, /-type f -exec \/usr\/bin\/chmod 0644/);
   assert.doesNotMatch(update, /chown -R/);
 });
 
-test("install and update contain no legacy Docker or Relay deployment", async () => {
+test("install remains free of Docker provisioning and both scripts contain no Relay transport deployment", async () => {
   const { install, update } = await scripts();
+  assert.doesNotMatch(install, /apt-get[^\n]*(?:docker-ce|containerd\.io)|groupadd docker|usermod[^\n]*docker|systemctl[^\n]*docker/iu);
+  assert.match(update, /scripts\/docker-host\.sh/u);
   for (const script of [install, update]) {
-    assert.doesNotMatch(script, /docker(?: |-)?compose|compose\.yml|AGENT_RELAY_TOKEN|AGENT_RELAY_URL|HOST_UID|HOST_GID/iu);
+    assert.doesNotMatch(script, /compose\.yml|AGENT_RELAY_TOKEN|AGENT_RELAY_URL|HOST_UID|HOST_GID/iu);
     assert.doesNotMatch(script, /\.env/);
   }
 });
 
-test("README files mirror the filesystem decision recorded in the completed plan", async () => {
+test("README files mirror the native runner filesystem decision", async () => {
   const plan = await readFile("docs/exec-plans/completed/2026-07-16-install-native-github-runner.md", "utf8");
   const specification = await readFile("docs/native-github-runner-specification.md", "utf8");
   for (const path of ["README.md", "docs/operations/README.md"]) {
@@ -198,9 +196,11 @@ test("README files mirror the filesystem decision recorded in the completed plan
     }
     assert.match(document, /\.\/install\.sh/);
     assert.match(document, /\.\/update\.sh/);
+    assert.doesNotMatch(document, /\/srv\/github-runner\/storage\/docker(?:\/|\s|$)/u);
     assert.doesNotMatch(document, /\/srv\/github-runner\/(?:runner|home|build|build-home)(?:\/|\s|$)/u);
-    assert.doesNotMatch(document, /\/opt\/agent-relay|docker compose|AGENT_RELAY_TOKEN/iu);
+    assert.doesNotMatch(document, /\/opt\/agent-relay|AGENT_RELAY_TOKEN/iu);
   }
+  assert.doesNotMatch(specification, /\/srv\/github-runner\/storage\/docker/u);
   assert.match(plan, /README files may summarize it but must not introduce additional filesystem decisions/);
   assert.match(plan, /runner\/_work` is a managed symlink to `\.\.\/work/);
 });

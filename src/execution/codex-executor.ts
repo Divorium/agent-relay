@@ -43,6 +43,8 @@ export function createCodexArgs(
     permission("/opt/rust", "read"),
     permission("/tmp", "deny"),
     permission("/var/tmp", "deny"),
+    permission("/var/run/docker.sock", "write"),
+    permission("/run/docker.sock", "write"),
     permission(resolve(runtimeRoot), "write"),
     permission(resolvedWorkspace, "write"),
     permission(join(resolvedWorkspace, ".git"), "read"),

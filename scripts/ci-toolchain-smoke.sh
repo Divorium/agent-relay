@@ -4,7 +4,7 @@ set -euo pipefail
 script_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 source "${script_root}/toolchain-environment.sh"
 
-state_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/agent-relay-toolchain.XXXXXX")"
+state_root="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:?TMPDIR is required when RUNNER_TEMP is unset}}/agent-relay-toolchain.XXXXXX")"
 cleanup() {
   rm -rf -- "${state_root}"
 }

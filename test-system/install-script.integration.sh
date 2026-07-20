@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(mktemp -d /tmp/agent-relay-install.XXXXXX)"
+ROOT="$(mktemp -d "${TMPDIR:-/tmp}/agent-relay-install.XXXXXX")"
 cleanup() { rm -rf -- "${ROOT}"; }
 trap cleanup EXIT
 
@@ -27,7 +27,8 @@ FAKE_RUSTUP_HOME="${ROOT}/opt-rust-rustup"
 FAKE_SYSTEM_PATH="${FAKE_BIN}:/usr/local/bin:/usr/bin:/bin"
 
 mkdir -p "${SOURCE_ROOT}" "${FAKE_BIN}" "${SERVICE_ROOT}" "${NEEDRESTART_ROOT}" "${ADMIN_HOME}"
-rsync -a --exclude=.git --exclude=node_modules --exclude=dist ./ "${SOURCE_ROOT}/"
+cp -a ./. "${SOURCE_ROOT}/"
+rm -rf -- "${SOURCE_ROOT}/.git" "${SOURCE_ROOT}/node_modules" "${SOURCE_ROOT}/dist"
 git init --initial-branch=main "${SOURCE_ROOT}" >/dev/null
 : > "${USERS_STATE}"
 : > "${COMMAND_LOG}"
@@ -207,7 +208,16 @@ chmod 0755 "${FAKE_BIN}"/* "${FAKE_CODEX}"
 
 export HOME="${ADMIN_HOME}"
 export PATH="${FAKE_BIN}:${PATH}"
+set +e
 printf 'mock-input\n' | bash "${TRANSFORMED_INSTALL}" > "${ROOT}/install.out" 2> "${ROOT}/install.err"
+install_status=$?
+set -e
+if (( install_status != 0 )); then
+  cat "${ROOT}/install.out" >&2
+  cat "${ROOT}/install.err" >&2
+  printf 'transformed install.sh exited with status %s\n' "${install_status}" >&2
+  exit "${install_status}"
+fi
 
 for path in agent-relay work runner home build build-home; do
   test -d "${STORAGE_ROOT}/${path}"

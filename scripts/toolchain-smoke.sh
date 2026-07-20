@@ -92,7 +92,6 @@ tar --version
 gzip --version
 xz --version
 zstd --version
-rsync --version
 file --version
 find --version
 diff --version
@@ -116,7 +115,7 @@ diff --version
 }
 
 codex --ask-for-approval never exec --help >/dev/null
-smoke_root="$(/usr/bin/mktemp -d /tmp/agent-relay-smoke.XXXXXX)"
+smoke_root="$(/usr/bin/mktemp -d "${TMPDIR}/agent-relay-smoke.XXXXXX")"
 cleanup_smoke() {
   /usr/bin/rm -rf -- "${smoke_root}"
 }

@@ -153,3 +153,47 @@ test("runner finalize restores working-tree changes after a rejected push and ca
     await rm(current.root, { recursive: true, force: true });
   }
 });
+
+test("runner finalize ownership preflight precedes every Git worktree inspection", async () => {
+  const finalize = await readFile("runner/finalize.sh", "utf8");
+  const ownershipScan = finalize.indexOf('/usr/bin/find -P "${canonical_workspace}" -xdev ! -uid "${runner_uid}"');
+  assert.ok(ownershipScan >= 0);
+  for (const command of ["git status", "git diff", "git add"]) {
+    assert.ok(finalize.indexOf(command) > ownershipScan, `${command} must follow ownership validation`);
+  }
+  assert.match(finalize, /-printf '%p\\n' \| \/usr\/bin\/head -n 20/u);
+  assert.match(finalize, /ownership_scan_status=\$\?/u);
+  assert.match(finalize, /Could not complete the filesystem-bounded workspace ownership inspection/u);
+  assert.doesNotMatch(finalize.slice(0, ownershipScan), /git (?:status|diff|add)/u);
+});
+
+test("runner finalize rejects a symlink workspace before Git inspection", async () => {
+  const current = await repositoryFixture("workspace-symlink");
+  const linked = join(current.root, "linked-workspace");
+  try {
+    const { symlink } = await import("node:fs/promises");
+    await symlink(current.workspace, linked);
+    const result = runResult(current.root, "bash", [join(process.cwd(), "runner", "finalize.sh")], finalizeEnv(linked, current.branch));
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /non-symlink directory/);
+  } finally {
+    await rm(current.root, { recursive: true, force: true });
+  }
+});
+
+test("runner finalize treats an unreadable ownership traversal as a failed inspection", async () => {
+  const current = await repositoryFixture("workspace-unreadable");
+  const unreadable = join(current.workspace, "unreadable");
+  try {
+    await mkdir(unreadable);
+    await writeFile(join(unreadable, "state"), "hidden\n");
+    await chmod(unreadable, 0o000);
+    const result = runResult(current.root, "bash", [join(process.cwd(), "runner", "finalize.sh")], finalizeEnv(current.workspace, current.branch));
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Could not complete the filesystem-bounded workspace ownership inspection/);
+    assert.doesNotMatch(result.stdout + result.stderr, /No changes to commit|\[agent\/test-flow/u);
+  } finally {
+    await chmod(unreadable, 0o700).catch(() => undefined);
+    await rm(current.root, { recursive: true, force: true });
+  }
+});

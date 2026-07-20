@@ -4,7 +4,32 @@ set -euo pipefail
 : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
 : "${TARGET_BRANCH:?TARGET_BRANCH is required}"
 
-cd "$GITHUB_WORKSPACE"
+if [[ ! -d "${GITHUB_WORKSPACE}" || -L "${GITHUB_WORKSPACE}" ]]; then
+  echo "GITHUB_WORKSPACE must be a non-symlink directory" >&2
+  exit 1
+fi
+canonical_workspace="$(/usr/bin/readlink -f -- "${GITHUB_WORKSPACE}")"
+if [[ -z "${canonical_workspace}" || "${canonical_workspace}" != "${GITHUB_WORKSPACE}" ]]; then
+  echo "GITHUB_WORKSPACE must be an existing canonical path" >&2
+  exit 1
+fi
+runner_uid="$(/usr/bin/id -u)"
+[[ "${runner_uid}" =~ ^[0-9]+$ ]] || { echo "Could not resolve the runner UID" >&2; exit 1; }
+set +e
+foreign_paths="$(/usr/bin/find -P "${canonical_workspace}" -xdev ! -uid "${runner_uid}" -printf '%p\n' -quit 2>/dev/null)"
+ownership_scan_status=$?
+set -e
+if (( ownership_scan_status != 0 )); then
+  echo "Could not complete the filesystem-bounded workspace ownership inspection; refusing Git inspection" >&2
+  exit 1
+fi
+if [[ -n "${foreign_paths}" ]]; then
+  echo "Workspace contains content not owned by runner UID ${runner_uid}; refusing Git inspection" >&2
+  /usr/bin/find -P "${canonical_workspace}" -xdev ! -uid "${runner_uid}" -printf '%p\n' | /usr/bin/head -n 20 >&2 || true
+  exit 1
+fi
+
+cd "${canonical_workspace}"
 git check-ref-format --branch "$TARGET_BRANCH" >/dev/null
 
 if test -z "$(git status --porcelain)"; then

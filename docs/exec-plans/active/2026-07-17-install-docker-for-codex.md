@@ -21,7 +21,7 @@ The branch is based on `main` commit `7c148c242feb421b59647f144ab6b78fe691af28`.
 
 The existing `.github/workflows/codex.yml` supports manual dispatch and direct Codex execution. No workflow change is required.
 
-Codex pushed the second implementation revision in commit `0dd18030803d0be2481d99fce33aeb73cc2d3470`. Its repository-safe validation passed inside the Codex run. Independent review found the unresolved blockers below, so the implementation is not accepted. Normal CI run `29744541905` passed on the current plan-only head; another exact-head run is required after the production fixes.
+Codex revision `87ef6f2c2f7645190bfe2cb75dfd85dae6b39be6` implemented the previous phase, sudo, service-recovery, path, and containerd fixes and passed a complete repository-safe validation in workflow run `29744669708`. Independent review found the remaining blockers below. Treat the implementation as incomplete.
 
 ## Binding Decisions
 
@@ -29,8 +29,8 @@ Codex pushed the second implementation revision in commit `0dd18030803d0be2481d9
 - Support Debian x86-64 through Docker's official apt repository.
 - Install `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, and `docker-compose-plugin` with the resolver-selected dependency closure.
 - Create the final Engine and containerd roots before first activation.
-- Recognize only a fresh supported state, an interrupted owned transaction, or the exact completed managed state.
-- Reject unknown pre-existing or newly introduced Docker packages, effective commands, CLI plugins, configuration, service activation links, units, sockets, policies, or data before package or recovery mutation.
+- Recognize only a fresh supported state, an interrupted transaction created by this feature, or the exact completed managed state.
+- Reject every unrecognized Docker, containerd, runc, CLI plugin, configuration, unit, alias, activation link, socket, policy, package, or data state before package or recovery mutation.
 - Ensure `github-runner` belongs to `docker`; ensure `agent-relay-builder` does not.
 - Validate the effective official CLI and plugins, local socket, service enablement and activity, storage roots, package ownership, unit ownership, and group boundaries.
 - Run `hello-world` on the first successful installation or explicit host acceptance. A completed repeated update must not require registry access.
@@ -40,70 +40,53 @@ Codex pushed the second implementation revision in commit `0dd18030803d0be2481d9
 
 ## Current Independent Review Findings
 
-1. **The sudo keepalive uses the wrong timestamp scope.** `sudo -v` runs with the main update shell as parent, while `sudo -n true` runs from a background subshell. On the default Debian `timestamp_type=tty`, a non-TTY session behaves like `ppid`; the background sudo process therefore does not share the main shell's timestamp and can fail even though the authenticated main shell still has valid authority. Refresh credentials from the main shell's control loop while waiting for `Runner.Worker` and while polling the provisioner, or install an explicit validated sudoers contract that makes the scope shared. Test real parent-PID-scoped timestamp behavior instead of a fake global boolean.
+1. **Unknown Docker-related packages are not included in the state boundary.** Fresh and interrupted-phase checks enumerate only the five managed packages and a fixed conflict list. Other installed Docker, containerd, runc, rootless, or CLI-plugin packages can survive when they do not own one of the four checked command paths. Inspect the installed package database for Docker/containerd/runc-related package names and ownership. Permit only the exact package set allowed by the current phase marker; reject every additional related package before repository, dpkg, apt, configuration, service, or recovery mutation.
 
-2. **An interruption after partial service activation is not recoverable.** Phase `installed` requires all Docker units to be inactive. If containerd, docker.socket, or docker.service starts and the provisioner exits, is killed, or loses the host before the `complete` marker is published, the next run rejects the owned state. Add a deterministic recovery contract for every activation boundary: either stop and verify all managed units before resuming activation, or validate an already active exact managed state and complete it. Cover each partially active combination and interruption after final validation but before marker publication.
+2. **Docker CLI plugin directories are not exact.** The code checks only entries named `docker-buildx` and `docker-compose`. Additional files, executables, directories, devices, or symlinks in Docker's user, local, and system CLI-plugin search directories are ignored. Inspect every direct directory entry. Fresh and preparing state must contain no plugin entries. Interrupted installed state may contain only the exact package-owned Buildx and Compose paths expected for the recorded packages. Completed state must contain exactly the package-owned expected plugin entries and no others.
 
-3. **Owned dpkg recovery rejects legitimate trigger states.** An interrupted Docker transaction can leave already-installed packages such as trigger processors in `triggers-pending` or `triggers-awaited` state even though they were not `Inst` rows in the simulation. The current recovery rejects every non-clean package not listed in the marker, which can require manual repair after an interruption caused by this update. Distinguish safe trigger states caused by the owned transaction, complete them through the bounded recovery path, and continue to reject unrelated unpacked, half-configured, or otherwise dirty packages. Add exact dpkg-status fixtures and recovery behavior.
+3. **Systemd aliases can bypass unit and activation-link validation.** The current scanners match only entries whose basename is `docker.service`, `docker.socket`, or `containerd.service`. A differently named unit alias or a differently named `*.wants` or `*.requires` link that resolves or textually points to one of the managed units is ignored but can activate the daemon. Inspect every unit alias and every activation entry in supported roots. Reject every alias targeting a managed unit and every activation link targeting a managed unit except the exact three managed enablement links.
 
-4. **A hard interruption before the transaction marker can strand `policy-rc.d`.** The managed policy is installed while the marker still says `preparing`; the transaction marker is published only after apt metadata refresh, simulation, and dependency analysis. SIGKILL or host loss in that interval leaves an exact managed policy that the next `preparing` run rejects. Treat an exact managed policy in the owned preparing phase as recoverable, remove it after confirming services remain inactive, and restart the transaction. Reject any non-exact policy. Scope the policy to deny only Docker Engine, Docker socket activation, and containerd; it must allow unrelated package services to behave normally.
+4. **Systemd root directory metadata is not validated.** Supported unit roots are checked only as non-symlink directories. A non-root-owned or group/world-writable root makes the exact unit and activation-link checks non-durable. Validate each existing supported unit root and each relevant `*.wants` or `*.requires` directory as canonical, root-owned, and not writable by group or others before package mutation and in completed state.
 
-5. **Absence and staging checks ignore dangling symlinks and non-regular entries.** Several predicates use `-e`, so dangling links at configuration files/directories, storage roots, default data roots, unit files, plugin paths, the socket, marker, or `policy-rc.d` can be treated as absent and mutated only after the fresh-state decision. Interrupted-publication scans select only regular files and therefore ignore matching symlinks, directories, sockets, and devices. Every managed or prohibited path must treat `-L` as existing, inspect every matching staging entry, and reject anything outside the exact safe regular-file recovery state before package or managed-state mutation.
+5. **Interrupted socket and service state can be inconsistent.** An exact-looking Docker socket can pass while all managed units are inactive, and service recovery treats only `systemctl is-active --quiet` success as active. Activating, deactivating, reloading, failed, maintenance, or rogue-socket states can therefore reach package recovery. Inspect exact `LoadState`, `ActiveState`, `SubState`, fragment, and socket presence. Before dpkg or apt mutation, either normalize a provably owned partial activation by stopping all managed units and verifying the socket and processes are gone, or reject the state. A socket may be accepted only when it is produced by an exact active managed socket or service state.
 
-6. **Effective command validation does not use Codex's real PATH.** The implementation checks only `/usr/local/bin:/usr/bin:/bin`, while Codex receives the shared toolchain PATH with Java, Go, and Rust bin directories before `/usr/local/bin`. Resolve `docker`, `dockerd`, `containerd`, and `ctr` against the exact production toolchain PATH in both fresh-state rejection and completed-state validation. Add a shadowing command in each earlier path class.
-
-7. **Completed state does not validate systemd enablement or exact override locations.** Runtime commands and the socket can work while one or more managed units are disabled, which breaks the installation after reboot. In completed state require `containerd.service`, `docker.socket`, and `docker.service` to be enabled and active. Reject administrator or runtime unit files and symlinks under `/etc`, `/run`, and `/usr/local`; validating only their canonical package-owned target is insufficient. Do not silently repair completed-state drift.
-
-8. **Fresh-state unit inspection misses activation links.** Direct unit files and drop-in directories are checked, but stale `*.wants` or `*.requires` links for the managed service/socket names can survive and become effective after package installation. Inspect future-active systemd activation links under the supported unit roots and reject unknown links before apt mutation. Validate the exact managed enablement links after activation.
-
-9. **Containerd inspection should be explicit and bounded.** Validate `/usr/bin/ctr` as a regular executable owned by `containerd.io`. Run it in a clean environment against the explicit local `/run/containerd/containerd.sock` address with a bounded command timeout, then parse the single metadata plugin root. Do not rely on ambient client state or an unbounded default client timeout.
-
-10. **Interrupted markers bypass the pre-mutation Docker boundary.** A valid marker currently makes classification return `managed` before checking newly introduced conflicting packages, effective commands and plugins, unit files and links, sockets, policies, default data, or unrelated managed-path occupation. Before repository, dpkg, apt, policy, configuration, or recovery mutation, validate the exact state permitted for `preparing`, `transaction`, and `installed`. In particular, transaction recovery must reject a clean conflicting package rather than allowing its unsimulated exact `apt-get install` to remove or alter that package.
-
-11. **Repository-safe tests do not cover these boundaries.** Add deterministic behavioral tests for ppid-scoped sudo timestamps, preparing-phase policy recovery and policy scope, trigger-pending recovery, every partial-service activation state, dangling symlinks and non-regular stages, exact production PATH shadowing, phase-specific pre-mutation rejection, activation links, completed-state enablement and override locations, and explicit bounded `ctr` invocation. Static source assertions may supplement but not replace these cases.
+6. **The final production head needs normal CI evidence.** A Codex-token push does not start a usable normal CI run and run `29746468422` ended as `action_required` with zero jobs. After the final production revision and independent review, publish a connector-authored plan/status commit and require normal CI to pass on that exact head.
 
 ## Implementation Work
 
-1. Replace the background sudo timestamp refresher with a control path that demonstrably shares the authenticated timestamp scope on Debian without a TTY.
-2. Make preparing, transaction, installed, and complete phases restartable across all policy, dpkg, package-state, service-start, validation, and marker-publication boundaries.
-3. Add exact phase-specific validation before every repository, dpkg, apt, policy, configuration, or recovery mutation.
-4. Extend fresh, interrupted, and completed path validation to reject symlinks, non-regular staging entries, administrator/runtime unit overrides, and unexpected activation links.
-5. Resolve effective commands with the exact shared toolchain PATH used by Codex.
-6. Validate exact service enablement and activity without repairing completed-state drift.
-7. Make containerd inspection package-owned, explicit, clean, and bounded.
-8. Scope the managed service-start policy to Docker/containerd and make every publication boundary recoverable.
-9. Add production-helper behavioral tests for every current finding.
-10. Keep current-state README, specification, and operator documentation at the accepted `main` contract until all acceptance evidence is complete.
-11. Run one complete `npm run check` after the final production edit, then review the final diff point by point against this plan.
+1. Add one phase-aware inventory of installed Docker/containerd/runc-related packages and reject every package outside the marker-authorized state.
+2. Replace named plugin checks with exact directory-entry inventories for every Docker CLI plugin search directory.
+3. Replace basename-only systemd checks with target-aware unit-alias and activation-link inspection.
+4. Validate canonical ownership and modes for all supported systemd roots and activation directories.
+5. Add an exact service/socket state model and normalize only provably owned interrupted activation before any package recovery mutation.
+6. Add deterministic behavioral tests for every current finding. Static source assertions may supplement but not replace production-helper or temporary filesystem/process tests.
+7. Preserve direct Docker access, Codex-owned application lifecycle, current documentation boundaries, and unchanged workflows.
+8. Run one complete `npm run check` after the last production edit.
+9. Review the final diff point by point against this plan, then obtain normal CI evidence on a connector-authored exact final head.
 
 ## Repository-Safe Tests
 
 Required coverage includes:
 
-- fresh classification, interrupted owned recovery, and exact completed-state validation;
-- phase-specific rejection of newly introduced conflicting packages, effective commands, local/user CLI plugins, service activation links, units, drop-ins, sockets, policies, configuration, managed storage, and default data before mutation;
-- dangling symlink and non-regular staging-entry rejection before mutation;
-- exact canonical storage directories and configuration metadata;
-- no service activation before post-package revalidation;
-- recovery from every partial managed service activation state;
-- completed-state corruption, disabled-unit drift, and administrator/runtime unit overrides failing without repair;
-- atomic repository/configuration/marker publication and deterministic interruption recovery;
-- preparing-phase and transaction-phase narrowly scoped managed `policy-rc.d` recovery;
-- clean dpkg validation plus owned trigger-pending and trigger-awaited recovery;
-- one apt metadata refresh, exact candidates, official requested-package origin, and independently validated selected dependency closure;
-- effective command resolution through the exact production toolchain PATH;
-- explicit local bounded `ctr plugins ls -d` execution, package ownership, and exact root parsing;
-- runner Docker membership, builder exclusion, local socket metadata, Buildx, Compose, and first-install `hello-world` policy;
-- parent-PID-scoped sudo expiry, signal-delivery failure, descendant survival, provisioner deadline, TERM/KILL escalation, bounded reaping, and runner restoration ordering;
-- repository bind mounts used by Codex leaving the workspace fully owned by `github-runner`;
-- all current-main output, transcript, executor, finalizer, workflow, and sandbox regressions;
+- fresh-state rejection of an installed related package outside the five managed packages and fixed conflict list;
+- interrupted-phase rejection of a newly introduced related package not present in the marker;
+- exact phase-owned dependency and managed-package acceptance without matching unrelated package names accidentally;
+- every Docker CLI plugin search directory containing an extra regular file, directory, executable, device-equivalent fixture, or dangling symlink;
+- exact package-owned Buildx and Compose plugin acceptance in interrupted and completed states;
+- differently named systemd unit aliases targeting each managed unit;
+- differently named `*.wants` and `*.requires` links targeting each managed unit, including dangling textual targets that become valid after package installation;
+- non-root-owned, group-writable, and world-writable unit roots and activation directories;
+- exact managed enablement links and package unit files continuing to pass;
+- socket present with all units inactive, socket present with a failed or activating unit, and partial activation in each nonterminal `ActiveState`;
+- owned partial activation stopping all managed units and proving socket/process removal before package recovery;
+- all previously implemented repository, key, package, dependency, phase, policy, storage, sudo, process-group, service, executor, finalizer, workflow, and sandbox regressions;
 - exactly one active ExecPlan and no workflow changes.
 
 ## Real-Host Acceptance
 
 Repository-safe tests cannot prove privileged apt, dpkg, systemd, daemon, socket, group, storage-root, registry, or real Compose behavior.
 
-The automated disposable or designated Debian 13 x86-64 systemd host lifecycle must cover:
+The automated disposable or explicitly designated Debian 13 x86-64 systemd host lifecycle must cover:
 
 - a clean host with no Docker installation or data;
 - first installation without premature activation;
@@ -111,7 +94,7 @@ The automated disposable or designated Debian 13 x86-64 systemd host lifecycle m
 - absence of data written to default roots;
 - first-install `hello-world`;
 - a repeated update with registry access disabled;
-- package, repository, configuration, unit, activation-link, socket, ownership, and group evidence;
+- exact package, plugin, repository, configuration, unit, alias, activation-link, socket, ownership, and group evidence;
 - interruption and rerun at repository, configuration, marker, policy, apt, dpkg-trigger, service-start, validation, and completion-marker boundaries;
 - non-TTY sudo timestamp behavior plus TERM, INT, HUP, timeout, and failed-signal behavior;
 - a real Agent Relay request where Codex starts Compose, reads logs, executes a command, leaves the workspace runner-owned, and shuts the project down.
@@ -120,59 +103,39 @@ If this lifecycle is unavailable, keep the item blocked with its exact cause and
 
 ## Acceptance Criteria
 
-- The existing GitHub Action validates the exact final head and runs Codex directly.
 - `update.sh` installs the exact managed Docker stack on the supported fresh host.
 - Engine and containerd use the required permanent roots from their first start.
 - Interrupted owned phases resume without an undocumented manual repair step.
-- Completed updates validate rather than repair managed state, including service enablement and exact unit locations.
+- Completed updates validate rather than repair package, plugin, repository, configuration, unit, service, socket, group, and storage state.
 - A repeated update performs no unnecessary package mutation or registry access.
-- Unknown or newly introduced Docker state, symlinks, activation links, and command/plugin shadowing fail before package or recovery mutation.
-- Package selection uses one apt snapshot and cannot admit an unselected alternative or unrelated package.
-- The service-start policy is narrowly scoped and cannot remain after an owned interruption or completed transaction.
+- Every unrecognized related package, plugin entry, systemd alias, activation link, unsafe unit root, or inconsistent socket/service state fails before package or recovery mutation.
+- Package selection uses one apt snapshot and cannot admit an unselected alternative or unrelated dependency.
 - The updater cannot restore the runner while a root provisioner process may still be alive.
 - `github-runner` can use the effective official Docker CLI, Buildx, Compose, and socket; `agent-relay-builder` cannot.
 - Current documentation does not claim the feature before acceptance is complete.
 - `npm run check`, the Codex validation gate, and normal CI pass on the exact final head.
-- Independent final review finds no unresolved correctness, security, restartability, maintainability, or current-main regression issue.
+- Independent final review finds no unresolved correctness, security, restartability, maintainability, scope, or current-main regression issue.
 
 ## Progress
 
-- [x] Confirmed that the existing workflow can run Codex without workflow changes.
-- [x] Established and clarified the fresh-host permanent-storage architecture.
-- [x] Corrected the initial system-test harness and restored the complete validation gate.
-- [x] Reviewed Codex revision `f0131c2d535050b7f73705d55f7868786b31ac0e` and recorded its blockers.
-- [x] Ran Codex again on the corrected plan; it pushed `0dd18030803d0be2481d99fce33aeb73cc2d3470` after a complete local repository check.
-- [x] Completed the second independent code and job-log review and recorded the current blockers above.
-- [x] Normal CI run `29744541905` passed on plan-only head `980c595a9444f8e7616d7192b8a2079d9b35818f`.
-- [x] Implemented the current review fixes and behavioral tests in the final worktree revision.
-- [blocked] Run exact-head repository validation and CI after the final production edit. `npm run check` passed completely on 2026-07-20 after the final production edit (135 tests, 100% measured TypeScript coverage, runtime/syntax/toolchain/system gates), but this Codex checkout is detached with read-only `.git` metadata and exposes neither `gh` nor a publication credential interface. The concrete unblock condition is creation and publication of the final commit by the automated finalizer, followed by normal CI on that exact commit.
-- [blocked] Complete another independent final diff and job-log review. The current run completed a point-by-point self-review with no unresolved finding, but there is no exact-head CI job log or independent-review execution interface available before the final commit is published. The unblock condition is an independent automated review of the published final diff and its exact-head job logs.
-- [blocked] Run automated privileged real-host acceptance. The current environment is a non-root bubblewrap Codex sandbox rather than a designated disposable Debian systemd host; using the live runner host as a destructive installation/interruption target is not an approved lifecycle. The unblock condition is an automated disposable or explicitly designated Debian 13 x86-64 systemd host lifecycle covering the acceptance matrix.
-
-## Surprises & Discoveries
-
-- Default sudo timestamps are parent-process scoped when no terminal is present, so a background subshell is not a valid credential keeper for the main update shell.
-- A transaction can be package-clean but still leave owned service activation incomplete, and it can be package-dirty only because existing packages have pending triggers.
-- Shell `-e` does not detect dangling symlinks.
-- Systemd activation state includes enablement links in addition to unit fragments and drop-ins.
-- A valid ownership marker is not sufficient evidence that no unrelated state appeared after an interruption.
-- A parent-PID-scoped sudo contract also requires the privileged provisioner launch itself to be a direct child of the authenticated update shell; refreshing only the main shell would not fix a child-shell `sudo` launch.
-- The Codex execution sandbox can exercise repository-safe behavior and the complete repository gate, but it cannot stand in for a destructive privileged host lifecycle or publish an exact Git commit when `.git` is mounted read-only.
+- [x] Established the fresh-host permanent-storage architecture and direct final storage roots.
+- [x] Implemented and reviewed the first three provisioner revisions.
+- [x] Codex revision `87ef6f2c2f7645190bfe2cb75dfd85dae6b39be6` passed its complete repository-safe validation in run `29744669708`.
+- [x] Completed independent review of `87ef6f2c2f7645190bfe2cb75dfd85dae6b39be6` and recorded the current blockers above.
+- [ ] Implement the current state-boundary fixes and behavioral tests.
+- [ ] Run final repository validation, Codex validation, and normal CI on the exact final head.
+- [ ] Complete independent final diff and job-log review.
+- [blocked] Run automated privileged real-host acceptance. Cause: no approved disposable or designated Debian 13 x86-64 systemd host lifecycle is available. Impact: repository-safe tests cannot prove privileged host behavior. Unblock condition: provide the automated lifecycle and captured evidence described above.
 
 ## Decision Log
 
 - Use one permanent managed storage tree below `/srv/github-runner/storage/docker`.
-- Create both final roots before first activation and revalidate them after package work.
+- Create both final roots before first activation.
 - Permit mutation only while completing an exact owned initial transaction; completed state is validation-only.
-- Use one apt metadata snapshot and independently prove the selected dependency closure.
-- Refresh sudo authority only through a demonstrably shared timestamp scope.
-- Treat every symlink and staging-directory entry as explicit occupied state.
-- Confirm the full provisioner group is gone before runner restoration.
+- Treat package, plugin, unit, alias, activation-link, socket, and directory inventories as exact state rather than checking only known filenames.
+- Confirm the full provisioner process group is gone before runner restoration.
 - Keep current-state documentation unchanged until exact-head CI, independent review, and privileged host acceptance are complete.
-- Keep the plan active: passing worktree validation is evidence for implementation, not a substitute for exact-head CI, independent job-log review, or privileged host acceptance.
 
 ## Outcomes & Retrospective
 
-Implementation and repository-safe validation are complete. The final worktree uses main-shell parent-scoped sudo refresh and launch, exact phase boundaries before mutation, deterministic service recovery, trigger-aware dpkg recovery, narrow policy handling, symlink/staging rejection, the production Codex PATH, exact systemd enablement/override checks, and explicit bounded containerd inspection. `npm run check` passed on 2026-07-20, and the final self-review found no unresolved production or regression issue. No workflow, public API, request contract, installation argument, routing, README, specification, or operator-documentation change was required.
-
-The plan remains active because the final commit and exact-head CI/job logs do not yet exist in this read-only detached checkout, no independent automated final reviewer is available in this run, and no approved privileged disposable host lifecycle is available. Preserve the completed work and remove each blocker only when its stated automated evidence is produced.
+Not complete. Keep this plan active until implementation, exact-head CI, independent final review, and privileged real-host acceptance satisfy the criteria above.

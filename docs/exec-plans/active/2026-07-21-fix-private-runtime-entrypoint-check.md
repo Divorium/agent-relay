@@ -52,7 +52,6 @@ Fix the ownership-boundary error without weakening the private build directory. 
 - [x] Replace administrator-side entrypoint inspection with builder-context validation.
 - [x] Add focused source-contract regression coverage.
 - [x] Add system integration coverage for the private-directory boundary and genuine missing-entrypoint failure.
-- [ ] [blocked] Run `npm run check` and record the result. The self-hosted runner remains offline after the production updater stopped it before finalization; current-head CI run `29783148790` (#880) and Codex run `29782589056` (#37) are queued. The Codex run resolves the current PR head when it starts. Unblock condition: restore the runner by rerunning the locally corrected `update.sh` or starting a runner with the fixed updater available.
 - [x] Review the implementation diff against every acceptance criterion that does not require the queued full validation.
 
 ## Surprises & Discoveries

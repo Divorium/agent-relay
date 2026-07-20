@@ -34,7 +34,7 @@ This change fixes the ownership-boundary error without weakening the private bui
 1. Update the compiled-entrypoint validation in `update.sh` so it runs through `${BUILD_USER}` while the output directory is still private.
 2. Preserve ordering: compile as builder, validate as builder, adopt the runtime tree as `root:root`, normalize directory and file modes, then set `runtime_finalized=1`.
 3. Add `test/private-runtime-entrypoint.test.ts` to require builder-context validation, reject the administrator-side shell-file test, and verify sequencing through finalization.
-4. Add `test-system/private-runtime-entrypoint.integration.sh` to model an entrypoint inaccessible to the updater caller but accessible through the mocked builder boundary; cover both an existing and a genuinely missing entrypoint, and wire the script into `check:shell` and `check:system`.
+4. Add `test-system/private-runtime-entrypoint.integration.sh` as a focused updater harness that executes a transformed copy of the real `update.sh`. The success scenario keeps `dist` inaccessible to the updater caller while builder compilation and validation succeed. The missing-entrypoint scenario proves that the updater exits before runtime adoption, Docker provisioning, and runner restoration.
 5. Run the full repository validation and review the final diff for any permission weakening or altered failure semantics.
 
 ## Acceptance Criteria
@@ -51,7 +51,7 @@ This change fixes the ownership-boundary error without weakening the private bui
 
 - [x] Replace administrator-side entrypoint inspection with builder-context validation.
 - [x] Add focused source-contract regression coverage.
-- [x] Add system integration coverage for the private-directory boundary and genuine missing-entrypoint failure.
+- [x] Add updater-level system integration coverage for the private-directory boundary and genuine missing-entrypoint failure.
 - [x] Review the implementation diff against every acceptance criterion that does not require the queued full validation.
 
 ## Surprises & Discoveries
@@ -59,7 +59,8 @@ This change fixes the ownership-boundary error without weakening the private bui
 - The compiler output path is correct: `tsconfig.runtime.json` preserves `src/run-codex.ts` as `dist/src/run-codex.js`.
 - The failure was an access-control false negative, not evidence that TypeScript failed to emit the runtime.
 - The updater's safety behavior after the false negative worked as designed: because `runtime_finalized` remained false, the runner stayed stopped rather than restarting against an unvalidated replacement runtime.
-- A focused system test can reproduce the identity boundary without weakening production code: ordinary access is denied, the mocked builder check succeeds for the compiled file, permissions remain private, and the same builder check fails when the file is removed.
+- The first focused system test only executed a copied validation command and therefore did not prove updater control flow. It was replaced with a harness that executes the transformed production updater and inspects its command log.
+- The updater-level harness proves that successful validation is followed by adoption, Docker provisioning, and runner restoration, while a missing entrypoint reaches none of those operations.
 - The production failure also prevents the self-hosted runner from executing the PR that fixes it, so full CI evidence requires one manual recovery cycle on the host.
 
 ## Decision Log
@@ -67,9 +68,9 @@ This change fixes the ownership-boundary error without weakening the private bui
 - Keep the build directory private instead of making it traversable by the administrator.
 - Validate under the identity that owns and produced the build output.
 - Preserve validation before root ownership adoption so the updater does not bless an unchecked runtime tree.
-- Use dedicated focused contract and system tests rather than expanding the already large updater integration harness; both tests are included in the normal `npm run check` path.
+- Keep a dedicated focused updater harness rather than duplicating the entire broad updater integration matrix; the focused harness still executes the real transformed `update.sh` and is included in the normal `npm run check` path.
 - Keep this ExecPlan active until the queued full validation completes.
 
 ## Outcomes & Retrospective
 
-The implementation and focused regressions are present on the PR branch. Local validation passed for the new TypeScript contract under TypeScript 5.8.3, `bash -n` passed for the new system test, and the focused private-directory integration scenario passed for both present and missing entrypoints. Full repository validation remains pending on the intentionally stopped self-hosted runner and must be recorded before this plan can move to `completed`.
+The implementation and focused regressions are present on the PR branch. Local validation passed for the TypeScript source contract, `bash -n` passed for the updater-level system test, and the focused harness passed both the successful private-runtime scenario and the genuine missing-entrypoint scenario. The latter verifies that runtime adoption, Docker provisioning, and runner restoration are not reached after validation failure. Full repository validation remains pending on the intentionally stopped self-hosted runner and must be recorded before this plan can move to `completed`.

@@ -19,10 +19,11 @@ DOCKER_DEBIAN_CODENAME=trixie
 
 printf 'sl\n' > "${TMP}/requested"
 printf '%s\n' sl libncurses6 > "${TMP}/allowed"
-printf '%s\n' 'base-files|ii |13' > "${TMP}/installed"
-docker_debian_parse_simulation \
+printf 'libncurses6|ii |old\n' > "${TMP}/installed"
+if docker_debian_parse_simulation \
   "${ROOT}/test-system/fixtures/apt-simulation-new-dependency.txt" \
-  "${TMP}/requested" "${TMP}/allowed" "${TMP}/installed" "${TMP}/accepted" \
-  || fail "approved dependency closure was rejected"
+  "${TMP}/requested" "${TMP}/allowed" "${TMP}/installed" "${TMP}/accepted"; then
+  fail "installed dependency modification was accepted"
+fi
 
-printf 'Approved Docker apt simulation diagnostic passed\n'
+printf 'Installed dependency rejection diagnostic passed\n'

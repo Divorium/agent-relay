@@ -100,8 +100,29 @@ jobs:
               ;;
           esac
 
+      - name: Detect missing pull-request ExecPlan
+        id: plan_diff
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          candidates="$(
+            git diff --name-only --diff-filter=AM \
+              "${BASE_SHA}...${HEAD_SHA}" \
+              -- ':(glob)docs/exec-plans/active/*.md'
+          )"
+          if [[ -z "${candidates}" ]]; then
+            printf 'plan_found=false\n' >> "${GITHUB_OUTPUT}"
+          else
+            printf 'plan_found=unknown\n' >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Resolve active ExecPlan
         id: plan
+        if: github.event_name != 'pull_request' || steps.plan_diff.outputs.plan_found != 'false'
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -110,7 +131,7 @@ jobs:
         run: node /srv/github-runner/storage/agent-relay/runner/resolve-plan.mjs
 
       - name: Report missing active ExecPlan
-        if: steps.plan.outputs.plan_found == 'false'
+        if: steps.plan_diff.outputs.plan_found == 'false' || steps.plan.outputs.plan_found == 'false'
         shell: bash
         run: |
           message="No active ExecPlan was found in this pull request. Codex execution was skipped."
@@ -119,7 +140,7 @@ jobs:
 
       - name: Run Codex directly
         id: codex
-        if: steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != ''
+        if: steps.plan_diff.outputs.plan_found != 'false' && steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != ''
         continue-on-error: true
         env:
           CODEX_PLAN_PATH: ${{ steps.plan.outputs.plan_path }}
@@ -128,7 +149,7 @@ jobs:
         run: node /srv/github-runner/storage/agent-relay/runner/run-codex.mjs
 
       - name: Upload Agent Relay output
-        if: ${{ always() && steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != '' }}
+        if: ${{ always() && steps.plan_diff.outputs.plan_found != 'false' && steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: agent-relay-output
@@ -136,12 +157,12 @@ jobs:
           if-no-files-found: warn
 
       - name: Fail when Codex failed
-        if: ${{ steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != '' && steps.codex.outcome == 'failure' }}
+        if: ${{ steps.plan_diff.outputs.plan_found != 'false' && steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != '' && steps.codex.outcome == 'failure' }}
         shell: bash
         run: exit 1
 
       - name: Commit and push
-        if: ${{ steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != '' && steps.codex.outcome == 'success' }}
+        if: ${{ steps.plan_diff.outputs.plan_found != 'false' && steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != '' && steps.codex.outcome == 'success' }}
         shell: bash
         env:
           COMMIT_MESSAGE: ${{ steps.codex.outputs.commit_message }}

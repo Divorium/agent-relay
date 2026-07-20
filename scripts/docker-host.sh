@@ -7,6 +7,7 @@ DOCKER_HOST_ADAPTER=${DOCKER_HOST_SCRIPT_ROOT}/docker-host-debian.sh
 DOCKER_HOST_RUNNER_USER=github-runner
 DOCKER_HOST_BUILD_USER=agent-relay-builder
 DOCKER_HOST_SOCKET=/var/run/docker.sock
+DOCKER_HOST_RUNTIME_SOCKET=/run/docker.sock
 DOCKER_HOST_STORAGE_ROOT=/srv/github-runner/storage/docker
 DOCKER_HOST_ENGINE_ROOT=${DOCKER_HOST_STORAGE_ROOT}/engine
 DOCKER_HOST_CONTAINERD_ROOT=${DOCKER_HOST_STORAGE_ROOT}/containerd
@@ -21,10 +22,42 @@ DOCKER_HOST_OWNER_UID=0
 DOCKER_HOST_OWNER_GID=0
 DOCKER_HOST_DEFAULT_ENGINE_ROOT=/var/lib/docker
 DOCKER_HOST_DEFAULT_CONTAINERD_ROOT=/var/lib/containerd
-DOCKER_HOST_UNIT_ROOTS=(/etc/systemd/system /run/systemd/system /usr/local/lib/systemd/system /usr/lib/systemd/system /lib/systemd/system)
-DOCKER_HOST_OVERRIDE_UNIT_ROOTS=(/etc/systemd/system /run/systemd/system /usr/local/lib/systemd/system)
-DOCKER_HOST_PACKAGE_UNIT_ROOTS=(/usr/lib/systemd/system /lib/systemd/system)
+DOCKER_HOST_UNIT_ROOTS=(
+  /etc/systemd/system.control
+  /run/systemd/system.control
+  /run/systemd/transient
+  /run/systemd/generator.early
+  /etc/systemd/system
+  /etc/systemd/system.attached
+  /run/systemd/system
+  /run/systemd/system.attached
+  /run/systemd/generator
+  /usr/local/lib/systemd/system
+  /usr/lib/systemd/system
+  /run/systemd/generator.late
+)
+DOCKER_HOST_OVERRIDE_UNIT_ROOTS=(
+  /etc/systemd/system.control
+  /run/systemd/system.control
+  /run/systemd/transient
+  /run/systemd/generator.early
+  /etc/systemd/system
+  /etc/systemd/system.attached
+  /run/systemd/system
+  /run/systemd/system.attached
+  /run/systemd/generator
+  /usr/local/lib/systemd/system
+  /run/systemd/generator.late
+)
+DOCKER_HOST_PACKAGE_UNIT_ROOTS=(/usr/lib/systemd/system)
 DOCKER_HOST_ENABLE_ROOT=/etc/systemd/system
+DOCKER_HOST_PLUGIN_DIRS=(
+  "${DOCKER_HOST_RUNNER_HOME}/.docker/cli-plugins"
+  /usr/local/lib/docker/cli-plugins
+  /usr/local/libexec/docker/cli-plugins
+  /usr/lib/docker/cli-plugins
+  /usr/libexec/docker/cli-plugins
+)
 DOCKER_HOST_CODEX_PATH=/opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin
 DOCKER_HOST_CTR_TIMEOUT_SECONDS=10
 DOCKER_HOST_STATE_CONTAINER=
@@ -262,12 +295,7 @@ docker_host_remove_empty_default_data() {
 }
 
 docker_host_any_package_present() {
-  local package status
-  for package in "${DOCKER_DEBIAN_CONFLICTS[@]}" "${DOCKER_DEBIAN_PACKAGES[@]}"; do
-    status="$(docker_debian_package_status "${package}")"
-    docker_debian_package_absent "${status}" || return 0
-  done
-  return 1
+  [[ -n "$(docker_debian_related_package_inventory)" ]]
 }
 
 docker_host_marker_package_contains() {
@@ -277,15 +305,16 @@ docker_host_marker_package_contains() {
 
 docker_host_validate_phase_packages() {
   local phase="$1" package status version expected marker_packages=${DOCKER_HOST_STATE_ROOT}/boundary-marker-packages
+  local related_packages=${DOCKER_HOST_STATE_ROOT}/boundary-related-packages
   docker_host_marker_packages > "${marker_packages}"
-  for package in "${DOCKER_DEBIAN_CONFLICTS[@]}"; do
-    docker_debian_package_absent "$(docker_debian_package_status "${package}")" || return 1
-  done
+  docker_debian_related_package_inventory > "${related_packages}"
+  while IFS='|' read -r package status version; do
+    [[ -n "${package}" ]] || continue
+    docker_host_marker_package_contains "${package}" "${marker_packages}" || return 1
+  done < "${related_packages}"
   if [[ "${phase}" == preparing ]]; then
-    for package in "${DOCKER_DEBIAN_PACKAGES[@]}"; do
-      docker_debian_package_absent "$(docker_debian_package_status "${package}")" || return 1
-    done
-    return 0
+    [[ ! -s "${related_packages}" ]]
+    return
   fi
   while IFS='|' read -r package expected; do
     [[ -n "${package}" ]] || continue
@@ -309,21 +338,98 @@ docker_host_command_state_absent() {
   return 0
 }
 
-docker_host_local_plugin_overrides_absent() {
-  local directory plugin
+docker_host_plugin_inventory_validate() {
+  local mode="$1" directory entry expected_buildx= expected_compose= owner listing=${DOCKER_HOST_STATE_ROOT}/plugin-entries.bin
+  local marker_packages=${DOCKER_HOST_STATE_ROOT}/plugin-marker-packages seen_buildx=0 seen_compose=0
   docker_host_path_absent "${DOCKER_HOST_RUNNER_HOME}/.docker/config.json" || return 1
-  for directory in "${DOCKER_HOST_RUNNER_HOME}/.docker/cli-plugins" \
-    /usr/local/lib/docker/cli-plugins /usr/local/libexec/docker/cli-plugins; do
-    for plugin in docker-buildx docker-compose; do docker_host_path_absent "${directory}/${plugin}" || return 1; done
+  : > "${listing}"
+  for directory in "${DOCKER_HOST_PLUGIN_DIRS[@]}"; do
+    docker_host_path_absent "${directory}" && continue
+    [[ -d "${directory}" && ! -L "${directory}" ]] || return 1
+    /usr/bin/find -P "${directory}" -mindepth 1 -maxdepth 1 -print0 >> "${listing}" || return 1
   done
+  if [[ "${mode}" != absent ]]; then
+    docker_host_marker_packages > "${marker_packages}"
+    if docker_host_marker_package_contains docker-buildx-plugin "${marker_packages}"; then
+      expected_buildx="$(docker_debian_plugin_path docker-buildx-plugin docker-buildx 2>/dev/null || true)"
+    fi
+    if docker_host_marker_package_contains docker-compose-plugin "${marker_packages}"; then
+      expected_compose="$(docker_debian_plugin_path docker-compose-plugin docker-compose 2>/dev/null || true)"
+    fi
+  fi
+  while IFS= read -r -d '' entry; do
+    [[ -f "${entry}" && ! -L "${entry}" && -x "${entry}" ]] || return 1
+    if [[ -n "${expected_buildx}" && "${entry}" == "${expected_buildx}" ]]; then
+      owner="$(docker_debian_command_owner "${entry}" 2>/dev/null || true)"
+      [[ "${owner}" == docker-buildx-plugin ]] || return 1
+      ((seen_buildx += 1))
+    elif [[ -n "${expected_compose}" && "${entry}" == "${expected_compose}" ]]; then
+      owner="$(docker_debian_command_owner "${entry}" 2>/dev/null || true)"
+      [[ "${owner}" == docker-compose-plugin ]] || return 1
+      ((seen_compose += 1))
+    else
+      return 1
+    fi
+  done < "${listing}"
+  if [[ "${mode}" == exact ]]; then
+    (( seen_buildx == 1 && seen_compose == 1 ))
+  else
+    (( seen_buildx <= 1 && seen_compose <= 1 ))
+  fi
+}
+
+docker_host_local_plugin_overrides_absent() {
+  local -a saved=("${DOCKER_HOST_PLUGIN_DIRS[@]}")
+  DOCKER_HOST_PLUGIN_DIRS=("${DOCKER_HOST_RUNNER_HOME}/.docker/cli-plugins" /usr/local/lib/docker/cli-plugins /usr/local/libexec/docker/cli-plugins)
+  docker_host_plugin_inventory_validate absent
+  local status=$?
+  DOCKER_HOST_PLUGIN_DIRS=("${saved[@]}")
+  return "${status}"
 }
 
 docker_host_plugin_overrides_absent() {
-  local directory plugin
-  docker_host_local_plugin_overrides_absent || return 1
-  for directory in /usr/lib/docker/cli-plugins /usr/libexec/docker/cli-plugins; do
-    for plugin in docker-buildx docker-compose; do docker_host_path_absent "${directory}/${plugin}" || return 1; done
+  docker_host_plugin_inventory_validate absent
+}
+
+docker_host_unit_roots_safe() {
+  local root activation listing=${DOCKER_HOST_STATE_ROOT}/activation-directories.bin
+  : > "${listing}"
+  for root in "${DOCKER_HOST_UNIT_ROOTS[@]}"; do
+    docker_host_path_absent "${root}" && continue
+    docker_host_secure_path "${root}" directory || return 1
+    /usr/bin/find -P "${root}" -mindepth 1 -maxdepth 1 \( -name '*.wants' -o -name '*.requires' \) -print0 >> "${listing}" || return 1
   done
+  while IFS= read -r -d '' activation; do docker_host_secure_path "${activation}" directory || return 1; done < "${listing}"
+}
+
+docker_host_managed_unit_target() {
+  local path="$1" target= canonical= unit official
+  case "${path##*/}" in docker.service|docker.socket|containerd.service) printf '%s\n' "${path##*/}"; return 0 ;; esac
+  [[ -L "${path}" ]] || return 1
+  target="$(/usr/bin/readlink -- "${path}")" || return 1
+  case "${target##*/}" in docker.service|docker.socket|containerd.service) printf '%s\n' "${target##*/}"; return 0 ;; esac
+  canonical="$(/usr/bin/readlink -f -- "${path}" 2>/dev/null || true)"
+  [[ -n "${canonical}" ]] || return 1
+  for unit in docker.service docker.socket containerd.service; do
+    official="$(docker_host_official_unit_path "${unit}" 2>/dev/null || true)"
+    [[ -n "${official}" && "${canonical}" == "$(/usr/bin/readlink -f -- "${official}")" ]] || continue
+    printf '%s\n' "${unit}"
+    return 0
+  done
+  return 1
+}
+
+docker_host_unit_aliases_absent() {
+  local root path listing=${DOCKER_HOST_STATE_ROOT}/unit-aliases.bin
+  : > "${listing}"
+  for root in "${DOCKER_HOST_UNIT_ROOTS[@]}"; do
+    docker_host_path_absent "${root}" && continue
+    /usr/bin/find -P "${root}" -mindepth 1 -maxdepth 1 -type l -print0 >> "${listing}" || return 1
+  done
+  while IFS= read -r -d '' path; do
+    docker_host_managed_unit_target "${path}" >/dev/null 2>&1 || continue
+    return 1
+  done < "${listing}"
 }
 
 docker_host_direct_unit_state_absent() {
@@ -387,16 +493,15 @@ docker_host_activation_links_validate() {
   : > "${listing}"
   for root in "${DOCKER_HOST_UNIT_ROOTS[@]}"; do
     docker_host_path_absent "${root}" && continue
-    [[ -d "${root}" && ! -L "${root}" ]] || return 1
+    docker_host_secure_path "${root}" directory || return 1
     /usr/bin/find -P "${root}" -mindepth 2 -maxdepth 2 \
-      \( -path '*.wants/docker.service' -o -path '*.requires/docker.service' \
-      -o -path '*.wants/docker.socket' -o -path '*.requires/docker.socket' \
-      -o -path '*.wants/containerd.service' -o -path '*.requires/containerd.service' \) \
-      -print0 >> "${listing}" || return 1
+      \( -path '*.wants/*' -o -path '*.requires/*' \) -print0 >> "${listing}" || return 1
   done
   while IFS= read -r -d '' path; do
+    unit="$(docker_host_managed_unit_target "${path}" 2>/dev/null || true)"
+    [[ -n "${unit}" ]] || continue
     if [[ "${mode}" == absent ]]; then return 1; fi
-    unit="$(docker_host_expected_activation_link "${path}")" || return 1
+    [[ "$(docker_host_expected_activation_link "${path}" 2>/dev/null || true)" == "${unit}" ]] || return 1
     [[ -L "${path}" ]] || return 1
     canonical="$(/usr/bin/readlink -f -- "${path}")" || return 1
     expected="$(docker_host_official_unit_path "${unit}")" || return 1
@@ -436,10 +541,62 @@ docker_host_unit_absent() {
 }
 
 docker_host_services_inactive() {
-  local unit
+  local unit load active substate
   for unit in docker.service docker.socket containerd.service; do
-    ! /usr/bin/env LC_ALL=C LANG=C /usr/bin/systemctl is-active --quiet "${unit}" || return 1
+    load="$(docker_host_systemctl_property "${unit}" LoadState)" || return 1
+    active="$(docker_host_systemctl_property "${unit}" ActiveState)" || return 1
+    substate="$(docker_host_systemctl_property "${unit}" SubState)" || return 1
+    [[ "${load}" == loaded || "${load}" == not-found ]] || return 1
+    [[ "${active}" == inactive && "${substate}" == dead ]] || return 1
   done
+}
+
+docker_host_systemctl_property() {
+  /usr/bin/env LC_ALL=C LANG=C /usr/bin/systemctl show --property="$2" --value "$1" 2>/dev/null
+}
+
+docker_host_processes_absent() {
+  /usr/bin/ps -eo comm= | /usr/bin/awk '
+    $1=="dockerd" || $1=="containerd" || $1 ~ /^containerd-shim/ || $1=="docker-proxy" {found=1}
+    END {exit found}
+  '
+}
+
+docker_host_inspect_interrupted_service_state() {
+  local phase=${1:-"$(docker_host_marker_phase)"} unit load active substate fragment official socket_owned=0 engine_owned=0
+  DOCKER_HOST_SERVICE_RECOVERY_REQUIRED=0
+  for unit in containerd.service docker.socket docker.service; do
+    load="$(docker_host_systemctl_property "${unit}" LoadState)" || return 1
+    active="$(docker_host_systemctl_property "${unit}" ActiveState)" || return 1
+    substate="$(docker_host_systemctl_property "${unit}" SubState)" || return 1
+    fragment="$(docker_host_systemctl_property "${unit}" FragmentPath)" || return 1
+    case "${load}" in
+      not-found)
+        [[ "${active}" == inactive && "${substate}" == dead && -z "${fragment}" ]] || return 1
+        [[ "${phase}" == transaction ]] || return 1
+        ;;
+      loaded)
+        official="$(docker_host_official_unit_path "${unit}")" || return 1
+        [[ -n "${fragment}" && "$(/usr/bin/readlink -f -- "${fragment}")" == "$(/usr/bin/readlink -f -- "${official}")" ]] || return 1
+        case "${active}:${substate}" in
+          inactive:dead) ;;
+          active:listening) [[ "${unit}" == docker.socket ]] || return 1; socket_owned=1; DOCKER_HOST_SERVICE_RECOVERY_REQUIRED=1 ;;
+          active:running) [[ "${unit}" != docker.socket ]] || return 1; [[ "${unit}" == docker.service ]] && engine_owned=1; DOCKER_HOST_SERVICE_RECOVERY_REQUIRED=1 ;;
+          activating:*|deactivating:*|reloading:*|failed:*|maintenance:*|refreshing:*) DOCKER_HOST_SERVICE_RECOVERY_REQUIRED=1 ;;
+          *) return 1 ;;
+        esac
+        ;;
+      *) return 1 ;;
+    esac
+  done
+  if (( socket_owned == 1 || engine_owned == 1 )); then
+    docker_host_runtime_socket_present || return 1
+  fi
+  if docker_host_runtime_socket_present; then
+    docker_host_socket_safe_or_absent || return 1
+    (( socket_owned == 1 || engine_owned == 1 )) || return 1
+  fi
+  (( DOCKER_HOST_SERVICE_RECOVERY_REQUIRED != 0 )) || docker_host_processes_absent
 }
 
 docker_host_effective_components_safe_partial() {
@@ -456,11 +613,15 @@ docker_host_effective_components_safe_partial() {
 
 docker_host_socket_safe_or_absent() {
   local metadata
-  if docker_host_path_absent /run/docker.sock && docker_host_path_absent /var/run/docker.sock; then return 0; fi
-  [[ -S /run/docker.sock ]] || return 1
-  [[ "$(/usr/bin/readlink -f -- /var/run/docker.sock 2>/dev/null)" == /run/docker.sock ]] || return 1
-  metadata="$(/usr/bin/stat -c '%U:%G|%a' -- /run/docker.sock)" || return 1
+  if ! docker_host_runtime_socket_present; then return 0; fi
+  [[ -S "${DOCKER_HOST_RUNTIME_SOCKET}" ]] || return 1
+  [[ "$(/usr/bin/readlink -f -- "${DOCKER_HOST_SOCKET}" 2>/dev/null)" == "${DOCKER_HOST_RUNTIME_SOCKET}" ]] || return 1
+  metadata="$(/usr/bin/stat -c '%U:%G|%a' -- "${DOCKER_HOST_RUNTIME_SOCKET}")" || return 1
   [[ "${metadata}" == root:docker\|660 ]]
+}
+
+docker_host_runtime_socket_present() {
+  docker_host_path_occupied "${DOCKER_HOST_RUNTIME_SOCKET}" || docker_host_path_occupied "${DOCKER_HOST_SOCKET}"
 }
 
 docker_host_validate_phase_boundary() {
@@ -468,14 +629,22 @@ docker_host_validate_phase_boundary() {
   docker_host_validate_publication_stages "${phase}" || docker_host_fail inspection "${phase} state contains an unsafe managed publication stage"
   docker_host_validate_phase_packages "${phase}" || docker_host_fail inspection "${phase} package state is outside the owned Docker transaction"
   if [[ "${phase}" == transaction ]]; then docker_debian_assert_recovery_dpkg_bounded; else docker_debian_assert_clean_dpkg; fi
-  docker_host_local_plugin_overrides_absent || docker_host_fail inspection "${phase} state contains a local or user Docker CLI override"
+  docker_host_unit_roots_safe || docker_host_fail inspection "${phase} state contains an unsafe systemd unit or activation root"
+  docker_host_unit_aliases_absent || docker_host_fail inspection "${phase} state contains an alias targeting a managed Docker unit"
+  if [[ "${phase}" == preparing ]]; then
+    docker_host_plugin_inventory_validate absent || docker_host_fail inspection "Preparing state contains a Docker CLI plugin entry"
+  elif [[ "${phase}" == complete || "${phase}" == installed ]]; then
+    docker_host_plugin_inventory_validate exact || docker_host_fail inspection "${phase} state contains an incomplete or unexpected Docker CLI plugin inventory"
+  else
+    docker_host_plugin_inventory_validate partial || docker_host_fail inspection "Transaction state contains a Docker CLI plugin outside the recorded package transaction"
+  fi
   docker_host_directory_empty "${DOCKER_HOST_DEFAULT_ENGINE_ROOT}" && docker_host_directory_empty "${DOCKER_HOST_DEFAULT_CONTAINERD_ROOT}" \
     || docker_host_fail inspection "${phase} state contains unsupported default Docker data"
   if [[ "${phase}" == preparing ]]; then
     docker_host_command_state_absent || docker_host_fail inspection "Preparing state contains an effective Docker or containerd command"
     docker_host_direct_unit_state_absent || docker_host_fail inspection "Preparing state contains a Docker unit or drop-in"
     docker_host_activation_links_validate absent || docker_host_fail inspection "Preparing state contains a Docker activation link"
-    docker_host_path_absent /run/docker.sock && docker_host_path_absent /var/run/docker.sock \
+    docker_host_path_absent "${DOCKER_HOST_RUNTIME_SOCKET}" && docker_host_path_absent "${DOCKER_HOST_SOCKET}" \
       || docker_host_fail inspection "Preparing state contains a Docker socket"
     docker_host_validate_preparing_paths || docker_host_fail inspection "Preparing managed paths contain unexpected state"
     if docker_host_path_occupied "${DOCKER_HOST_POLICY}"; then
@@ -485,7 +654,7 @@ docker_host_validate_phase_boundary() {
     docker_host_effective_components_safe_partial || docker_host_fail inspection "${phase} state contains an unexpected effective command"
     docker_host_package_unit_state_safe_partial || docker_host_fail inspection "${phase} state contains an unexpected unit or drop-in"
     docker_host_activation_links_validate subset || docker_host_fail inspection "${phase} state contains an unexpected activation link"
-    docker_host_socket_safe_or_absent || docker_host_fail inspection "${phase} state contains an unexpected Docker socket"
+    docker_host_inspect_interrupted_service_state "${phase}" || docker_host_fail inspection "${phase} service, socket, or unit-manager state is inconsistent"
     docker_host_validate_storage_and_configuration
     if [[ "${phase}" == transaction ]]; then
       if docker_host_path_occupied "${DOCKER_HOST_POLICY}"; then
@@ -511,7 +680,7 @@ docker_host_classify() {
     || docker_host_fail inspection "Pre-existing Docker or containerd configuration is unsupported"
   docker_host_directory_empty "${DOCKER_HOST_DAEMON_DIRECTORY}" && docker_host_directory_empty "${DOCKER_HOST_CONTAINERD_DIRECTORY}" \
     || docker_host_fail inspection "Pre-existing Docker or containerd configuration directory content is unsupported"
-  docker_host_path_absent /run/docker.sock && docker_host_path_absent /var/run/docker.sock || docker_host_fail inspection "Pre-existing Docker socket state is unsupported"
+  ! docker_host_runtime_socket_present || docker_host_fail inspection "Pre-existing Docker socket state is unsupported"
   docker_host_directory_empty "${DOCKER_HOST_STORAGE_ROOT}" || docker_host_fail inspection "Managed Docker storage is already populated without a marker"
   docker_host_directory_empty "${DOCKER_HOST_DEFAULT_ENGINE_ROOT}" && docker_host_directory_empty "${DOCKER_HOST_DEFAULT_CONTAINERD_ROOT}" \
     || docker_host_fail inspection "Pre-existing default Docker or containerd data is unsupported"
@@ -520,6 +689,8 @@ docker_host_classify() {
   docker_host_path_absent "${DOCKER_DEBIAN_MANAGED_KEY}" && docker_host_path_absent /etc/apt/keyrings/docker.gpg || docker_host_fail inspection "Pre-existing Docker apt key state is unsupported"
   docker_debian_validate_repository_boundary fresh || docker_host_fail inspection "Pre-existing Docker repository staging state is unsupported"
   docker_host_direct_unit_state_absent || docker_host_fail inspection "Pre-existing Docker unit or drop-in files are unsupported"
+  docker_host_unit_roots_safe || docker_host_fail inspection "Pre-existing systemd unit or activation roots are unsafe"
+  docker_host_unit_aliases_absent || docker_host_fail inspection "Pre-existing systemd alias targets a managed Docker unit"
   docker_host_activation_links_validate absent || docker_host_fail inspection "Pre-existing Docker activation links are unsupported"
   local unit
   for unit in docker.service docker.socket containerd.service; do docker_host_unit_absent "${unit}" || docker_host_fail inspection "Pre-existing ${unit} is unsupported"; done
@@ -583,6 +754,7 @@ docker_host_validate_managed_packages() {
   done < "${marker_packages}"
   local conflict
   for conflict in "${DOCKER_DEBIAN_CONFLICTS[@]}"; do docker_debian_package_absent "$(docker_debian_package_status "${conflict}")" || return 1; done
+  docker_host_validate_phase_packages "${phase}"
 }
 
 docker_host_recover_transaction() {
@@ -613,6 +785,8 @@ docker_host_recover_transaction() {
 docker_host_inspect_official_units() {
   local unit owner fragment dropins official_path
   docker_host_override_unit_state_absent || docker_host_fail service "Docker units have administrator, runtime, or local overrides"
+  docker_host_unit_roots_safe || docker_host_fail service "Docker systemd unit or activation root metadata is unsafe"
+  docker_host_unit_aliases_absent || docker_host_fail service "A systemd alias targets a managed Docker unit"
   docker_host_package_unit_state_safe_partial || docker_host_fail service "Docker package unit locations are unsafe"
   for unit in containerd.service docker.service docker.socket; do
     [[ "${unit}" == containerd.service ]] && owner=containerd.io || owner=docker-ce
@@ -638,23 +812,13 @@ docker_host_validate_components() {
     effective="$(PATH="${DOCKER_HOST_CODEX_PATH}" command -v "${package}" 2>/dev/null || true)"
     [[ "${effective}" == "/usr/bin/${package}" ]] || docker_host_fail validation "Effective ${package} command is not the official package file"
   done
-  docker_host_local_plugin_overrides_absent || docker_host_fail validation "Docker CLI has a local or user plugin override"
+  docker_host_plugin_inventory_validate exact || docker_host_fail validation "Docker CLI plugin inventory is incomplete or unexpected"
   expected_buildx="$(docker_debian_plugin_path docker-buildx-plugin docker-buildx)" || docker_host_fail validation "Could not locate official Buildx plugin"
   [[ -f "${expected_buildx}" && ! -L "${expected_buildx}" && -x "${expected_buildx}" ]] || docker_host_fail validation "Official Buildx plugin is not a regular executable"
   [[ "$(docker_debian_command_owner "${expected_buildx}")" == docker-buildx-plugin ]] || docker_host_fail validation "Buildx plugin has unexpected ownership"
   expected_compose="$(docker_debian_plugin_path docker-compose-plugin docker-compose)" || docker_host_fail validation "Could not locate official Compose plugin"
   [[ -f "${expected_compose}" && ! -L "${expected_compose}" && -x "${expected_compose}" ]] || docker_host_fail validation "Official Compose plugin is not a regular executable"
   [[ "$(docker_debian_command_owner "${expected_compose}")" == docker-compose-plugin ]] || docker_host_fail validation "Compose plugin has unexpected ownership"
-  for path in \
-    "${DOCKER_HOST_RUNNER_HOME}/.docker/cli-plugins/docker-buildx" \
-    "${DOCKER_HOST_RUNNER_HOME}/.docker/cli-plugins/docker-compose" \
-    /usr/local/lib/docker/cli-plugins/docker-buildx /usr/local/lib/docker/cli-plugins/docker-compose \
-    /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-compose \
-    /usr/lib/docker/cli-plugins/docker-buildx /usr/lib/docker/cli-plugins/docker-compose \
-    /usr/libexec/docker/cli-plugins/docker-buildx /usr/libexec/docker/cli-plugins/docker-compose; do
-    docker_host_path_absent "${path}" || [[ "${path}" == "${expected_buildx}" || "${path}" == "${expected_compose}" ]] \
-      || docker_host_fail validation "Docker CLI plugin is shadowed by ${path}"
-  done
 }
 
 docker_host_membership_actions() { (( $1 == 1 )) || printf 'add-runner\n'; (( $2 == 0 )) || printf 'remove-builder\n'; }
@@ -674,32 +838,45 @@ docker_host_ensure_membership_and_services() {
 }
 
 docker_host_stop_managed_services() {
-  /usr/bin/env LC_ALL=C LANG=C /usr/bin/systemctl stop docker.service docker.socket containerd.service \
-    || docker_host_fail service "Could not stop partially activated Docker services"
+  local unit load
+  for unit in docker.service docker.socket containerd.service; do
+    load="$(docker_host_systemctl_property "${unit}" LoadState)" || docker_host_fail service "Could not inspect ${unit} before recovery stop"
+    [[ "${load}" == not-found ]] && continue
+    [[ "${load}" == loaded ]] || docker_host_fail service "${unit} has an unsupported load state before recovery stop"
+    docker_host_systemctl_stop "${unit}" \
+      || docker_host_fail service "Could not stop partially activated ${unit}"
+  done
   docker_host_services_inactive || docker_host_fail service "Docker services remained active after recovery stop"
+  ! docker_host_runtime_socket_present || docker_host_fail service "Docker socket remained after recovery stop"
+  docker_host_processes_absent || docker_host_fail service "Docker or containerd processes remained after recovery stop"
 }
 
-docker_host_service_recovery_action() {
-  (( $1 == 0 && $2 == 0 && $3 == 0 )) && printf 'none\n' || printf 'stop-all\n'
+docker_host_systemctl_stop() {
+  /usr/bin/env LC_ALL=C LANG=C /usr/bin/systemctl stop "$1"
 }
 
 docker_host_recover_services_if_needed() {
-  local containerd=0 socket=0 engine=0 action
-  /usr/bin/env LC_ALL=C LANG=C /usr/bin/systemctl is-active --quiet containerd.service && containerd=1 || true
-  /usr/bin/env LC_ALL=C LANG=C /usr/bin/systemctl is-active --quiet docker.socket && socket=1 || true
-  /usr/bin/env LC_ALL=C LANG=C /usr/bin/systemctl is-active --quiet docker.service && engine=1 || true
-  action="$(docker_host_service_recovery_action "${containerd}" "${socket}" "${engine}")"
-  [[ "${action}" == none ]] || docker_host_stop_managed_services
+  docker_host_inspect_interrupted_service_state "$(docker_host_marker_phase)" \
+    || docker_host_fail service "Interrupted service state changed or is no longer provably managed"
+  (( DOCKER_HOST_SERVICE_RECOVERY_REQUIRED == 0 )) || docker_host_stop_managed_services
 }
 
 docker_host_validate_service_state() {
-  local unit
+  local unit load active substate fragment official expected_substate
   docker_host_activation_links_validate exact || docker_host_fail service "Managed Docker activation links are incomplete or unexpected"
   for unit in containerd.service docker.socket docker.service; do
     /usr/bin/env LC_ALL=C LANG=C /usr/bin/systemctl is-enabled --quiet "${unit}" \
       || docker_host_fail service "${unit} is not enabled"
-    /usr/bin/env LC_ALL=C LANG=C /usr/bin/systemctl is-active --quiet "${unit}" \
-      || docker_host_fail service "${unit} is not active"
+    load="$(docker_host_systemctl_property "${unit}" LoadState)" || docker_host_fail service "Could not inspect ${unit} LoadState"
+    active="$(docker_host_systemctl_property "${unit}" ActiveState)" || docker_host_fail service "Could not inspect ${unit} ActiveState"
+    substate="$(docker_host_systemctl_property "${unit}" SubState)" || docker_host_fail service "Could not inspect ${unit} SubState"
+    fragment="$(docker_host_systemctl_property "${unit}" FragmentPath)" || docker_host_fail service "Could not inspect ${unit} FragmentPath"
+    official="$(docker_host_official_unit_path "${unit}")" || docker_host_fail service "Official ${unit} is unavailable"
+    [[ "${unit}" == docker.socket ]] && expected_substate=listening || expected_substate=running
+    [[ "${load}" == loaded && "${active}" == active && "${substate}" == "${expected_substate}" ]] \
+      || docker_host_fail service "${unit} runtime state is not exactly active/${expected_substate}"
+    [[ -n "${fragment}" && "$(/usr/bin/readlink -f -- "${fragment}")" == "$(/usr/bin/readlink -f -- "${official}")" ]] \
+      || docker_host_fail service "${unit} runtime fragment is not the official package unit"
   done
 }
 
@@ -720,8 +897,8 @@ docker_host_ctr_command() {
 docker_host_validate() {
   local client info containerd_info socket_metadata
   [[ -S "${DOCKER_HOST_SOCKET}" ]] || docker_host_fail validation "Docker Unix socket is unavailable: ${DOCKER_HOST_SOCKET}"
-  [[ "$(/usr/bin/readlink -f -- "${DOCKER_HOST_SOCKET}")" == /run/docker.sock ]] || docker_host_fail validation "Docker socket does not resolve to /run/docker.sock"
-  socket_metadata="$(/usr/bin/stat -c '%U:%G|%a' -- /run/docker.sock)" || docker_host_fail validation "Could not inspect Docker socket metadata"
+  [[ "$(/usr/bin/readlink -f -- "${DOCKER_HOST_SOCKET}")" == "${DOCKER_HOST_RUNTIME_SOCKET}" ]] || docker_host_fail validation "Docker socket does not resolve to ${DOCKER_HOST_RUNTIME_SOCKET}"
+  socket_metadata="$(/usr/bin/stat -c '%U:%G|%a' -- "${DOCKER_HOST_RUNTIME_SOCKET}")" || docker_host_fail validation "Could not inspect Docker socket metadata"
   [[ "${socket_metadata}" == root:docker\|660 ]] || docker_host_fail validation "Docker socket must be root:docker mode 0660"
   docker_host_validate_components
   client="$(docker_host_create_runner_client)" || docker_host_fail validation "Could not create Docker client state"

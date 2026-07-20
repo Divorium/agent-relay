@@ -122,9 +122,10 @@ If this lifecycle is unavailable, keep the item blocked with its exact cause and
 - [x] Implemented and reviewed the first three provisioner revisions.
 - [x] Codex revision `87ef6f2c2f7645190bfe2cb75dfd85dae6b39be6` passed its complete repository-safe validation in run `29744669708`.
 - [x] Completed independent review of `87ef6f2c2f7645190bfe2cb75dfd85dae6b39be6` and recorded the current blockers above.
-- [ ] Implement the current state-boundary fixes and behavioral tests.
-- [ ] Run final repository validation, Codex validation, and normal CI on the exact final head.
-- [ ] Complete independent final diff and job-log review.
+- [x] Implemented the current package, plugin, systemd alias/activation/metadata, and service-state boundary fixes with deterministic behavioral tests.
+- [x] Ran the complete repository-safe validation after the last production edit: `npm run check` passed on 2026-07-20 with 135 Node tests, 100% line/branch/function coverage, runtime and toolchain validation, shell and Node syntax validation, and all system integration suites.
+- [blocked] Run Codex validation and normal CI on the exact final head. Cause: PR #26 and remote head `4e9a59d4df28ce2060283b669ebe5ded24fe7811` were resolved through the GitHub connector, but every connector blob-creation request for the validated final tree returned `user cancelled MCP tool call`; `gh` is not installed, and a non-connector push would not satisfy the required normal-CI trigger. Impact: no connector-authored final commit or exact-head workflow run exists. Unblock condition: permit the GitHub connector to create and publish the final commit, then run the Codex validation gate and normal CI on that exact SHA.
+- [blocked] Complete independent final diff and job-log review. Cause: the current run completed a point-by-point self-review and corrected the dpkg-trigger unit-load restartability edge it found, but no independent-review execution interface or exact-head job log is available before connector publication. Impact: independence and CI-log acceptance are not proven. Unblock condition: run an independent automated review against the published final diff and exact-head workflow logs.
 - [blocked] Run automated privileged real-host acceptance. Cause: no approved disposable or designated Debian 13 x86-64 systemd host lifecycle is available. Impact: repository-safe tests cannot prove privileged host behavior. Unblock condition: provide the automated lifecycle and captured evidence described above.
 
 ## Decision Log
@@ -133,9 +134,21 @@ If this lifecycle is unavailable, keep the item blocked with its exact cause and
 - Create both final roots before first activation.
 - Permit mutation only while completing an exact owned initial transaction; completed state is validation-only.
 - Treat package, plugin, unit, alias, activation-link, socket, and directory inventories as exact state rather than checking only known filenames.
+- Inventory installed Docker/containerd/runc/rootless/plugin-related package names once per boundary check and permit a present related package only when the phase marker records its exact version.
+- Inspect all standard Debian system unit load roots, including transient, attached, control, and generator roots; treat only `/usr/lib/systemd/system` as a package-unit root.
+- Accept a Docker socket during interrupted recovery only with an exact active managed Docker socket or service, and prove all managed units, socket paths, and Docker/containerd processes are gone after normalization.
 - Confirm the full provisioner process group is gone before runner restoration.
 - Keep current-state documentation unchanged until exact-head CI, independent review, and privileged host acceptance are complete.
 
+No public API, request contract, installation argument, routing, or GitHub Actions workflow change is required for these state-boundary fixes.
+
+## Surprises & Discoveries
+
+- The original three-root systemd contract test encoded the incomplete scanner. Expanding production coverage to Debian's transient, attached, control, and generator unit roots required updating that static assertion; the subsequent complete validation passed.
+- Repository-safe socket tests cannot create the production root-owned Unix socket. Small runtime-state and stop-operation seams keep production commands fixed while allowing deterministic tests to prove socket/process cleanup and every supported nonterminal `ActiveState`.
+- Point-by-point restartability review found that an interrupted transaction can have package-owned unit files unpacked while systemd still reports `LoadState=not-found` before its dpkg reload trigger. That inactive, fragment-free combination is now accepted only in `transaction`; `installed` and `complete` require loaded official units.
+- The connected GitHub read APIs resolved PR #26, but connector write calls were cancelled and no `gh` executable is installed. Exact-head CI therefore remains a documented blocker rather than being replaced with a push that cannot satisfy the required trigger.
+
 ## Outcomes & Retrospective
 
-Not complete. Keep this plan active until implementation, exact-head CI, independent final review, and privileged real-host acceptance satisfy the criteria above.
+The five repository state-boundary findings are implemented and the complete repository-safe validation passes. No workflow or current-state README/operator documentation changed. Exact-head Codex/normal CI, independent final review, and privileged real-host acceptance remain incomplete, so keep this plan active.

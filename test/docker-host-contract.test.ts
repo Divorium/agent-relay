@@ -77,7 +77,11 @@ test("effective roots, plugins, groups, socket and first-install registry check 
   assert.match(host, /DOCKER_CONFIG=\$\{client\}/u);
   assert.match(host, /DOCKER_HOST_CODEX_PATH=\/opt\/java\/openjdk\/bin:\/usr\/local\/go\/bin:\/opt\/rust\/cargo\/bin:\/usr\/local\/bin:\/usr\/bin:\/bin/u);
   assert.match(host, /systemctl is-enabled --quiet/u);
-  assert.match(host, /DOCKER_HOST_OVERRIDE_UNIT_ROOTS=\(\/etc\/systemd\/system \/run\/systemd\/system \/usr\/local\/lib\/systemd\/system\)/u);
+  assert.match(host, /DOCKER_HOST_OVERRIDE_UNIT_ROOTS=\([\s\S]*?\/run\/systemd\/transient[\s\S]*?\/run\/systemd\/generator\.early[\s\S]*?\/etc\/systemd\/system[\s\S]*?\/run\/systemd\/system[\s\S]*?\/usr\/local\/lib\/systemd\/system[\s\S]*?\/run\/systemd\/generator\.late\n\)/u);
+  assert.match(host, /docker_host_plugin_inventory_validate exact/u);
+  assert.match(host, /docker_host_unit_aliases_absent/u);
+  assert.match(host, /docker_host_inspect_interrupted_service_state/u);
+  assert.match(host, /Docker or containerd processes remained after recovery stop/u);
   assert.match(host, /docker_host_validate_phase_boundary "\$\{phase\}"/u);
 });
 

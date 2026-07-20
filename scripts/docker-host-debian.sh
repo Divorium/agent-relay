@@ -41,6 +41,28 @@ docker_debian_package_absent() {
   [[ "${current}" == n || "${current}" == c ]]
 }
 
+docker_debian_related_package_records() {
+  local package_file="$1"
+  /usr/bin/awk -F'|' '
+    function related(name) {
+      return name ~ /(^|[-+.])(docker|moby|containerd|runc|rootlesskit|buildx)([-+.]|$)/ \
+        || name ~ /(^|[-+.])compose-switch([-+.]|$)/
+    }
+    length($2) >= 3 {
+      current=substr($2,2,1)
+      if (current!="n" && current!="c" && related($1)) print $1 "|" $2 "|" $3
+    }
+  ' "${package_file}"
+}
+
+docker_debian_related_package_inventory() {
+  local packages=${DOCKER_HOST_STATE_ROOT}/related-package-database.txt
+  /usr/bin/env LC_ALL=C LANG=C /usr/bin/dpkg-query -W -f='${Package}|${db:Status-Abbrev}|${Version}\n' \
+    > "${packages}" 2> "${DOCKER_HOST_STATE_ROOT}/related-package-database.err" \
+    || docker_host_fail inspection "Could not inventory Docker-related package state"
+  docker_debian_related_package_records "${packages}"
+}
+
 docker_debian_command_owner() {
   local owner status
   set +e

@@ -2,8 +2,11 @@
 set -euo pipefail
 
 if [[ "$(/usr/bin/id -u)" == 0 ]]; then
-  echo "private runtime entrypoint integration test must run as a non-root user" >&2
-  exit 1
+  [[ -x /usr/sbin/runuser ]] || {
+    echo "runuser is required to exercise private runtime permissions from a root test process" >&2
+    exit 1
+  }
+  exec /usr/sbin/runuser -u nobody -- /bin/bash "$0"
 fi
 
 ROOT="$(mktemp -d "${TMPDIR:-/tmp}/agent-relay-private-runtime.XXXXXX")"
@@ -53,15 +56,33 @@ actual="$(grep -F 'dist/src/run-codex.js' update.sh | head -n 1)"
   exit 1
 }
 
-PATH="${FAKE_BIN}:${PATH}" \
-PRIVATE_DIST="${PRIVATE_DIST}" \
-BUILD_USER=agent-relay-builder \
-SOURCE_ROOT="${SOURCE_ROOT}" \
-bash -c 'sudo -n -u "${BUILD_USER}" /usr/bin/test -f "${SOURCE_ROOT}/dist/src/run-codex.js"'
+run_builder_validation() {
+  PATH="${FAKE_BIN}:${PATH}" \
+  PRIVATE_DIST="${PRIVATE_DIST}" \
+  BUILD_USER=agent-relay-builder \
+  SOURCE_ROOT="${SOURCE_ROOT}" \
+  bash -c 'sudo -n -u "${BUILD_USER}" /usr/bin/test -f "${SOURCE_ROOT}/dist/src/run-codex.js"'
+}
+
+run_builder_validation
 
 mode="$(/usr/bin/stat -c '%a' -- "${PRIVATE_DIST}")"
 [[ "${mode}" == 0 ]] || {
   printf 'private runtime mode was widened permanently: %s\n' "${mode}" >&2
+  exit 1
+}
+
+chmod 0700 "${PRIVATE_DIST}"
+rm -f -- "${PRIVATE_DIST}/src/run-codex.js"
+chmod 000 "${PRIVATE_DIST}"
+if run_builder_validation; then
+  echo "builder validation unexpectedly accepted a missing runtime entrypoint" >&2
+  exit 1
+fi
+
+mode="$(/usr/bin/stat -c '%a' -- "${PRIVATE_DIST}")"
+[[ "${mode}" == 0 ]] || {
+  printf 'private runtime mode was widened after failed validation: %s\n' "${mode}" >&2
   exit 1
 }
 

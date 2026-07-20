@@ -95,7 +95,10 @@ test("plan resolver selects the single active plan changed by a pull request", a
       INPUT_PLAN_PATH: "",
     }, root);
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(await readFile(output, "utf8"), "plan_path=docs/exec-plans/active/task.md\n");
+    assert.equal(
+      await readFile(output, "utf8"),
+      "plan_found=true\nplan_path=docs/exec-plans/active/task.md\n",
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

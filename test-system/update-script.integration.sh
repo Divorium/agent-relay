@@ -66,6 +66,16 @@ else
 fi
 EOF_PS
 
+cat > "${FAKE_BIN}/stat" <<EOF_STAT
+#!/usr/bin/env bash
+set -euo pipefail
+if (( \$# == 3 )) && [[ "\$1" == '-c' && "\$2" == '%u:%g|%a' && "\$3" == '${ADMIN_FILE}' ]]; then
+  printf '0:0|600\n'
+  exit 0
+fi
+exec /usr/bin/stat "\$@"
+EOF_STAT
+
 cat > "${FAKE_BIN}/sudo" <<EOF_SUDO
 #!/usr/bin/env bash
 set -euo pipefail
@@ -74,11 +84,29 @@ if [[ "\${1:-}" == '-v' || "\${1:-}" == '-k' ]]; then exit 0; fi
 if [[ "\${1:-}" == '-n' ]]; then shift; fi
 if [[ "\${1:-}" == '-u' ]]; then shift 2; fi
 if [[ "\${1:-}" == '--' ]]; then shift; fi
-if [[ "\${1:-}" == '${DOCKER_PROVISIONER}' ]]; then
-  printf 'docker provisioner\n' >> "${DOCKER_LOG}"
-  exit "\${MOCK_DOCKER_STATUS:-0}"
-fi
-exec "\$@"
+case "\${1:-}" in
+  '${DOCKER_PROVISIONER}')
+    printf 'docker provisioner\n' >> "${DOCKER_LOG}"
+    exit "\${MOCK_DOCKER_STATUS:-0}"
+    ;;
+  install|/usr/bin/install)
+    shift
+    filtered=()
+    while (( \$# > 0 )); do
+      case "\$1" in
+        -o|-g) shift 2 ;;
+        *) filtered+=("\$1"); shift ;;
+      esac
+    done
+    exec /usr/bin/install "\${filtered[@]}"
+    ;;
+  find|/usr/bin/find)
+    if printf '%s\n' "\$*" | /usr/bin/grep -q -- '-exec /usr/bin/chown'; then exit 0; fi
+    shift
+    exec /usr/bin/find "\$@"
+    ;;
+  *) exec "\$@" ;;
+esac
 EOF_SUDO
 
 cat > "${FAKE_BIN}/systemctl" <<EOF_SYSTEMCTL
@@ -124,6 +152,7 @@ replacements = {
     '/usr/local/bin/tsc': os.environ['FAKE_TSC'],
     '/usr/bin/id': os.path.join(os.environ['FAKE_BIN'], 'id'),
     '/usr/bin/ps': os.path.join(os.environ['FAKE_BIN'], 'ps'),
+    '/usr/bin/stat': os.path.join(os.environ['FAKE_BIN'], 'stat'),
     '/usr/bin/flock': os.path.join(os.environ['FAKE_BIN'], 'flock'),
     '/usr/bin/setsid': os.path.join(os.environ['FAKE_BIN'], 'setsid'),
     '/usr/bin/sleep': os.path.join(os.environ['FAKE_BIN'], 'sleep'),

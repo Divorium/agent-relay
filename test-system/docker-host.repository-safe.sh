@@ -371,14 +371,20 @@ printf '%s\n' \
   'docker-scout-plugin|ii |2' \
   'containerd.io|iU |3' \
   'runc|rc |4' \
-  'rootlesskit|ii |5' \
-  'compose-switch|ii |6' \
-  'dockery|ii |7' \
-  'unrelated|ii |8' > "${TMP}/related-package-records"
+  'rootlesskit|rc |5' \
+  'docker-buildx-plugin|rc |6' \
+  'docker-compose-plugin|rc |7' \
+  'compose-switch|rc |8' \
+  'moby-cli|rc |9' \
+  'dockery|rc |10' \
+  'containerdb|rc |11' \
+  'unrelated|ii |12' > "${TMP}/related-package-records"
 related_records="$(docker_debian_related_package_records "${TMP}/related-package-records")"
-[[ "${related_records}" == $'docker-ce|ii |1\ndocker-scout-plugin|ii |2\ncontainerd.io|iU |3\nrootlesskit|ii |5\ncompose-switch|ii |6' ]] \
+[[ "${related_records}" == $'docker-ce|ii |1\ndocker-scout-plugin|ii |2\ncontainerd.io|iU |3\nrunc|rc |4\nrootlesskit|rc |5\ndocker-buildx-plugin|rc |6\ndocker-compose-plugin|rc |7\ncompose-switch|rc |8\nmoby-cli|rc |9' ]] \
   || fail "Docker-related package inventory was not exact"
-if /usr/bin/grep -Fq 'dockery' <<< "${related_records}"; then fail "unrelated matching package name was included"; fi
+if /usr/bin/grep -Eq 'dockery|containerdb|unrelated' <<< "${related_records}"; then
+  fail "similarly named unrelated package was included"
+fi
 
 printf 'sl|5.02-1+b1\n' > "${TMP}/requested"
 printf '%s\n' sl libncurses6 > "${TMP}/allowed"
@@ -514,6 +520,32 @@ if (
 ); then
   fail "fresh preparing state accepted an unrecorded related package"
 fi
+residual_packages=(
+  docker-ce containerd.io runc rootlesskit docker-buildx-plugin docker-compose-plugin
+  docker-scout-plugin compose-switch moby-cli
+)
+for residual_package in "${residual_packages[@]}"; do
+  set +e
+  (
+    DOCKER_HOST_MARKER=${TMP}/missing-fresh-marker
+    docker_debian_related_package_inventory() { printf '%s|rc |1\n' "${residual_package}"; }
+    docker_host_fail() {
+      [[ "$1" == inspection && "$2" == "Pre-existing Docker or container runtime package state is unsupported" ]] \
+        && exit 42
+      exit 43
+    }
+    docker_host_classify
+  )
+  fresh_status=$?
+  set -e
+  (( fresh_status == 42 )) || fail "fresh state accepted residual-config package ${residual_package}"
+  if (
+    docker_debian_related_package_inventory() { printf '%s|rc |1\n' "${residual_package}"; }
+    docker_host_validate_phase_packages preparing
+  ); then
+    fail "preparing state accepted residual-config package ${residual_package}"
+  fi
+done
 printf 'schema=1\nphase=transaction\npackage=docker-ce:1\n' > "${DOCKER_HOST_MARKER}"
 chmod 0600 "${DOCKER_HOST_MARKER}"
 (
@@ -532,12 +564,48 @@ if (
 ); then
   fail "new related package bypassed the interrupted transaction boundary"
 fi
+if (
+  docker_debian_related_package_inventory() { printf 'docker-ce|rc |1\n'; }
+  docker_debian_package_status() { printf 'rc |1\n'; }
+  docker_host_validate_phase_packages transaction
+); then
+  fail "transaction state accepted a marker package externally changed to residual-config"
+fi
+if (
+  docker_debian_related_package_inventory() { printf '%s\n' 'docker-ce|iU |1' 'docker-scout-plugin|rc |99'; }
+  docker_debian_package_status() { [[ "$1" == docker-ce ]] && printf 'iU |1\n' || printf 'rc |99\n'; }
+  docker_host_validate_phase_packages transaction
+); then
+  fail "transaction state accepted an unrecorded residual-config related package"
+fi
 printf 'schema=1\nphase=transaction\npackage=docker-ce:1\npackage=docker-helper:2\n' > "${DOCKER_HOST_MARKER}"
 (
   docker_debian_related_package_inventory() { printf '%s\n' 'docker-ce|iU |1' 'docker-helper|iU |2'; }
   docker_debian_package_status() { [[ "$1" == docker-ce ]] && printf 'iU |1\n' || printf 'iU |2\n'; }
   docker_host_validate_phase_packages transaction
 ) || fail "exact marker-owned related dependency set was rejected"
+printf '%s\n' \
+  'schema=1' \
+  'package=docker-ce:1' \
+  'package=docker-ce-cli:1' \
+  'package=containerd.io:1' \
+  'package=docker-buildx-plugin:1' \
+  'package=docker-compose-plugin:1' > "${TMP}/completed-marker-packages"
+for completed_phase in installed complete; do
+  {
+    printf 'schema=1\nphase=%s\n' "${completed_phase}"
+    /usr/bin/grep '^package=' "${TMP}/completed-marker-packages"
+  } > "${DOCKER_HOST_MARKER}"
+  if (
+    docker_debian_related_package_inventory() { printf 'docker-ce|rc |1\n'; }
+    docker_debian_package_status() {
+      [[ "$1" == docker-ce ]] && printf 'rc |1\n' || printf 'ii |1\n'
+    }
+    docker_host_validate_phase_packages "${completed_phase}"
+  ); then
+    fail "${completed_phase} state accepted a residual-config related package"
+  fi
+done
 printf 'schema=1\nphase=transaction\npackage=docker-ce:1\n' > "${DOCKER_HOST_MARKER}"
 printf 'changed\n' > "${DOCKER_HOST_DAEMON_CONFIG}"
 assert_revalidation_blocks_activation daemon-file

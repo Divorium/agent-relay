@@ -310,6 +310,7 @@ docker_host_validate_phase_packages() {
   docker_debian_related_package_inventory > "${related_packages}"
   while IFS='|' read -r package status version; do
     [[ -n "${package}" ]] || continue
+    [[ "${status:1:1}" != c ]] || return 1
     docker_host_marker_package_contains "${package}" "${marker_packages}" || return 1
   done < "${related_packages}"
   if [[ "${phase}" == preparing ]]; then

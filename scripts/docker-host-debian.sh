@@ -50,7 +50,7 @@ docker_debian_related_package_records() {
     }
     length($2) >= 3 {
       current=substr($2,2,1)
-      if (current!="n" && current!="c" && related($1)) print $1 "|" $2 "|" $3
+      if (current!="n" && related($1)) print $1 "|" $2 "|" $3
     }
   ' "${package_file}"
 }

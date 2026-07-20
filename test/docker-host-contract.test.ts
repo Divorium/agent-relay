@@ -65,6 +65,15 @@ test("package transaction pins requested and resolver-selected packages", async 
   assert.doesNotMatch(adapter, /apt-cache depends --recurse/u);
 });
 
+test("transaction recovery starts only after the package-state boundary passes", async () => {
+  const host = await source("scripts/docker-host.sh");
+  const main = host.indexOf("docker_host_main() {");
+  const boundary = host.indexOf('docker_host_validate_phase_boundary "${phase}"', main);
+  const recovery = host.indexOf("docker_host_recover_transaction", boundary);
+  assert.ok(main >= 0 && boundary > main && recovery > boundary);
+  assert.match(host, /\[\[ "\$\{status:1:1\}" != c \]\] \|\| return 1/u);
+});
+
 test("effective roots, plugins, groups, socket and first-install registry check are validated", async () => {
   const host = await source("scripts/docker-host.sh");
   assert.match(host, /info --format '\{\{\.DockerRootDir\}\}'/u);

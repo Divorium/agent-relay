@@ -157,11 +157,11 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - [x] Implemented phase recovery, sudo control, process-group cleanup, repository/key validation, package closure validation, service-start policy, exact storage, command/plugin inventories, systemd alias/activation validation, and service/socket normalization.
 - [x] Codex revision `34d4d2bd2d6b367908ade9a284d126c522c8cdf7` passed the complete repository-safe validation in workflow run `29747072289`.
 - [x] Re-evaluated plugin-root and ancestor-chain hardening against the actual dedicated-VM trust model; they are not merge blockers.
-- [ ] Implement the one remaining residual-config package-state fix with behavioral tests.
-- [ ] Run final repository validation and Codex validation.
-- [ ] Publish a connector-authored exact final head and require normal CI to pass.
-- [ ] Complete independent final diff and job-log review.
-- [ ] Merge the PR after the acceptance criteria above pass.
+- [x] Included related residual-config records in the package inventory and rejected them at the phase boundary, with behavioral coverage for fresh, preparing, transaction, installed, and complete states.
+- [x] Ran the final repository validation after the production edit: `npm run check` passed on 2026-07-20 with 136 tests, 100% source coverage, and all runtime, shell, toolchain, and system checks passing.
+- [blocked] Publish a connector-authored exact final head and require normal CI to pass. This checkout has no GitHub execution context or publication credential; the concrete unblock condition is connector finalization of these changes followed by normal CI on that exact commit.
+- [blocked] Complete exact-head job-log review. The local final diff review passed, but normal CI job logs do not exist until the connector-authored head is published and CI completes.
+- [blocked] Merge the PR after the acceptance criteria above pass. The concrete unblock condition is passing exact-head normal CI and its final job-log review.
 - [post-merge] Perform manual privileged host acceptance; open a new plan only if it exposes a defect.
 
 ## Decision Log
@@ -172,6 +172,7 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - Permit mutation only while completing an exact owned initial transaction; completed state is validation-only.
 - Treat package, plugin-entry, repository, key, configuration, unit, alias, activation-link, socket, process, and data inventories as exact state within the defined deployment model.
 - Treat related residual package configuration as evidence of a previous installation, not absence.
+- Keep the general dpkg absence predicate unchanged, but reject residual-config state explicitly inside the Docker-related phase boundary so unrelated residual configuration remains compatible with a clean global dpkg state.
 - Trust the dedicated VM's standard root-owned operating-system hierarchy; do not add general ancestor-chain hardening in this PR.
 - Confirm the full provisioner process group is gone before runner restoration.
 - Keep application-container lifecycle under Codex control.
@@ -186,7 +187,10 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - Docker activation can be interrupted in multiple nonterminal systemd states; recovery must prove the exact fragment/socket/process relationship before stopping services.
 - Docker CLI searches several plugin directories, so exact entry inventory must cover every configured search root rather than only known filenames.
 - Codex-token pushes can leave normal CI as `action_required` with no jobs; a connector-authored final status commit is needed for exact-head CI evidence.
+- Dpkg residual-config records are globally clean and package payloads are absent, so they must remain acceptable to the global dpkg audit while being independently rejected as evidence of a prior related runtime installation.
 
 ## Outcomes & Retrospective
 
-Not complete. Keep this plan active until the residual-config fix, complete repository validation, exact-head normal CI, and independent final review pass. Manual privileged host acceptance happens after merge and is not part of this PR's blocking acceptance.
+The residual-config implementation is complete and local acceptance passed. The related-package parser now retains `rc` records, and the package-state boundary rejects them before transaction recovery or validation-only completed-state handling. `npm run check` passed after the final production edit on 2026-07-20 with all 136 tests, 100% source coverage, and every repository validation stage successful. The final local diff review found no workflow, public API, request contract, installation argument, routing, README, or operator-documentation change.
+
+This plan remains active because connector-authored publication, exact-head normal CI, CI job-log review, and merge have not yet occurred. Manual privileged host acceptance happens after merge and is not part of this PR's blocking acceptance.

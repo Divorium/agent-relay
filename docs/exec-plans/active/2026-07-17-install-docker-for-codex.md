@@ -11,7 +11,9 @@ Docker Engine and containerd must use permanent state below `/srv/github-runner/
 - Docker Engine: `/srv/github-runner/storage/docker/engine`;
 - containerd: `/srv/github-runner/storage/docker/containerd`.
 
-The supported initial state is a fresh host without an existing or previously removed Docker/container runtime installation and without Docker data. The provisioner creates the final storage directories directly and configures both daemons before their first activation. Package-created default directories are valid only when empty and are removed before startup. Later updates may reuse only the exact managed installation created by this feature.
+The supported initial state includes either a clean host or an unmarked host that contains only safely removable dpkg residual-configuration records from an earlier Docker/container runtime installation. The provisioner must clean that residual package state, rerun the full fresh-host preflight, create the final storage directories directly, and configure both daemons before their first activation.
+
+Package-created default data directories are valid only when empty and are removed before startup. Populated Docker or containerd data is never deleted or migrated by this PR. Later updates may reuse only the exact managed installation created by this feature.
 
 Agent Relay exposes the ordinary host CLI and socket. Codex owns application-container lifecycle decisions.
 
@@ -21,7 +23,7 @@ The branch is based on `main` commit `7c148c242feb421b59647f144ab6b78fe691af28`.
 
 The existing `.github/workflows/codex.yml` supports manual dispatch and direct Codex execution. No workflow change is required.
 
-Codex revision `34d4d2bd2d6b367908ade9a284d126c522c8cdf7` implemented the exact related-package, plugin-entry, systemd alias/activation-link, unit-root, service/socket, phase-recovery, sudo, process-group, repository, and storage checks described below. Workflow run `29747072289` passed the complete repository-safe validation. Independent review leaves one implementation blocker: residual-config related packages are omitted from the package-state boundary.
+Codex revision `34d4d2bd2d6b367908ade9a284d126c522c8cdf7` implemented the exact package, plugin-entry, systemd alias/activation-link, unit-root, service/socket, phase-recovery, sudo, process-group, repository, and storage checks described below. Revision `ce9e3cc6fa0e86cf5db554e3fa69ebed9916600c` made residual-config records visible but rejected them in every phase. That behavior conflicts with the revised requirement for an unmarked host: safe residual package configuration must be removed automatically before normal installation.
 
 ## Scope and Trust Model
 
@@ -29,7 +31,8 @@ Codex revision `34d4d2bd2d6b367908ade9a284d126c522c8cdf7` implemented the exact 
 - There is no hostile local-user threat model for this PR.
 - Codex intentionally receives root-equivalent authority through membership in the rootful Docker group.
 - The operating system's standard root-owned filesystem hierarchy is trusted.
-- The provisioner must reject conflicting or stale Docker state visible through its defined package, command, plugin-entry, repository, configuration, unit, activation, socket, process, and data inventories.
+- The provisioner may clean dpkg residual configuration for Docker/containerd/runc/rootless/Buildx/Compose-related packages when no Agent Relay Docker marker exists and no active installation or Docker data exists.
+- The provisioner must not take over an installed or partially installed foreign runtime, delete populated Docker data, or silently adopt unknown active service state.
 - This PR does not attempt to make every trusted path durable against a concurrent privileged or local filesystem attacker.
 
 ## Binding Decisions
@@ -38,11 +41,15 @@ Codex revision `34d4d2bd2d6b367908ade9a284d126c522c8cdf7` implemented the exact 
 - Support Debian x86-64 through Docker's official apt repository.
 - Install `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, and `docker-compose-plugin` with the resolver-selected dependency closure.
 - Create the final Engine and containerd roots before first activation.
-- Do not copy or migrate Docker data. The final directories are created directly because Docker is being installed for the first time.
-- Recognize only a fresh supported state, an interrupted transaction created by this feature, or the exact completed managed state.
-- Reject every unrecognized installed or partially installed Docker, containerd, runc, rootless, Buildx, Compose, or related plugin package before repository, dpkg, apt, configuration, service, or recovery mutation.
-- Treat a related package in dpkg residual-config state as evidence of a previous installation, not as absence.
-- Reject unexpected effective commands, Docker CLI plugin entries, repository definitions, keys, configuration, units, aliases, activation links, sockets, policies, service states, processes, or data before mutation.
+- Do not copy or migrate Docker data. The final directories are created directly.
+- Recognize a clean fresh host, a cleanable unmarked residual-config host, an interrupted transaction created by this feature, or the exact completed managed state.
+- A dpkg `rc` record means the package payload was removed but residual package configuration remains. It is cleanable compatibility state, not an automatic rejection.
+- On an unmarked host, permit automatic cleanup only when every present related package is in residual-config state and the existing non-package preflight proves there is no running runtime, socket, populated data root, active unit, or other unsupported installation state.
+- Remove residual package configuration using a deterministic exact package list derived from dpkg. Do not use a broad name passed through a shell, dependency resolver, wildcard, or unconstrained purge.
+- After cleanup, rerun the complete fresh-state inspection from the beginning. Continue only if the host now satisfies the normal fresh-state contract.
+- Publish the exact managed Docker and containerd configuration after cleanup. Package-owned residual conffiles may be removed by the cleanup; the managed target files are then written atomically with Agent Relay's exact content.
+- Unknown extra configuration files, populated default or managed data, foreign installed/partial package states, foreign commands, plugins, units, services, sockets, or processes remain unsupported and must not be deleted merely to force installation.
+- Managed marker phases remain exact. Do not reinterpret an externally damaged completed installation as an unmarked fresh host.
 - Ensure `github-runner` belongs to `docker`; ensure `agent-relay-builder` does not.
 - Validate the effective official CLI and plugins, local socket, service enablement and activity, storage roots, package ownership, unit ownership, and group boundaries.
 - Run `hello-world` on the first successful installation or explicit host acceptance. A completed repeated update must not require registry access.
@@ -76,7 +83,7 @@ The final change must retain all behavior already implemented and validated in p
 
 The previous plan version promoted plugin-root metadata and full ancestor-chain validation to merge blockers. They are not blockers under the agreed trust model.
 
-- A "blocker" means an unresolved requirement that prevents accepting the PR; it does not mean the change is technically impossible.
+- A blocker means an unresolved requirement that prevents accepting the PR; it does not mean the change is technically impossible.
 - Full ancestor-chain validation can be implemented, but it hardens against writable-parent or local filesystem replacement attacks.
 - This VM has no hostile local-user threat model, its standard root-owned operating-system hierarchy is trusted, and Codex intentionally receives root-equivalent Docker authority.
 - A broad ancestor validator would add substantial complexity and false-rejection risk around legitimate Debian paths without materially improving the agreed deployment model.
@@ -84,30 +91,39 @@ The previous plan version promoted plugin-root metadata and full ancestor-chain 
 
 ## Current Independent Review Finding
 
-1. **Residual-config related packages are treated as never installed.** `docker_debian_related_package_records` excludes related packages whose dpkg current state is `c`. In a status such as `runc|rc |1.1`, `r` means the requested action was removal and `c` means only configuration files remain. The executable package payload is gone, but dpkg still records residual configuration and conffiles may remain outside the provisioner's explicitly enumerated paths. The current code can therefore classify a host with evidence of an earlier Docker/container runtime installation as fresh. Include related `rc` records in the inventory and reject them in fresh, preparing, installed, and complete state. Transaction recovery must also reject a marker package that was externally removed into `rc`; it must not silently reinstall or adopt that changed state.
+1. **Residual-config compatibility is implemented as rejection instead of cleanup.** Revision `ce9e3cc6` retains related `rc` records in the inventory but `docker_host_validate_phase_packages` immediately rejects them. On an unmarked host where all related package records are `rc`, the provisioner must instead prove that the rest of the host is safe for cleanup, purge the exact residual package records, rerun the complete fresh-state preflight, and proceed with the ordinary managed installation. It must not delete populated data or take over active/partial package or service state.
 
 Normal CI on the exact final production head is an acceptance step, not an implementation finding.
 
 ## Implementation Work
 
-1. Change the related-package inventory so Docker/containerd/runc/rootless/Buildx/Compose/plugin-related `rc` records are visible rather than discarded.
-2. Make phase validation reject every residual-config related package. In transaction state, a marker-recorded package changed externally to `rc` must fail before `dpkg --configure -a` or `apt-get` mutation.
-3. Add deterministic behavioral tests for fresh, preparing, transaction, installed, and complete handling of residual-config related packages.
-4. Preserve all previously implemented behavior listed in this plan. Do not add general ancestor-chain validation or unrelated hardening.
-5. Run one complete `npm run check` after the final production edit.
-6. Review the final diff point by point against this plan.
-7. Obtain normal CI evidence on a connector-authored exact final head after the Codex commit.
+1. Split related package inventory into active/partial package state and residual-config-only state without losing exact package names, status, or versions.
+2. Add an unmarked residual cleanup classification. It is valid only when every present related package record is `rc`; any installed, unpacked, half-configured, trigger, or other package state remains unsupported foreign state.
+3. Before cleanup, run the non-destructive preflight needed to prove there is no active runtime, socket, process, populated Docker/containerd data, or other state that must not be deleted.
+4. Purge the exact residual package list deterministically, without dependency resolution or wildcard expansion. Verify every targeted record is absent afterward.
+5. Rerun the complete fresh classification after cleanup rather than continuing from stale inspection results.
+6. Let the ordinary fresh installation publish Agent Relay's exact repository, configuration, storage, packages, units, services, and marker. Do not introduce data migration or generic cleanup of unknown files.
+7. Preserve all previously implemented behavior listed in this plan. Do not add general ancestor-chain validation or unrelated hardening.
+8. Add deterministic behavioral tests for cleanup eligibility, exact purge selection, cleanup failure, post-cleanup reclassification, and refusal to delete populated or active state.
+9. Run one complete `npm run check` after the final production edit.
+10. Review the final diff point by point against this plan.
+11. Obtain normal CI evidence on a connector-authored exact final head after the Codex commit.
 
 ## Repository-Safe Tests
 
 Required new coverage:
 
-- the related-package parser includes `rc` records for Docker, containerd, runc, rootlesskit, Buildx, Compose, and related plugin packages;
+- related-package parsing retains `rc` records for Docker, containerd, runc, rootlesskit, Buildx, Compose, and related plugin packages;
 - similarly named unrelated packages remain excluded;
-- fresh and preparing states reject every related residual-config package before mutation;
-- transaction state rejects a marker package externally changed to `rc` before recovery mutation;
-- transaction state rejects an unrecorded related residual-config package;
-- installed and complete states reject related residual-config packages without repairing or reinstalling them.
+- a clean host with no related package records still follows the ordinary fresh path;
+- an unmarked host with one or several related `rc` records enters the cleanup path;
+- the cleanup command receives exactly the recorded residual package names and no installed, unrelated, wildcard-expanded, or user-controlled values;
+- cleanup failure stops before repository, configuration, package installation, or service mutation;
+- after successful cleanup, every targeted package is verified absent and the complete fresh classification runs again;
+- a mixture of `rc` and installed/partial related package states is rejected without cleanup;
+- a residual-config host with an active service, socket, Docker/containerd process, populated default data, or populated managed data is rejected without deleting that state;
+- package-owned residual configuration can be removed and the normal atomic Agent Relay configuration publication still succeeds;
+- managed preparing, transaction, installed, and complete phases retain their existing exact recovery and validation behavior.
 
 Required regression coverage:
 
@@ -128,13 +144,15 @@ Required regression coverage:
 
 ## Acceptance Criteria for This PR
 
-- `update.sh` installs the exact managed Docker stack on the supported fresh host.
-- Engine and containerd use the required permanent roots from their first start.
+- `update.sh` installs the exact managed Docker stack on a clean host and on an otherwise-safe unmarked host containing only related dpkg residual configuration.
+- Residual package cleanup is exact, deterministic, bounded, verified, and followed by a full fresh-state reclassification.
 - No Docker data migration or copying mechanism exists.
+- Populated Docker or containerd data is never deleted to force installation.
+- Engine and containerd use the required permanent roots from their first start.
 - Interrupted owned phases resume without an undocumented manual repair step.
 - Completed updates validate rather than repair managed state.
 - A repeated update performs no unnecessary package mutation or registry access.
-- Every related installed, partial, or residual-config package outside the exact phase contract fails before mutation.
+- Installed, partial, active, or mixed foreign runtime state still fails before destructive mutation.
 - Package selection uses one apt snapshot and cannot admit an unselected alternative or unrelated dependency.
 - The updater cannot restore the runner while a root provisioner process may still be alive.
 - `github-runner` can use the effective official Docker CLI, Buildx, Compose, and socket; `agent-relay-builder` cannot.
@@ -146,7 +164,7 @@ Required regression coverage:
 
 Privileged real-host acceptance is intentionally manual and is not a blocker for this PR.
 
-After merge, the operator will run `update.sh` on the designated Debian VM and manually confirm installation, persistent storage roots, Docker/Buildx/Compose access, Compose startup, logs, exec, shutdown, repeated update behavior, and runner workspace ownership. If that manual acceptance finds a defect, open a new ExecPlan and follow-up PR. Do not keep this PR open solely because an automated disposable-host lifecycle is unavailable.
+After merge, the operator will run `update.sh` on the designated Debian VM and manually confirm installation, residual-package cleanup where applicable, persistent storage roots, Docker/Buildx/Compose access, Compose startup, logs, exec, shutdown, repeated update behavior, and runner workspace ownership. If that manual acceptance finds a defect, open a new ExecPlan and follow-up PR. Do not keep this PR open solely because an automated disposable-host lifecycle is unavailable.
 
 ## Progress
 
@@ -157,11 +175,12 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - [x] Implemented phase recovery, sudo control, process-group cleanup, repository/key validation, package closure validation, service-start policy, exact storage, command/plugin inventories, systemd alias/activation validation, and service/socket normalization.
 - [x] Codex revision `34d4d2bd2d6b367908ade9a284d126c522c8cdf7` passed the complete repository-safe validation in workflow run `29747072289`.
 - [x] Re-evaluated plugin-root and ancestor-chain hardening against the actual dedicated-VM trust model; they are not merge blockers.
-- [x] Included related residual-config records in the package inventory and rejected them at the phase boundary, with behavioral coverage for fresh, preparing, transaction, installed, and complete states.
-- [x] Ran the final repository validation after the production edit: `npm run check` passed on 2026-07-20 with 136 tests, 100% source coverage, and all runtime, shell, toolchain, and system checks passing.
-- [blocked] Publish a connector-authored exact final head and require normal CI to pass. This checkout has no GitHub execution context or publication credential; the concrete unblock condition is connector finalization of these changes followed by normal CI on that exact commit.
-- [blocked] Complete exact-head job-log review. The local final diff review passed, but normal CI job logs do not exist until the connector-authored head is published and CI completes.
-- [blocked] Merge the PR after the acceptance criteria above pass. The concrete unblock condition is passing exact-head normal CI and its final job-log review.
+- [x] Revision `ce9e3cc6` made residual-config package records visible and added phase tests, but implemented rejection rather than the required cleanup compatibility path.
+- [ ] Implement safe unmarked residual-package cleanup and full post-cleanup reclassification.
+- [ ] Run final repository validation and Codex validation.
+- [ ] Publish a connector-authored exact final head and require normal CI to pass.
+- [ ] Complete independent final diff and job-log review.
+- [ ] Merge the PR after the acceptance criteria above pass.
 - [post-merge] Perform manual privileged host acceptance; open a new plan only if it exposes a defect.
 
 ## Decision Log
@@ -169,10 +188,11 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - Use one permanent managed storage tree below `/srv/github-runner/storage/docker`.
 - Create both final roots before first activation.
 - Do not migrate or copy Docker data.
-- Permit mutation only while completing an exact owned initial transaction; completed state is validation-only.
+- Permit automatic cleanup of exact dpkg residual configuration on an otherwise-safe unmarked host.
+- Do not delete populated data or take over active, installed, partial, or mixed foreign runtime state.
+- Rerun the full fresh-state classification after cleanup.
+- Permit mutation of a managed installation only while completing an exact owned initial transaction; completed state remains validation-only.
 - Treat package, plugin-entry, repository, key, configuration, unit, alias, activation-link, socket, process, and data inventories as exact state within the defined deployment model.
-- Treat related residual package configuration as evidence of a previous installation, not absence.
-- Keep the general dpkg absence predicate unchanged, but reject residual-config state explicitly inside the Docker-related phase boundary so unrelated residual configuration remains compatible with a clean global dpkg state.
 - Trust the dedicated VM's standard root-owned operating-system hierarchy; do not add general ancestor-chain hardening in this PR.
 - Confirm the full provisioner process group is gone before runner restoration.
 - Keep application-container lifecycle under Codex control.
@@ -186,11 +206,9 @@ After merge, the operator will run `update.sh` on the designated Debian VM and m
 - Package installation can leave official unit files present while systemd still reports `LoadState=not-found` before its dpkg reload trigger; this is valid only in the transaction phase.
 - Docker activation can be interrupted in multiple nonterminal systemd states; recovery must prove the exact fragment/socket/process relationship before stopping services.
 - Docker CLI searches several plugin directories, so exact entry inventory must cover every configured search root rather than only known filenames.
+- Dpkg residual-config state is globally clean and has no package payload, but it can retain package configuration. That makes it suitable for exact cleanup on an otherwise-safe unmarked host, not for silent omission or unconditional rejection.
 - Codex-token pushes can leave normal CI as `action_required` with no jobs; a connector-authored final status commit is needed for exact-head CI evidence.
-- Dpkg residual-config records are globally clean and package payloads are absent, so they must remain acceptable to the global dpkg audit while being independently rejected as evidence of a prior related runtime installation.
 
 ## Outcomes & Retrospective
 
-The residual-config implementation is complete and local acceptance passed. The related-package parser now retains `rc` records, and the package-state boundary rejects them before transaction recovery or validation-only completed-state handling. `npm run check` passed after the final production edit on 2026-07-20 with all 136 tests, 100% source coverage, and every repository validation stage successful. The final local diff review found no workflow, public API, request contract, installation argument, routing, README, or operator-documentation change.
-
-This plan remains active because connector-authored publication, exact-head normal CI, CI job-log review, and merge have not yet occurred. Manual privileged host acceptance happens after merge and is not part of this PR's blocking acceptance.
+Not complete. Keep this plan active until safe residual-package cleanup, complete repository validation, exact-head normal CI, and independent final review pass. Manual privileged host acceptance happens after merge and is not part of this PR's blocking acceptance.

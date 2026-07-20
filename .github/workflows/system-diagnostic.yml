@@ -1,0 +1,25 @@
+name: System diagnostic
+
+on:
+  push:
+    branches:
+      - agent/fix-docker-conffile-install
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: [self-hosted]
+    steps:
+      - name: Diagnose deployed system tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /srv/github-runner/storage/agent-relay
+          echo '=== install-script.integration.sh ==='
+          bash test-system/install-script.integration.sh
+          echo '=== update-script.integration.sh ==='
+          bash test-system/update-script.integration.sh
+          echo '=== docker-host.repository-safe.sh ==='
+          bash test-system/docker-host.repository-safe.sh

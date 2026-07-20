@@ -114,6 +114,10 @@ test("the Codex workflow skips only an explicit no-plan result", async () => {
   );
   assert.match(
     workflow,
+    /steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != '' && steps\.codex\.outcome == 'failure'/u,
+  );
+  assert.match(
+    workflow,
     /steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != '' && steps\.codex\.outcome == 'success'/u,
   );
 });

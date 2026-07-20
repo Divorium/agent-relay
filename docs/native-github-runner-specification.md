@@ -133,7 +133,7 @@ The workflow is `.github/workflows/codex.yml` and processes one request as follo
 1. `resolve-request.mjs` selects and validates the pull request number from `pull_request` or `workflow_dispatch` input.
 2. `resolve-pr.mjs` requires an open non-draft same-repository pull request, validates its head ref and exact SHA, and publishes checkout outputs.
 3. `actions/checkout` checks out that exact SHA with `persist-credentials: false`.
-4. `resolve-plan.mjs` requires exactly one added or modified active ExecPlan for a pull request, or validates the explicit dispatch path.
+4. `resolve-plan.mjs` treats zero added or modified active ExecPlans in a pull request as a successful Codex skip, resolves exactly one, and rejects multiple candidates; manual dispatch continues to require and validate an explicit path.
 5. The validation job runs `npm ci` and `npm run check` before Codex execution.
 6. `run-codex.mjs` calls the compiled direct runtime.
 7. `CodexExecutor` canonicalizes the selected workspace and invokes `scripts/codex-run` with `codex exec --json`, timeout, process-group termination, normalized-output limits, streaming redaction, and filesystem/network permissions.

@@ -24,8 +24,8 @@ function resolvePullRequestPlan(workspace, baseSha, headSha) {
   if (result.status !== 0) throw new Error(result.stderr.trim() || "Could not resolve the active ExecPlan diff");
   const candidates = result.stdout.split(/\r?\n/u).filter(Boolean).sort();
   const unique = [...new Set(candidates)];
-  if (unique.length !== 1) throw new Error(`Expected exactly one added or modified active ExecPlan, found ${unique.length}`);
-  return unique[0];
+  if (unique.length > 1) throw new Error(`Expected exactly one added or modified active ExecPlan, found ${unique.length}`);
+  return unique[0] ?? null;
 }
 
 async function validatePlan(workspace, planPath) {
@@ -48,12 +48,16 @@ export async function main() {
   let planPath;
   if (eventName === "pull_request") {
     planPath = resolvePullRequestPlan(workspace, requiredEnvironment("BASE_SHA"), requiredEnvironment("HEAD_SHA"));
+    if (planPath === null) {
+      await appendFile(outputPath, "plan_found=false\nplan_path=\n", "utf8");
+      return;
+    }
   } else if (eventName === "workflow_dispatch") {
     planPath = requiredEnvironment("INPUT_PLAN_PATH");
   } else {
     throw new Error(`Unsupported event: ${eventName}`);
   }
-  await appendFile(outputPath, `plan_path=${await validatePlan(workspace, planPath)}\n`, "utf8");
+  await appendFile(outputPath, `plan_found=true\nplan_path=${await validatePlan(workspace, planPath)}\n`, "utf8");
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

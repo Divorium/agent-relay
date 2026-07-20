@@ -109,8 +109,17 @@ jobs:
           INPUT_PLAN_PATH: ${{ inputs.plan_path }}
         run: node /srv/github-runner/storage/agent-relay/runner/resolve-plan.mjs
 
+      - name: Report missing active ExecPlan
+        if: steps.plan.outputs.plan_found != 'true'
+        shell: bash
+        run: |
+          message="No active ExecPlan was found in this pull request. Codex execution was skipped."
+          echo "::notice title=Codex skipped::${message}"
+          printf '### Codex skipped\n\n%s\n' "${message}" >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Run Codex directly
         id: codex
+        if: steps.plan.outputs.plan_found == 'true'
         continue-on-error: true
         env:
           CODEX_PLAN_PATH: ${{ steps.plan.outputs.plan_path }}
@@ -119,7 +128,7 @@ jobs:
         run: node /srv/github-runner/storage/agent-relay/runner/run-codex.mjs
 
       - name: Upload Agent Relay output
-        if: always()
+        if: ${{ always() && steps.plan.outputs.plan_found == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: agent-relay-output
@@ -127,11 +136,12 @@ jobs:
           if-no-files-found: warn
 
       - name: Fail when Codex failed
-        if: steps.codex.outcome == 'failure'
+        if: ${{ steps.plan.outputs.plan_found == 'true' && steps.codex.outcome == 'failure' }}
         shell: bash
         run: exit 1
 
       - name: Commit and push
+        if: ${{ steps.plan.outputs.plan_found == 'true' && steps.codex.outcome == 'success' }}
         shell: bash
         env:
           COMMIT_MESSAGE: ${{ steps.codex.outputs.commit_message }}

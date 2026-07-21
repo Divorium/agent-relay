@@ -14,10 +14,11 @@ test("installer contains only runner and runtime responsibilities", async () => 
   assert.match(install, /sudo -n true \|\| fail "The administrator requires passwordless sudo"/);
   assert.match(install, /runner_binary_state/);
   assert.match(install, /registration_state/);
-  assert.match(install, /Runner archive extraction did not produce a complete runner payload/);
-  assert.match(install, /chmod 0600[\s\S]*\.credentials_rsaparams/);
-  assert.match(install, /Runner registration did not produce the complete protected state/);
-  assert.match(install, /complete binaries plus absent registration|Complete binaries plus absent registration|binary_state/u);
+  assert.match(install, /sudo -n test -f "\$\{RUNNER_DIR\}\/\$\{path\}"/);
+  assert.match(install, /Runner archive extraction did not produce a complete safe payload/);
+  assert.match(install, /Runner registration did not produce complete safe state/);
+  assert.match(install, /"\$\{path\}" == \.credentials \|\| "\$\{path\}" == \.credentials_rsaparams/);
+  assert.match(install, /"\$\{mode\}" == "600"/);
   assert.match(install, /--url "\$2" --token "\$3" --name "\$4" --work _work/);
   assert.match(install, /After=network-online\.target/);
   assert.match(install, /Wants=network-online\.target/);
@@ -42,6 +43,7 @@ test("runtime is staged and validated before listener shutdown", async () => {
   assert.ok(stop > finalize && wait > stop && previous > wait && activate > previous);
   assert.match(install, /sudo -n -u "\$\{BUILD_USER\}" \/usr\/bin\/env -i/);
   assert.match(install, /if ! sudo -n mv -- "\$\{stage_dir\}" "\$\{SOURCE_ROOT\}\/dist"/);
+  assert.match(install, /if ! find -P "\$\{root\}" -xdev -print0/);
   assert.match(install, /Runner\.Listener/);
   assert.doesNotMatch(install, /listener.*rollback|rollback.*listener/iu);
 });
@@ -51,16 +53,19 @@ test("installer protects checkout and does not recursively repair it", async () 
   assert.match(install, /validate_checkout/);
   assert.match(install, /Checkout entry is not administrator-owned/);
   assert.match(install, /Checkout entry is writable by group or others/);
+  assert.match(install, /Could not inspect the source checkout/);
   assert.match(install, /remote get-url origin/);
-  assert.match(install, /\^https\?:\/\/\[\^\/\]\*@/);
   assert.match(install, /must not contain embedded credentials/);
-  assert.match(install, /root:root-owned/);
+  assert.match(install, /Runtime entry is not root-owned/);
   assert.doesNotMatch(install, /chown -R|chmod -R|find -P "\$\{SOURCE_ROOT\}"[^\n]*-exec chown/);
 });
 
-test("Ansible bootstraps host state and creates the administrator", async () => {
+test("Ansible bootstraps host state and owns service home creation", async () => {
   const playbook = await text("ansible/playbooks/host.yml");
   const defaults = await text("ansible/roles/agent_relay_host/defaults/main.yml");
+  const users = await text("ansible/roles/agent_relay_host/tasks/users.yml");
+  const filesystem = await text("ansible/roles/agent_relay_host/tasks/filesystem.yml");
+  const toolchains = await text("ansible/roles/agent_relay_host/tasks/toolchains.yml");
   const tasks = (await Promise.all([
     "packages.yml", "users.yml", "filesystem.yml", "containers.yml", "toolchains.yml",
   ].map((name) => text(`ansible/roles/agent_relay_host/tasks/${name}`)))).join("\n");
@@ -77,24 +82,27 @@ test("Ansible bootstraps host state and creates the administrator", async () => 
 
   assert.match(defaults, /agent_relay_admin_authorized_keys: \[\]/);
   assert.match(defaults, /agent_relay_extra_apt_packages: \[\]/);
+  assert.match(defaults, /agent_relay_docker_conflicting_packages:/);
   assert.match(defaults, /agent_relay_rust_toolchain: stable/);
+  assert.match(users, /Create GitHub runner account[\s\S]*create_home: false/);
+  assert.match(users, /Create runtime builder account[\s\S]*create_home: false/);
+  assert.match(filesystem, /Create runner-owned paths/);
+  assert.match(filesystem, /Create builder home/);
+  assert.match(filesystem, /mode: "0700"/);
   assert.match(tasks, /Grant administrator passwordless sudo/);
   assert.match(tasks, /validate: \/usr\/sbin\/visudo -cf %s/);
   assert.match(tasks, /authorized_keys/);
   assert.match(tasks, /groups: sudo/);
-  assert.match(tasks, /Create GitHub runner account[\s\S]*create_home: false/);
-  assert.match(tasks, /Create runtime builder account[\s\S]*create_home: false/);
-  assert.match(tasks, /Create runner-owned paths/);
-  assert.match(tasks, /Create builder home/);
+  assert.match(tasks, /Remove packages conflicting with Docker Engine/);
   assert.match(tasks, /Install Docker packages without premature service start/);
   assert.match(tasks, /state: present/);
   assert.match(tasks, /policy_rc_d: 101/);
-  assert.match(tasks, /Remove packages conflicting with Docker Engine/);
   assert.match(tasks, /agent_relay_extra_apt_packages/);
   assert.match(defaults, /liblttng-ust1t64/);
   assert.match(defaults, /libssl3t64/);
   assert.match(defaults, /libicu76/);
   assert.match(tasks, /checksum: sha256:https:\/\/static\.rust-lang\.org/);
+  assert.ok(toolchains.indexOf("Download configured Go archive") < toolchains.indexOf("Remove a different Go installation"));
   assert.match(handlers, /Restart containerd[\s\S]*Restart Docker/);
   assert.doesNotMatch(tasks, /install\.sh|config\.sh --unattended|codex login/);
 });

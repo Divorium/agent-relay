@@ -23,6 +23,7 @@ LOCK_ROOT=/var/lib/agent-relay
 LOCK_FILE=${LOCK_ROOT}/install.lock
 SOURCE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 TOOLCHAIN_PROFILE=${SOURCE_ROOT}/scripts/toolchain-environment.sh
+SCRATCH_PREFIX=/tmp/agent-relay-install.$$
 
 runner_archive=""
 service_temp=""
@@ -34,7 +35,7 @@ cleanup() {
   if [[ -n "${stage_dir}" && -d "${stage_dir}" && ! -L "${stage_dir}" ]]; then
     sudo -n rm -rf --one-file-system -- "${stage_dir}" >/dev/null 2>&1 || true
   fi
-  rm -f -- "${runner_archive:-}" "${service_temp:-}"
+  rm -f -- "${runner_archive:-}" "${service_temp:-}" "${SCRATCH_PREFIX}".*
   sudo -k >/dev/null 2>&1 || true
   exit "${status}"
 }
@@ -49,9 +50,15 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Required command is missing: $1"
 }
 
+new_scratch_file() {
+  mktemp "${SCRATCH_PREFIX}.XXXXXXXX"
+}
+
 stat_uid() { stat -c '%u' -- "$1"; }
 stat_gid() { stat -c '%g' -- "$1"; }
 stat_mode() { stat -c '%a' -- "$1"; }
+sudo_stat_uid() { sudo -n stat -c '%u' -- "$1"; }
+sudo_stat_mode() { sudo -n stat -c '%a' -- "$1"; }
 
 require_regular_file() {
   local path=$1
@@ -84,7 +91,7 @@ require_locked_account() {
 }
 
 validate_checkout() {
-  local admin_uid=$1 entry uid mode
+  local admin_uid=$1 entry uid mode listing
   local -a trusted=(
     install.sh
     package.json
@@ -103,20 +110,22 @@ validate_checkout() {
     require_regular_file "${SOURCE_ROOT}/${entry}"
   done
 
+  listing="$(new_scratch_file)"
+  if ! find -P "${SOURCE_ROOT}" -xdev \
+    \( -path "${SOURCE_ROOT}/dist" -o -path "${SOURCE_ROOT}/dist/*" \
+       -o -path "${SOURCE_ROOT}/dist.previous" -o -path "${SOURCE_ROOT}/dist.previous/*" \
+       -o -path "${SOURCE_ROOT}/.dist.stage.*" -o -path "${SOURCE_ROOT}/.dist.stage.*/*" \) -prune \
+    -o -print0 >"${listing}"; then
+    fail "Could not inspect the source checkout"
+  fi
   while IFS= read -r -d '' entry; do
-    uid="$(stat -c '%u' -- "${entry}")"
-    mode="$(stat -c '%a' -- "${entry}")"
+    uid="$(stat_uid "${entry}")"
+    mode="$(stat_mode "${entry}")"
     [[ "${uid}" == "${admin_uid}" ]] || fail "Checkout entry is not administrator-owned: ${entry}"
     if (( (8#${mode} & 8#022) != 0 )); then
       fail "Checkout entry is writable by group or others: ${entry}"
     fi
-  done < <(
-    find -P "${SOURCE_ROOT}" -xdev \
-      \( -path "${SOURCE_ROOT}/dist" -o -path "${SOURCE_ROOT}/dist/*" \
-         -o -path "${SOURCE_ROOT}/dist.previous" -o -path "${SOURCE_ROOT}/dist.previous/*" \
-         -o -path "${SOURCE_ROOT}/.dist.stage.*" -o -path "${SOURCE_ROOT}/.dist.stage.*/*" \) -prune \
-      -o -print0
-  )
+  done <"${listing}"
 
   local remote_url
   remote_url="$(git -C "${SOURCE_ROOT}" remote get-url origin 2>/dev/null || true)"
@@ -126,12 +135,16 @@ validate_checkout() {
 }
 
 validate_runtime_tree() {
-  local root=$1 entry mode uid
+  local root=$1 entry mode uid listing
   [[ -d "${root}" && ! -L "${root}" ]] || fail "Runtime must be a regular directory: ${root}"
   mountpoint -q "${root}" && fail "Runtime must not be a mount point: ${root}"
+  listing="$(new_scratch_file)"
+  if ! find -P "${root}" -xdev -print0 >"${listing}"; then
+    fail "Could not inspect runtime tree: ${root}"
+  fi
   while IFS= read -r -d '' entry; do
     mountpoint -q "${entry}" && fail "Runtime contains a mount point: ${entry}"
-    uid="$(stat -c '%u' -- "${entry}")"
+    uid="$(stat_uid "${entry}")"
     [[ "${uid}" == "0" ]] || fail "Runtime entry is not root-owned: ${entry}"
     if [[ -d "${entry}" ]]; then
       mode="$(stat_mode "${entry}")"
@@ -142,14 +155,18 @@ validate_runtime_tree() {
     else
       fail "Runtime contains a symlink or special file: ${entry}"
     fi
-  done < <(find -P "${root}" -xdev -print0)
+  done <"${listing}"
 }
 
 validate_stage_tree() {
-  local root=$1 entry
+  local root=$1 entry listing
   sudo -n test -d "${root}" || fail "Build stage is not a regular directory"
   sudo -n test ! -L "${root}" || fail "Build stage must not be a symlink"
   sudo -n mountpoint -q "${root}" && fail "Build stage must not be a mount point"
+  listing="$(new_scratch_file)"
+  if ! sudo -n find -P "${root}" -xdev -print0 >"${listing}"; then
+    fail "Could not inspect the build stage"
+  fi
   while IFS= read -r -d '' entry; do
     sudo -n mountpoint -q "${entry}" && fail "Build stage contains a mount point: ${entry}"
     if sudo -n test -L "${entry}"; then
@@ -158,25 +175,27 @@ validate_stage_tree() {
     if ! sudo -n test -d "${entry}" && ! sudo -n test -f "${entry}"; then
       fail "Build stage contains a special file: ${entry}"
     fi
-  done < <(sudo -n find -P "${root}" -xdev -print0)
+  done <"${listing}"
   sudo -n test -f "${root}/src/run-codex.js" || fail "Compiled entrypoint is missing from the build stage"
   sudo -n test ! -L "${root}/src/run-codex.js" || fail "Compiled entrypoint must not be a symlink"
 }
 
 runner_binary_state() {
   local -a required=(bin/Runner.Listener bin/Runner.Worker bin/runsvc.sh config.sh)
-  local path present=0 complete=1 runner_uid mode
+  local path present=0 complete=1 runner_uid mode listing
   runner_uid="$(id -u "${RUNNER_USER}")"
   for path in "${required[@]}"; do
-    if [[ -e "${RUNNER_DIR}/${path}" || -L "${RUNNER_DIR}/${path}" ]]; then
+    if sudo -n test -e "${RUNNER_DIR}/${path}" || sudo -n test -L "${RUNNER_DIR}/${path}"; then
       present=1
     fi
-    if [[ ! -f "${RUNNER_DIR}/${path}" || -L "${RUNNER_DIR}/${path}" || ! -x "${RUNNER_DIR}/${path}" ]]; then
+    if ! sudo -n test -f "${RUNNER_DIR}/${path}" \
+      || sudo -n test -L "${RUNNER_DIR}/${path}" \
+      || ! sudo -n test -x "${RUNNER_DIR}/${path}"; then
       complete=0
-    elif [[ "$(stat_uid "${RUNNER_DIR}/${path}")" != "${runner_uid}" ]]; then
+    elif [[ "$(sudo_stat_uid "${RUNNER_DIR}/${path}")" != "${runner_uid}" ]]; then
       complete=0
     else
-      mode="$(stat_mode "${RUNNER_DIR}/${path}")"
+      mode="$(sudo_stat_mode "${RUNNER_DIR}/${path}")"
       if (( (8#${mode} & 8#022) != 0 )); then
         complete=0
       fi
@@ -184,8 +203,16 @@ runner_binary_state() {
   done
   if (( complete == 1 )); then
     printf 'complete\n'
-  elif (( present == 0 )) && [[ -z "$(find -P "${RUNNER_DIR}" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
-    printf 'absent\n'
+  elif (( present == 0 )); then
+    listing="$(new_scratch_file)"
+    if ! sudo -n find -P "${RUNNER_DIR}" -mindepth 1 -maxdepth 1 -print0 >"${listing}"; then
+      fail "Could not inspect the runner directory"
+    fi
+    if [[ ! -s "${listing}" ]]; then
+      printf 'absent\n'
+    else
+      printf 'partial\n'
+    fi
   else
     printf 'partial\n'
   fi
@@ -193,16 +220,24 @@ runner_binary_state() {
 
 registration_state() {
   local -a files=(.runner .credentials .credentials_rsaparams)
-  local path present=0 complete=1 runner_uid
+  local path present=0 complete=1 runner_uid mode
   runner_uid="$(id -u "${RUNNER_USER}")"
   for path in "${files[@]}"; do
-    if [[ -e "${RUNNER_DIR}/${path}" || -L "${RUNNER_DIR}/${path}" ]]; then
+    if sudo -n test -e "${RUNNER_DIR}/${path}" || sudo -n test -L "${RUNNER_DIR}/${path}"; then
       present=$((present + 1))
     fi
-    if [[ ! -f "${RUNNER_DIR}/${path}" || -L "${RUNNER_DIR}/${path}" ]]; then
+    if ! sudo -n test -f "${RUNNER_DIR}/${path}" || sudo -n test -L "${RUNNER_DIR}/${path}"; then
       complete=0
-    elif [[ "$(stat_uid "${RUNNER_DIR}/${path}")" != "${runner_uid}" ]] \
-      || (( (8#$(stat_mode "${RUNNER_DIR}/${path}") & 8#022) != 0 )); then
+      continue
+    fi
+    if [[ "$(sudo_stat_uid "${RUNNER_DIR}/${path}")" != "${runner_uid}" ]]; then
+      complete=0
+      continue
+    fi
+    mode="$(sudo_stat_mode "${RUNNER_DIR}/${path}")"
+    if [[ "${path}" == .credentials || "${path}" == .credentials_rsaparams ]]; then
+      [[ "${mode}" == "600" ]] || complete=0
+    elif (( (8#${mode} & 8#022) != 0 )); then
       complete=0
     fi
   done
@@ -363,14 +398,15 @@ case "${binary_state}" in
       -o "${runner_archive}"
     printf '%s  %s\n' "${RUNNER_SHA256}" "${runner_archive}" | sha256sum -c -
     sudo -n -u "${RUNNER_USER}" tar -C "${RUNNER_DIR}" -xzf "${runner_archive}"
+    [[ "$(runner_binary_state)" == complete ]] || fail "Runner archive extraction did not produce a complete safe payload"
     ;;
   complete) ;;
   *) fail "Runner binaries are partial or conflicting; rebuild the host or remove the state deliberately" ;;
 esac
 
-if [[ -L "${RUNNER_DIR}/_work" ]]; then
-  [[ "$(readlink "${RUNNER_DIR}/_work")" == ../work ]] || fail "The runner work link points to an unexpected location"
-elif [[ -e "${RUNNER_DIR}/_work" ]]; then
+if sudo -n test -L "${RUNNER_DIR}/_work"; then
+  [[ "$(sudo -n readlink "${RUNNER_DIR}/_work")" == ../work ]] || fail "The runner work link points to an unexpected location"
+elif sudo -n test -e "${RUNNER_DIR}/_work"; then
   fail "The runner work path must be the managed symlink"
 else
   sudo -n -u "${RUNNER_USER}" ln -s ../work "${RUNNER_DIR}/_work"
@@ -400,10 +436,12 @@ case "${registration}" in
     unset registration_response
     sudo -n -u "${RUNNER_USER}" -H bash -c '
       set -euo pipefail
+      umask 0077
       cd "$1"
       ./config.sh --unattended --replace --url "$2" --token "$3" --name "$4" --work _work
     ' -- "${RUNNER_DIR}" "${ORGANIZATION_URL}" "${registration_token}" "${RUNNER_NAME}"
     unset registration_token
+    [[ "$(registration_state)" == complete ]] || fail "Runner registration did not produce complete safe state"
     ;;
   complete) ;;
   *) fail "Runner registration is partial or conflicting; rebuild the host or remove the state deliberately" ;;

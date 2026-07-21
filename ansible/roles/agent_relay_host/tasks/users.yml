@@ -1,0 +1,76 @@
+---
+- name: Create administrator group
+  ansible.builtin.group:
+    name: "{{ agent_relay_admin_user }}"
+    state: present
+
+- name: Create administrator account
+  ansible.builtin.user:
+    name: "{{ agent_relay_admin_user }}"
+    group: "{{ agent_relay_admin_user }}"
+    groups: sudo
+    append: false
+    shell: /bin/bash
+    create_home: true
+    password_lock: true
+    state: present
+
+- name: Create administrator SSH directory
+  ansible.builtin.file:
+    path: "/home/{{ agent_relay_admin_user }}/.ssh"
+    state: directory
+    owner: "{{ agent_relay_admin_user }}"
+    group: "{{ agent_relay_admin_user }}"
+    mode: "0700"
+
+- name: Install administrator authorized keys
+  ansible.builtin.copy:
+    dest: "/home/{{ agent_relay_admin_user }}/.ssh/authorized_keys"
+    owner: "{{ agent_relay_admin_user }}"
+    group: "{{ agent_relay_admin_user }}"
+    mode: "0600"
+    content: "{{ agent_relay_admin_authorized_keys | join('\n') }}\n"
+
+- name: Grant administrator passwordless sudo
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/agent-relay-admin
+    owner: root
+    group: root
+    mode: "0440"
+    content: "{{ agent_relay_admin_user }} ALL=(ALL:ALL) NOPASSWD: ALL\n"
+    validate: /usr/sbin/visudo -cf %s
+
+- name: Create service groups
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - "{{ agent_relay_runner_user }}"
+    - "{{ agent_relay_builder_user }}"
+    - docker
+
+- name: Create GitHub runner account
+  ansible.builtin.user:
+    name: "{{ agent_relay_runner_user }}"
+    group: "{{ agent_relay_runner_user }}"
+    groups: docker
+    append: false
+    home: "{{ agent_relay_runner_home }}"
+    shell: /bin/bash
+    system: true
+    create_home: true
+    password_lock: true
+    state: present
+
+- name: Create runtime builder account
+  ansible.builtin.user:
+    name: "{{ agent_relay_builder_user }}"
+    group: "{{ agent_relay_builder_user }}"
+    groups: ""
+    append: false
+    home: "{{ agent_relay_build_home }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: true
+    password_lock: true
+    state: present

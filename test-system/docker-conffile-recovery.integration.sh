@@ -34,6 +34,7 @@ DPKG_ADMIN=${DPKG_ROOT}/var/lib/dpkg
 DPKG_TARGET=${DPKG_ROOT}/root
 DOCKER_HOST_CONTAINERD_DIRECTORY=${DPKG_TARGET}/etc/containerd
 DOCKER_HOST_CONTAINERD_CONFIG=${DOCKER_HOST_CONTAINERD_DIRECTORY}/config.toml
+DOCKER_HOST_MARKER=${TMP}/docker-host-state-v1
 
 mkdir -p "${DOCKER_HOST_STATE_ROOT}" "${DPKG_ADMIN}/updates" "${DPKG_TARGET}"
 : > "${DPKG_ADMIN}/status"
@@ -50,7 +51,7 @@ Section: misc
 Priority: optional
 Architecture: all
 Maintainer: Agent Relay Test <test@example.invalid>
-Description: real dpkg conffile regression fixture
+Description: real interrupted dpkg conffile regression fixture
 EOF_CONTROL
   printf '/etc/containerd/config.toml\n' > "${package_root}/DEBIAN/conffiles"
   printf '%s\n' "${content}" > "${package_root}/etc/containerd/config.toml"
@@ -61,17 +62,34 @@ EOF_CONTROL
 build_package 1.0 package-v1 "${DPKG_ROOT}/containerd-v1.deb"
 build_package 2.0 package-v2 "${DPKG_ROOT}/containerd-v2.deb"
 /usr/bin/dpkg --force-not-root --root="${DPKG_TARGET}" --admindir="${DPKG_ADMIN}" \
-  --log="${DPKG_ROOT}/dpkg.log" --force-confdef --force-confold -i "${DPKG_ROOT}/containerd-v1.deb" >/dev/null
+  --log="${DPKG_ROOT}/dpkg.log" -i "${DPKG_ROOT}/containerd-v1.deb" >/dev/null
 
 docker_host_containerd_content > "${DOCKER_HOST_CONTAINERD_CONFIG}"
 managed_content="$(cat "${DOCKER_HOST_CONTAINERD_CONFIG}")"
-/usr/bin/dpkg --force-not-root --root="${DPKG_TARGET}" --admindir="${DPKG_ADMIN}" \
-  --log="${DPKG_ROOT}/dpkg.log" --force-confdef --force-confold -i "${DPKG_ROOT}/containerd-v2.deb" >/dev/null
+set +e
+printf '' | /usr/bin/dpkg --force-not-root --root="${DPKG_TARGET}" --admindir="${DPKG_ADMIN}" \
+  --log="${DPKG_ROOT}/dpkg.log" -i "${DPKG_ROOT}/containerd-v2.deb" \
+  > "${TMP}/interrupted.out" 2> "${TMP}/interrupted.err"
+interrupted_status=$?
+set -e
+(( interrupted_status != 0 )) || fail "unforced conffile upgrade unexpectedly succeeded"
+grep -Fq 'end of file on stdin at conffile prompt' "${TMP}/interrupted.err" \
+  || fail "interrupted fixture did not reproduce the runner conffile failure"
+[[ -f "${DOCKER_HOST_CONTAINERD_CONFIG}.dpkg-new" ]] \
+  || fail "interrupted dpkg upgrade did not leave config.toml.dpkg-new"
 
-artifact=${DOCKER_HOST_CONTAINERD_CONFIG}.dpkg-dist
-[[ -f "${artifact}" ]] || fail "real dpkg upgrade did not create config.toml.dpkg-dist"
+/usr/bin/dpkg --force-not-root --root="${DPKG_TARGET}" --admindir="${DPKG_ADMIN}" \
+  --log="${DPKG_ROOT}/dpkg.log" --force-confdef --force-confold --configure -a >/dev/null
+[[ -f "${DOCKER_HOST_CONTAINERD_CONFIG}.dpkg-dist" ]] \
+  || fail "real recovery did not create config.toml.dpkg-dist"
 [[ "$(cat "${DOCKER_HOST_CONTAINERD_CONFIG}")" == "${managed_content}" ]] \
-  || fail "real dpkg upgrade replaced the managed config.toml"
+  || fail "real recovery replaced the managed config.toml"
+
+# Repeated interrupted package attempts can accumulate other dpkg sidecars.
+for suffix in new old tmp; do
+  printf 'stale-%s\n' "${suffix}" > "${DOCKER_HOST_CONTAINERD_CONFIG}.dpkg-${suffix}"
+  chmod 0644 "${DOCKER_HOST_CONTAINERD_CONFIG}.dpkg-${suffix}"
+done
 
 /usr/bin/install -d -m 0711 "${DOCKER_HOST_STORAGE_ROOT}"
 /usr/bin/install -d -m 0700 "${DOCKER_HOST_ENGINE_ROOT}" "${DOCKER_HOST_CONTAINERD_ROOT}"
@@ -79,29 +97,40 @@ artifact=${DOCKER_HOST_CONTAINERD_CONFIG}.dpkg-dist
 docker_host_daemon_content > "${DOCKER_HOST_DAEMON_CONFIG}"
 chmod 0644 "${DOCKER_HOST_DAEMON_CONFIG}"
 
-docker_debian_remove_containerd_dpkg_dist
+# Use the production clean-state boundary, not the cleanup helper directly.
+docker_debian_assert_clean_dpkg
+for artifact in "${DOCKER_HOST_CONTAINERD_CONFIG}.dpkg-"*; do
+  [[ ! -e "${artifact}" && ! -L "${artifact}" ]] \
+    || fail "production boundary left a dpkg sidecar: ${artifact}"
+done
 docker_host_validate_storage_and_configuration
-[[ ! -e "${artifact}" && ! -L "${artifact}" ]] \
-  || fail "real config.toml.dpkg-dist was not removed"
 [[ "$(cat "${DOCKER_HOST_CONTAINERD_CONFIG}")" == "${managed_content}" ]] \
   || fail "cleanup changed the managed config.toml"
 
-printf 'arbitrary discarded package content\n' > "${artifact}"
-chmod 0644 "${artifact}"
+# The transaction boundary must perform the same cleanup.
+printf '%s\n' 'schema=1' 'phase=transaction' 'package=containerd.io:2.0' > "${DOCKER_HOST_MARKER}"
+printf 'again\n' > "${DOCKER_HOST_CONTAINERD_CONFIG}.dpkg-new"
+docker_debian_assert_recovery_dpkg_bounded
+[[ ! -e "${DOCKER_HOST_CONTAINERD_CONFIG}.dpkg-new" ]] \
+  || fail "transaction boundary left config.toml.dpkg-new"
+
 printf 'unmanaged\n' > "${DOCKER_HOST_CONTAINERD_DIRECTORY}/rogue.conf"
 chmod 0644 "${DOCKER_HOST_CONTAINERD_DIRECTORY}/rogue.conf"
-docker_debian_remove_containerd_dpkg_dist
 set +e
-(docker_host_validate_storage_and_configuration) 2> "${TMP}/rogue.err"
+(
+  docker_debian_assert_clean_dpkg
+  docker_host_validate_storage_and_configuration
+) 2> "${TMP}/rogue.err"
 rogue_status=$?
 set -e
 (( rogue_status == 1 )) || fail "unmanaged containerd entry was accepted"
-[[ ! -e "${artifact}" && ! -L "${artifact}" ]] \
-  || fail "arbitrary config.toml.dpkg-dist was not removed"
 [[ -f "${DOCKER_HOST_CONTAINERD_DIRECTORY}/rogue.conf" ]] \
   || fail "cleanup removed an unrelated containerd entry"
+grep -Fq "Unmanaged containerd configuration entry remains: ${DOCKER_HOST_CONTAINERD_DIRECTORY}/rogue.conf" \
+  "${TMP}/rogue.err" \
+  || fail "diagnostic did not identify the actual unmanaged entry"
 grep -Fxq 'Docker provisioning failed in phase configuration: containerd configuration directory contains unmanaged entries' \
   "${TMP}/rogue.err" \
   || fail "unrelated entry did not retain strict directory validation"
 
-printf 'Docker real dpkg conffile recovery integration passed\n'
+printf 'Docker interrupted dpkg conffile recovery integration passed\n'

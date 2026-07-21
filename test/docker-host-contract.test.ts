@@ -38,7 +38,7 @@ test("provisioner implements fresh, residual-cleanup, or exact-managed state and
 
 test("unmarked Docker remnant cleanup is exact, restartable, and fully reclassified before publication", async () => {
   const host = await source("scripts/docker-host.sh");
-  const adapter = await source("scripts/docker-host-debian.sh");
+  const adapter = `${await source("scripts/docker-host-debian.sh")}\n${await source("scripts/docker-host-debian-core.sh")}`;
   const cleanup = host.indexOf("docker_host_classify_and_clean_unmarked() {");
   const loop = host.indexOf("\n  while :; do\n", cleanup);
   const firstClassification = host.indexOf("\n    docker_host_classify\n", loop);
@@ -90,7 +90,7 @@ test("configuration precedes controlled package installation and explicit startu
 
 test("managed files publish through unique same-directory temporary files", async () => {
   const host = await source("scripts/docker-host.sh");
-  const adapter = await source("scripts/docker-host-debian.sh");
+  const adapter = `${await source("scripts/docker-host-debian.sh")}\n${await source("scripts/docker-host-debian-core.sh")}`;
   assert.match(host, /mktemp "\$\{directory\}\/\.agent-relay-/u);
   assert.match(host, /\/usr\/bin\/mv -T -- "\$\{stage\}" "\$\{target\}"/u);
   assert.match(adapter, /MANAGED_KEY_STAGE_GLOB=.*\.tmp\./u);
@@ -99,7 +99,7 @@ test("managed files publish through unique same-directory temporary files", asyn
 });
 
 test("package transaction pins requested and resolver-selected packages", async () => {
-  const adapter = await source("scripts/docker-host-debian.sh");
+  const adapter = `${await source("scripts/docker-host-debian.sh")}\n${await source("scripts/docker-host-debian-core.sh")}`;
   assert.match(adapter, /selected_exact\+=\("\$\{selected_package\}=\$\{selected_version\}"\)/u);
   assert.match(adapter, /DOCKER_DEBIAN_DPKG_CONFFILE_OPTIONS=\(--force-confdef --force-confold\)/u);
   assert.match(adapter, /DOCKER_DEBIAN_APT_CONFFILE_OPTIONS=\([\s\S]*?-o Dpkg::Options::=--force-confdef[\s\S]*?-o Dpkg::Options::=--force-confold[\s\S]*?\)/u);
@@ -111,6 +111,16 @@ test("package transaction pins requested and resolver-selected packages", async 
   assert.match(adapter, /Installed version differs from resolved transaction/u);
   assert.match(adapter, /docker_debian_candidate_is_unambiguously_official/u);
   assert.doesNotMatch(adapter, /apt-cache depends --recurse/u);
+});
+
+test("discarded containerd package configuration is removed by exact path", async () => {
+  const adapter = await source("scripts/docker-host-debian.sh");
+  assert.match(adapter, /local artifact="\$\{DOCKER_HOST_CONTAINERD_CONFIG\}\.dpkg-dist"/u);
+  assert.match(adapter, /\/usr\/bin\/rm -f -- "\$\{artifact\}"/u);
+  assert.match(adapter, /docker_debian_assert_clean_dpkg\(\) \{[\s\S]*?docker_debian_remove_containerd_dpkg_dist[\s\S]*?\n\}/u);
+  assert.match(adapter, /docker_debian_assert_recovery_dpkg_bounded\(\) \{[\s\S]*?docker_debian_remove_containerd_dpkg_dist[\s\S]*?\n\}/u);
+  assert.match(adapter, /docker_debian_install_exact_packages\(\) \{[\s\S]*?docker_debian_remove_containerd_dpkg_dist[\s\S]*?\n\}/u);
+  assert.match(adapter, /docker_debian_configure_pending_packages\(\) \{[\s\S]*?docker_debian_remove_containerd_dpkg_dist[\s\S]*?\n\}/u);
 });
 
 test("transaction recovery starts only after the package-state boundary passes", async () => {

@@ -29,6 +29,11 @@ for required in \
   ansible/playbooks/host.yml \
   ansible/roles/agent_relay_host/defaults/main.yml \
   ansible/roles/agent_relay_host/tasks/main.yml \
+  ansible/roles/agent_relay_host/tasks/packages.yml \
+  ansible/roles/agent_relay_host/tasks/users.yml \
+  ansible/roles/agent_relay_host/tasks/filesystem.yml \
+  ansible/roles/agent_relay_host/tasks/containers.yml \
+  ansible/roles/agent_relay_host/tasks/toolchains.yml \
   ansible/roles/agent_relay_host/handlers/main.yml \
   ansible/roles/agent_relay_host/templates/daemon.json.j2 \
   ansible/roles/agent_relay_host/templates/containerd-config.toml.j2; do
@@ -44,8 +49,8 @@ grep -q 'require_command python3' install.sh
 grep -q 'sudo -n true' install.sh
 grep -q 'agent_relay_extra_apt_packages' ansible/roles/agent_relay_host/defaults/main.yml
 grep -q 'apt-get install -y --no-install-recommends python3' ansible/playbooks/host.yml
-grep -q 'validate: /usr/sbin/visudo -cf %s' ansible/roles/agent_relay_host/tasks/main.yml
-grep -q 'checksum: sha256:https://static.rust-lang.org' ansible/roles/agent_relay_host/tasks/main.yml
+grep -q 'validate: /usr/sbin/visudo -cf %s' ansible/roles/agent_relay_host/tasks/users.yml
+grep -q 'checksum: sha256:https://static.rust-lang.org' ansible/roles/agent_relay_host/tasks/toolchains.yml
 
 python3 - <<'PY'
 from pathlib import Path

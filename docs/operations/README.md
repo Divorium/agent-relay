@@ -1,70 +1,111 @@
 # Native GitHub Runner Operations
 
-These procedures describe the supported systemd-capable Linux runner host contract. The concrete Linux distribution, virtualization platform, cloud provider, or bare-metal placement is not part of the operating contract. Active ExecPlans may propose later behavior; do not operate the host as though a planned feature already exists.
+## Supported host
 
-## Filesystem layout
+Agent Relay supports a fresh Debian 13 (Trixie) x86-64 systemd host. Before Ansible, the host needs network access and root SSH only. Ansible bootstraps Python 3, installs sudo and creates the operational administrator.
 
-All Agent Relay and GitHub Runner application paths are grouped under `/srv/github-runner/storage`:
+## Initialize the host
 
-```text
-/srv/github-runner/storage/agent-relay  administrator-owned source and root-owned compiled runtime
-/srv/github-runner/storage/work         github-runner-owned workflow workspaces
-/srv/github-runner/storage/runner       official GitHub Actions runner
-/srv/github-runner/storage/home         github-runner home and Codex authentication
-/srv/github-runner/storage/build        disposable update leftovers
-/srv/github-runner/storage/build-home   builder home
-```
-
-`/srv/github-runner/storage/runner/_work` is a managed symlink to `../work`.
-
-The current path, ownership, privilege, and update contracts are specified in `docs/native-github-runner-specification.md`. `github-runner` and `agent-relay-builder` have locked passwords and no sudo access. The runner cannot modify the trusted source checkout or compiled runtime.
-
-## Initial setup
+On the control machine:
 
 ```bash
-cd /srv/github-runner/storage/agent-relay
-./install.sh
-./update.sh
+cd ansible
+cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml
+$EDITOR inventory/example.ini inventory/group_vars/all.yml
+ansible-playbook -i inventory/example.ini playbooks/host.yml
 ```
 
-The host must run systemd as PID 1. The current installer implementation supports Debian x86-64 and retains a WSL compatibility path; only that WSL path may require `wsl --shutdown` after systemd is enabled. This compatibility limitation does not make WSL, a virtual machine, or any specific hypervisor part of the architecture.
+Use `ansible-core >= 2.18`. SSH host-key checking remains enabled. Do not commit private keys, passwords, GitHub tokens or Codex credentials.
 
-Do not run `install.sh` for normal releases.
+The created administrator receives configured public keys and passwordless sudo. `github-runner` is deliberately added to the Docker group, which is root-equivalent host access.
+
+Add ordinary packages by extending:
+
+```yaml
+agent_relay_extra_apt_packages:
+  - ripgrep
+```
+
+Rerun the playbook after changing desired host state. The role manages named paths only and must not recursively alter an installed checkout, runner payload, workspace, home or Docker data tree.
+
+## Initial runner installation
+
+Connect as the administrator created by Ansible:
+
+```bash
+git clone <repository-url> /srv/github-runner/storage/agent-relay
+sudo -u github-runner -H /usr/local/bin/codex login
+cd /srv/github-runner/storage/agent-relay
+./install.sh
+```
+
+Codex login is manual. `install.sh` neither performs nor verifies authentication.
+
+The installer validates Python 3, passwordless sudo, users, directories, toolchains, Docker, checkout ownership and the current runtime before mutation. It installs runner binaries and registration only when absent. It never calls Ansible, `apt`, `dpkg`, `useradd`, Docker provisioning, `installdependencies.sh` or Codex login.
 
 ## Release update
+
+The source checkout is trusted runtime input. Stop intake and drain the active worker before changing it:
+
+```bash
+sudo systemctl stop actions.runner.Divorium.gh-runner.service
+runner_uid="$(id -u github-runner)"
+while ps -e -o euid=,comm= | awk -v uid="$runner_uid" '$1 == uid && $2 == "Runner.Worker" { found=1 } END { exit !found }'; do
+  sleep 2
+done
+```
+
+When host desired state changed, run the current playbook from the operator checkout before updating the target checkout. Then:
 
 ```bash
 cd /srv/github-runner/storage/agent-relay
 git pull --ff-only
-./update.sh
+./install.sh
 ```
 
-Git synchronization is explicit and remains outside `update.sh`. The pipeline validates the revision before it reaches `main`. The updater stops the runner listener, scans the complete process table for a `Runner.Worker` owned by the numeric `github-runner` UID, waits only while that worker exists, removes the old runtime, compiles `dist` directly from the checked-out sources with the pinned global TypeScript compiler, applies root ownership and read-only runtime modes, and starts the service. No processes owned by `github-runner`, or a listener without a worker, means the runner is idle and replacement continues.
+`install.sh` builds and dynamically imports a staged production runtime as `agent-relay-builder` before stopping the listener itself. The stage is adjacent to `dist`, finalized as root-owned read-only content, and activated by same-filesystem rename. The service is then enabled, restarted and checked for an active `Runner.Listener`.
 
-The updater does not require a clean checkout and does not run dependency installation, tests, coverage, syntax checks, or toolchain smoke. It does not retain or restore the old runtime. If an update fails, correct the cause and run `./update.sh` again; the next invocation deletes `dist` and rebuilds it from zero.
+## Interrupted runtime swap
+
+Normally `dist.previous` exists only between the two rename operations and is deleted immediately after a successful swap.
+
+If an interrupted run leaves `dist.previous`:
+
+1. keep the runner stopped;
+2. inspect `dist` and `dist.previous` as root-owned regular directory trees;
+3. when `dist` is absent, restore the validated previous tree:
+
+   ```bash
+   sudo mv /srv/github-runner/storage/agent-relay/dist.previous \
+     /srv/github-runner/storage/agent-relay/dist
+   ```
+
+4. when a valid `dist` exists, deliberately remove the stale previous tree;
+5. rebuild the host when the state cannot be established safely.
+
+Listener startup failure does not trigger runtime rollback because the listener starts the GitHub runner and does not load Agent Relay `dist`.
 
 ## Status
 
 ```bash
 sudo systemctl status actions.runner.Divorium.gh-runner.service
+sudo -u github-runner -H docker info
 ```
 
-## Codex execution output
+## Filesystem layout
 
-Codex progress is normalized into `[codex] `-prefixed Actions-safe physical lines, redacted, and streamed live in the Actions job log through a bounded queue. After the Codex step, the workflow uploads `agent-relay-output`; its transcript contains the same bytes Relay accepted for the live log. Raw `codex exec --json` records are internal and are not an operator-facing log format. If the next complete physical line would exceed `MAX_OUTPUT_BYTES` after normalization and redaction, both views keep the same accepted complete-line prefix and contain one `[codex] [OUTPUT TRUNCATED]` line while Relay continues bounded transport validation and draining and preserves the eventual step status.
+```text
+/srv/github-runner/storage/agent-relay
+/srv/github-runner/storage/work
+/srv/github-runner/storage/runner
+/srv/github-runner/storage/home
+/srv/github-runner/storage/build-home
+/srv/github-runner/storage/docker/engine
+/srv/github-runner/storage/docker/containerd
+```
 
-`MAX_JSONL_RECORD_BYTES` is a separate protocol limit. When unset, Relay derives `max(16 MiB, 8 * MAX_OUTPUT_BYTES + 1 MiB)` for JSON escaping and envelope headroom. An explicit value must be between 1 MiB and 256 MiB. JSONL framing is byte-oriented and rejects on the first byte over that limit. The default 256 KiB/128 KiB queue watermarks, hard queue maximum of less than 256 KiB plus one 32 KiB segment, one paused raw chunk per child source, 16 KiB stderr continuation bound, and lifecycle replay caps are runtime invariants rather than operator settings.
+The old `/srv/github-runner/storage/build`, `update.sh`, WSL path and shell Docker provisioner no longer exist.
 
-The artifact is not available until its upload step runs. `${GITHUB_OUTPUT}` carries workflow outputs such as the commit message and is not a logging channel.
+## Codex output
 
-## Post-deployment Codex output smoke
-
-The branch implementation is proven pre-merge by exact-SHA CI with controlled child processes; the pull-request Codex job still runs the previously deployed trusted runtime. Only after the implementation is merged and the standard `./update.sh` deployment completes may a real Codex run count as transport smoke evidence.
-
-Run the normal Codex workflow against a small active ExecPlan after deployment. The automated smoke evidence must record the merged SHA and deployed runtime revision, show normalized progress before Codex exits, confirm that every untrusted physical line is `[codex] `-prefixed, confirm exactly one bounded artifact transcript, and confirm successful finalization or the expected authoritative nonzero/timeout result. Store that evidence with the deployment record; do not describe a pre-merge run as final-SHA runtime evidence.
-
-## Documentation authority
-
-- `README.md`, this operations guide, the technical specification, and the current source describe implemented behavior.
-- The selected file under `docs/exec-plans/active/` describes proposed implementation work.
-- Files under `docs/exec-plans/completed/` are historical and must not be used as current operating instructions.
+Codex output is normalized, redacted and streamed live with a fixed `[codex] ` prefix. The same accepted bytes are written to the uploaded `agent-relay-output` transcript. Raw Codex JSONL is internal. `${GITHUB_OUTPUT}` contains workflow values only.

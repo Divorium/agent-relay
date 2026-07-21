@@ -102,8 +102,9 @@ test("package transaction pins requested and resolver-selected packages", async 
   const adapter = await source("scripts/docker-host-debian.sh");
   assert.match(adapter, /selected_exact\+=\("\$\{selected_package\}=\$\{selected_version\}"\)/u);
   assert.match(adapter, /DOCKER_DEBIAN_DPKG_CONFFILE_OPTIONS=\(--force-confdef --force-confold\)/u);
-  assert.match(adapter, /Dpkg::Options::=--force-confdef/u);
-  assert.match(adapter, /Dpkg::Options::=--force-confold/u);
+  assert.match(adapter, /DOCKER_DEBIAN_APT_CONFFILE_OPTIONS=\([\s\S]*?-o Dpkg::Options::=--force-confdef[\s\S]*?-o Dpkg::Options::=--force-confold[\s\S]*?\)/u);
+  assert.match(adapter, /docker_debian_install_exact_packages\(\) \{[\s\S]*?DEBIAN_FRONTEND=noninteractive[\s\S]*?\/usr\/bin\/apt-get[\s\S]*?"\$\{DOCKER_DEBIAN_APT_CONFFILE_OPTIONS\[@\]\}" install "\$@"[\s\S]*?\n\}/u);
+  assert.match(adapter, /docker_debian_configure_pending_packages\(\) \{[\s\S]*?DEBIAN_FRONTEND=noninteractive[\s\S]*?\/usr\/bin\/dpkg[\s\S]*?"\$\{DOCKER_DEBIAN_DPKG_CONFFILE_OPTIONS\[@\]\}" --configure -a[\s\S]*?\n\}/u);
   assert.match(adapter, /docker_debian_install_exact_packages "\$\{selected_exact\[@\]\}"/u);
   assert.match(adapter, /rerun \.\/update\.sh to resume the recorded transaction/u);
   assert.doesNotMatch(adapter, /make dpkg clean/u);

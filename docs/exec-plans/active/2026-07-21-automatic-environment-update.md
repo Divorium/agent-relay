@@ -1,547 +1,381 @@
 # Automate Agent Relay environment deployment and rollback
 
-This ExecPlan is a living document. The sections `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` must be kept current as work proceeds. Maintain this document in accordance with `.agent/PLANS.md`. Only this selected file under `docs/exec-plans/active/` is the implementation instruction for this task.
+This ExecPlan is a living document. Keep `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` current while work proceeds. Maintain this document according to `.agent/PLANS.md`. Only this selected file under `docs/exec-plans/active/` is the implementation instruction for this task.
 
-The reviewed baseline is `main` commit `e9ec636e5abf383f8831fc126b99f04e2e005a3c`. Before implementation starts, verify that this commit exists and is an ancestor of `HEAD`. If `main` advances, recheck every current-state statement, path, workflow, runner contract, GitHub-setting assumption, package script, and referenced Docker decision. Update the baseline and record the review in `Progress`; do not silently implement against another revision.
+The reviewed baseline is `main` commit `e9ec636e5abf383f8831fc126b99f04e2e005a3c`. Before implementation starts, verify that this commit exists and is an ancestor of `HEAD`. If `main` advances, recheck every current-state statement, path, workflow, runner contract, GitHub-setting assumption, package script, and Docker decision. Update the baseline and record the review in `Progress`; do not silently implement against another revision.
 
-Codex may use read-only Git commands such as `status`, `diff`, `show`, `grep`, `rev-parse`, `show-ref`, `cat-file`, and `merge-base`. Codex must not run `git add`, `commit`, `merge`, `rebase`, `reset`, `restore`, `checkout`, `cherry-pick`, or `push`; the GitHub runner owns commit and push. Workflow files and GitHub settings are human-maintained for this task. Codex must not edit `.github/workflows/` or `examples/github-actions/`.
+Codex may use read-only Git commands such as `status`, `diff`, `show`, `grep`, `rev-parse`, `show-ref`, `cat-file`, and `merge-base`. Codex must not run `git add`, `commit`, `merge`, `rebase`, `reset`, `restore`, `checkout`, `cherry-pick`, or `push`; the GitHub runner owns commit and push. Workflow files and GitHub settings are human-maintained. Codex must not edit `.github/workflows/` or `examples/github-actions/`.
 
 ## Purpose / Big Picture
 
-Replace the current release procedure:
+Replace the current manual release procedure:
 
     cd /srv/github-runner/storage/agent-relay
     git pull --ff-only
     ./update.sh
 
-with an observable deployment system for the single long-lived Agent Relay VM.
+with a controlled deployment system for the single long-lived Agent Relay VM.
 
 After this work:
 
-- a merge into protected `main` is observed through its resulting `push`, the exact merge-result SHA is validated on GitHub-hosted infrastructure, and it is deployed only while both target and workflow-control commits remain current;
-- a manual retry can deploy only current protected `main`;
-- an authorized operator can select an open same-repository pull request, including a draft PR, or a same-repository branch, resolve it once to an exact SHA, validate it without using either self-hosted runner, and test that revision's real privileged `update.sh` on the real VM;
-- a second persistent deployment runner remains independent of the compiled Agent Relay runtime and can submit or inspect a transaction while the primary runner is stopped or broken;
-- the installed controller stops the primary listener, drains every active `github-runner` worker, and runtime-masks the primary service before changing the trusted checkout;
-- managed target `update.sh` executes as root only inside a controller-created transient systemd unit, prepares a transaction-scoped runtime stage and explicitly allowed non-control-plane host changes, and never owns active-runtime activation or deployment state;
-- the installed controller alone owns runtime backup, activation, journal transitions, accepted Git refs, service unmask/start, and restoration;
-- the previously active runtime remains retained until acceptance or restoration is complete, including the first bootstrap before any LKG exists;
-- the primary listener remains unavailable throughout a temporary-target test and LKG restoration, while a controller monitor detects accidental direct `Runner.Listener` or `Runner.Worker` launch;
-- the controller executes runtime health as `github-runner` in a private-network, no-new-privileges systemd sandbox that bind-mounts only finalized runtime read-only and hides the source checkout;
-- a failed `main` deployment attempts network-independent convergence to the previous locally retained last-known-good main revision;
-- workflow cancellation does not terminate a post-mutation transaction because a root-owned systemd service, not the workflow shell, owns the transaction;
-- deployment and restoration results are reported separately, and an explicit critical-recovery state is preserved whenever convergence cannot be proven.
+- a merge into protected `main` triggers validation of the exact pushed SHA and deployment only when that SHA is still current at transaction start;
+- an authorized operator can manually select a same-repository branch, resolve it once to an exact SHA, validate it, run that revision's real managed `update.sh`, and always restore the host to the unchanged last-known-good `main` revision;
+- the controller stops the primary listener and drains active `github-runner` workers before changing the trusted checkout;
+- a second persistent deployment runner remains available for accidental failures of the primary runner, runtime, updater, or checkout that do not disable the whole VM;
+- the root-owned controller is the only owner of Git mutation, updater execution, runtime activation, accepted state, restoration, and transaction recovery;
+- failed `main` deployment attempts restore the previous locally retained LKG without requiring GitHub connectivity;
+- workflow cancellation cannot abandon a post-mutation transaction because a root-owned systemd service owns the host transaction;
+- results distinguish validation failure, superseded request, drain failure, target failure, restoration success, restoration failure, and critical recovery.
 
-Selected revisions are trusted same-repository code and execute with broad host authority because the purpose is to test the real privileged updater. This system provides **best-effort rollback for accidental failures**. It is not malicious-code isolation and is not a VM snapshot. A privileged target can defeat same-VM controls. Root ownership, runner groups, approvals, environment sanitization, cgroups, service masks, monitoring, and a second runner must never be described as protection from malicious privileged code.
+Selected branches are trusted same-repository code and execute with broad host authority because the purpose is to test the real privileged updater. The system provides **best-effort rollback for accidental failures**, not isolation from malicious code and not a VM snapshot. A malicious root-equivalent target can damage the controller, deployment runner, recovery data, credentials, operating system, Docker data, or VM. Runner groups, approvals, ownership, cgroups, masks, hashes, and a second runner are not a malicious-root boundary.
 
-The acceptance path deliberately does not claim that the primary registration has already accepted a GitHub job. Starting the primary listener during a temporary transaction would allow unrelated queued work to race onto the temporary runtime. Without retaining an organization-management credential for dynamic runner control, the transaction proves runtime identity and health locally, then starts the primary listener only after final state selection.
+The feature proves local runtime and primary-listener readiness. It does not claim that GitHub has already scheduled and completed a post-deployment job. Achieving that guarantee without allowing unrelated queued work to race the smoke job would require a separate runner-registration or dynamic-routing design and is outside this plan.
 
-Temporary deployment validates updater/runtime behavior under the currently installed deployment protocol and may run an isolated controller-candidate compatibility self-test. It does **not** apply or accept fresh-install behavior, one-time migration, GitHub workflow/settings changes, runner-group/environment/ruleset changes, runner installation or registration changes, sudoers changes, systemd control-plane unit changes, or breaking controller protocol migrations. Those surfaces require deterministic system tests and disposable-VM acceptance.
+Temporary branch testing covers updater and runtime behavior under the already installed deployment protocol. It does not apply fresh-install changes, migration changes, GitHub workflow/settings changes, runner registration changes, sudoers changes, or breaking controller-protocol changes. A temporary branch requiring those changes is rejected as unsupported rather than reported as fully tested.
 
-This plan preserves the current Docker decision: `DOCKER_PROVISIONING_ENABLED=0` remains authoritative. The work must not re-enable Docker provisioning or reopen the separate design from PR #46.
+`DOCKER_PROVISIONING_ENABLED=0` remains authoritative. This plan must not re-enable Docker provisioning or reopen PR #46.
 
 ## Progress
 
-Keep this section append-only. Split partially completed work into a checked historical entry and a remaining unchecked entry. Every checked implementation item must identify a repository location plus passing automated evidence, or a reproducible command plus its captured result. Blocked items remain unchecked and use the `[blocked]` prefix required by `.agent/PLANS.md`.
+Keep this section append-only. Checked implementation items require a repository location plus passing automated evidence, or a reproducible command plus captured result. Blocked items remain unchecked and use `[blocked]`.
 
-- [x] (2026-07-21) Reviewed the current installation, updater, runner, CI, Codex, documentation, and package-script contracts on baseline `e9ec636e5abf383f8831fc126b99f04e2e005a3c`.
-- [x] (2026-07-21) Confirmed that the primary runner cannot synchronously update itself because `update.sh` stops its listener and waits for every `Runner.Worker` owned by `github-runner`.
-- [x] (2026-07-21) Reviewed GitHub persistent, ephemeral, JIT, registration-token, runner-label, runner-group, selected-workflow, workflow-dispatch, environment-review, concurrency-queue, and self-hosted update mechanisms.
-- [x] (2026-07-21) Selected a second persistent deployment runner for the single long-lived VM instead of an ephemeral or JIT runner.
-- [x] (2026-07-21) Converted the initial architecture notes into the living ExecPlan structure used by PR #3.
-- [x] (2026-07-21) Performed twelve adversarial review passes. The revisions corrected checkout-before-drain, overstated recovery guarantees, ownership and authorization gaps, primary-dependent validation and smoke, workflow-lifetime coupling, bootstrap circularity, queue semantics, local LKG storage, reusable-workflow ambiguity, controller upgrade ordering, runtime staging, control-plane freshness, process containment, request admission, direct primary-start races, managed-updater authority, health sandboxing, lock cutover, workflow reruns, temporary-test scope, protected-control-plane drift, and self-hosted runner auto-update nondeterminism.
-- [ ] Complete Milestone 0 and record actual GitHub-side feasibility evidence before implementation code is written.
-- [ ] Revalidate the pinned baseline and all human-maintained workflow files immediately before implementation.
-- [ ] Implement the stable deployment protocol, portable validation entrypoint, managed stage-only updater, controller-owned activation, runtime manifest and sandboxed health interface.
-- [ ] Implement fresh-install and existing-host migration support for the deployment account, pinned runner installations, restricted group, controller services, recovery repository, state roots, and bootstrap-pending mode.
-- [ ] Implement atomic request submission, root transaction lifetime, drain/mask/monitor, exact checkout, updater cgroup, control-plane validation, acceptance, restoration, cancellation survival, and boot recovery.
-- [ ] Human reviewer: add direct main, temporary, bootstrap, and status workflows; route ordinary jobs only to `agent-relay-main`; configure the runner group, environments, ruleset, and concurrency.
-- [ ] Add deterministic unit, contract, integration, and system coverage for every milestone and failure boundary.
-- [ ] Run focused validation, complete repository validation, exact-head CI, and independent point-by-point review.
-- [ ] Perform real-host migration and temporary/main demonstrations. Perform failed-main, cancellation, restart, checkout-corruption, bootstrap-failure, runner-upgrade, and controller-activation demonstrations on a disposable clone or snapshot-equivalent VM.
-- [ ] Update `Outcomes & Retrospective`, append final evidence and a revision note, and move this same plan to `docs/exec-plans/completed/` only after every item is checked.
+- [x] (2026-07-21) Reviewed installation, updater, runner, CI, Codex, documentation, and package scripts on baseline `e9ec636e5abf383f8831fc126b99f04e2e005a3c`.
+- [x] (2026-07-21) Confirmed that the primary runner cannot synchronously update itself because the updater stops its listener and waits for all `github-runner` workers.
+- [x] (2026-07-21) Reviewed GitHub runner groups, selected-workflow restrictions, environments, manual dispatch, rerun identity, and concurrency queueing.
+- [x] (2026-07-21) Selected a second persistent deployment runner instead of ephemeral or JIT creation.
+- [x] (2026-07-21) Converted the plan to the repository living ExecPlan structure.
+- [x] (2026-07-21) Performed repeated adversarial reviews that corrected checkout-before-drain, overstated recovery guarantees, weak LKG storage, ambiguous transaction ownership, missing exact-SHA validation, queue replacement, workflow-ref handling, manual authorization, controller upgrade, cancellation, bootstrap, runtime staging, updater authority, and Docker scope.
+- [x] (2026-07-21) Twelfth adversarial review removed unrequested PR targeting, reduced the workflow design, separated immutable control-plane verification from mutable runner/state checks, added explicit infrastructure-schema gating, preserved an administrator recovery path through the controller, and replaced credential-bearing health execution with a dedicated sandboxed health account.
+- [ ] Complete Milestone 0 with evidence from the actual GitHub organization before implementation.
+- [ ] Revalidate the baseline and human-maintained workflow files immediately before implementation.
+- [ ] Implement the versioned deployment protocol, portable validation, stage-only updater mode, runtime manifest, health command, and infrastructure-schema gate.
+- [ ] Implement fresh installation and existing-host migration for the deployment runner, controller, recovery repository, state, runtime staging, health account, and bootstrap.
+- [ ] Implement submission, independent systemd transaction ownership, drain, checkout, update, activation, validation, acceptance, restoration, cancellation recovery, and boot recovery.
+- [ ] Human reviewer: add the two deployment workflows, route all ordinary self-hosted jobs to `agent-relay-main`, and configure runner group, environment, ruleset, and concurrency.
+- [ ] Add deterministic tests, run full validation and exact-head CI, perform independent review, and execute production/disposable-VM demonstrations.
+- [ ] Complete `Outcomes & Retrospective`, append final evidence, and move this same plan to `completed` only when every item is checked.
 
 ## Surprises & Discoveries
 
-- Observation: changing the trusted checkout before primary workers finish can change scripts used by active jobs.
-  Evidence: current Codex workflow executes resolver, launcher, and finalizer files directly from `/srv/github-runner/storage/agent-relay`.
-
-- Observation: another runner process under the same `github-runner` UID would retain the updater self-wait deadlock.
-  Evidence: the current wait condition identifies `Runner.Worker` by UID and process name, not by runner registration, label, service, or directory.
-
-- Observation: a root-owned controller is not a security boundary against root-equivalent target code.
-  Evidence: privileged target code can alter root-owned files, services, credentials, networking, recovery data, or the VM. Recovery claims must remain limited to accidental failure.
-
-- Observation: the current updater lock is too narrow for deployment orchestration.
-  Evidence: it starts inside `update.sh`, after future Git selection, and ends before external acceptance or restoration.
-
-- Observation: exact-SHA validation cannot depend on the primary runner.
-  Evidence: deployment and restoration must still work while primary is unavailable. Validation therefore runs on GitHub-hosted infrastructure.
-
-- Observation: the complete current `npm run check` is not portable to a clean GitHub-hosted runner.
-  Evidence: `check:toolchain` requires dedicated Java, Go, Rust, Codex, and filesystem locations. A portable check is required without weakening the complete host check.
-
-- Observation: a transactional GitHub smoke job on primary creates a scheduling race.
-  Evidence: once primary listener starts, any queued ordinary job matching `agent-relay-main` can be assigned before the intended smoke and could run against temporary runtime.
-
-- Observation: the current updater removes active `dist` before replacement compilation succeeds.
-  Evidence: a failed first bootstrap would otherwise destroy the only working runtime before an LKG exists.
-
-- Observation: checkout SHA does not identify active runtime.
-  Evidence: current `dist` contains no accepted-source manifest. Exact source and entrypoint digests must be produced and independently verified.
-
-- Observation: current `origin/main` is not rollback state after a failed merge deployment.
-  Evidence: the remote already points to the failed commit. A previous accepted object must be retained locally.
-
-- Observation: storing only a SHA does not retain the Git object.
-  Evidence: force-push, ref deletion, garbage collection, or production `.git` damage can make the object unavailable. A protected bare recovery repository is required.
-
-- Observation: restoration must not require GitHub availability.
-  Evidence: network or DNS failure may be part of the deployment incident.
-
-- Observation: workflow cancellation is not a safe transaction lifetime boundary.
-  Evidence: cancellation can terminate the invoking shell after checkout or runtime mutation. A root systemd service must continue independently.
-
-- Observation: direct selected workflows are simpler than a reusable workflow plus custom OIDC verifier in this repository.
-  Evidence: runner-group policy can list multiple exact workflows at `refs/heads/main`, and only jobs directly defined in selected workflows may use the group.
-
-- Observation: protected-environment approval must finish before the deployment job enters shared concurrency.
-  Evidence: an unresolved temporary approval could otherwise block automatic main deployment.
-
-- Observation: GitHub concurrency can be released before the root transaction finishes.
-  Evidence: workflow cancellation releases the job, while the root service continues. Subsequent jobs must use host status and lock as authority.
-
-- Observation: bootstrap requires the deployment runner before an LKG exists.
-  Evidence: migration must start the restricted runner in bootstrap-pending mode and accept only bootstrap/status requests.
-
-- Observation: bootstrap failure needs a fallback that is not falsely called LKG.
-  Evidence: migration must retain exact pre-bootstrap checkout object, runtime tree, and prior primary-service state.
-
-- Observation: direct `git pull && ./update.sh` after migration would diverge runtime from accepted state.
-  Evidence: later recovery could silently replace an unrecorded manual runtime. New managed updater must refuse direct invocation.
-
-- Observation: controller upgrades cannot break the protocol understood by the currently installed controller.
-  Evidence: updater, stage, manifest, request, journal, and candidate interfaces need backward compatibility. Breaking changes require a separate migration.
-
-- Observation: unknown recovery state should block primary mutation, not the diagnostic channel.
-  Evidence: the deployment runner exists specifically to report primary-runner failures.
-
-- Observation: runner credential contents can legitimately change without changing runner identity.
-  Evidence: acceptance should verify type, ownership, restrictive mode, and stable identity fields rather than raw credential hashes.
-
-- Observation: queued workflow control code can become stale.
-  Evidence: a run created from an older main commit can start after main advances. `controlPlaneSha` must equal current protected main before mutation.
-
-- Observation: exact target object should enter protected recovery storage before mutation.
-  Evidence: target checkout or production `.git` can be damaged after reset; the transaction still needs the exact object for deterministic handling.
-
-- Observation: runtime staging rename is atomic only within one filesystem.
-  Evidence: controller must compare device IDs and available capacity before drain.
-
-- Observation: a transient systemd cgroup gives stronger accidental descendant control than a shell process group.
-  Evidence: the updater unit can use `KillMode=control-group`, bounded TERM/KILL, and a verifiable inactive terminal state.
-
-- Observation: automatic deletion of unknown pre-existing untracked files is unsafe.
-  Evidence: preflight must reject unexpected tracked or nonignored untracked state. Restoration may clean only post-journal target debris and transaction-owned paths.
-
-- Observation: persistent ignored `node_modules` can be stale.
-  Evidence: managed build must use transaction build roots or pinned global tools and must not consume unverified source dependency cache.
-
-- Observation: target updater cannot be authoritative for journal or active-runtime rename.
-  Evidence: target code could fail between rename boundaries or report false state. Installed controller must observe and perform recovery-critical transitions.
-
-- Observation: target updater can accidentally mutate checkout or active runtime while producing stage.
-  Evidence: controller must verify exact HEAD, tracked cleanliness, nonignored debris, full active-runtime tree digest, service state, mask state, and control-plane digest after updater exits.
-
-- Observation: two submission helpers can race before the transaction service acquires the host lock.
-  Evidence: a root-only request lock and exclusive pending-request file are required before systemd service start.
-
-- Observation: a normal service mask does not prevent direct runner-binary execution.
-  Evidence: controller must monitor primary UID `Runner.Listener` and `Runner.Worker` processes while target code runs and re-drain before any further mutation after an unexpected start.
-
-- Observation: temporary deployment cannot accept infrastructure changes that it does not activate.
-  Evidence: installer, migration, workflow, runner registration, sudoers, systemd control-plane, and breaking controller changes require separate disposable-VM acceptance.
-
-- Observation: `dist` is located inside the source checkout.
-  Evidence: making checkout inaccessible would also hide runtime. Health sandbox must bind-mount finalized `dist` read-only to a separate path before hiding the original checkout.
-
-- Observation: self-hosted runner software updates automatically by default.
-  Evidence: GitHub documents `config.sh --disableupdate` for deterministic, operator-managed runner versions and requires disabled-update runners to be updated regularly. Automatic binary mutation would otherwise invalidate the protected-control-plane baseline. citeturn383438search0turn577599search1
+- Active jobs execute scripts from the trusted checkout; listener stop and worker drain must happen before `git reset`.
+- A second runner under the same `github-runner` UID would retain the updater self-wait deadlock.
+- Root-equivalent target code defeats every same-VM protection; rollback is best effort only.
+- The current updater lock starts too late and ends too early for deployment orchestration.
+- Exact target validation must not depend on the primary self-hosted runner that deployment may need to stop or repair.
+- Current CI does not validate a `push` merge result on `main`; deployment needs an exact-SHA portable validation job.
+- GitHub concurrency defaults retain only one pending run; `queue: max` is required and supports at most 100 pending runs.
+- Queue order is based on when a run starts waiting, not dispatch time; every automatic request must recheck that its SHA is still current.
+- `workflow_dispatch` can be invoked against a non-main ref; the workflow must reject it.
+- Workflow reruns retain the original actor, SHA, and ref; temporary deployment must reject `github.run_attempt != 1` and require a fresh dispatch and approval.
+- A plain LKG SHA file does not preserve its Git object. Recovery requires a local bare repository and protected LKG ref.
+- The current checkout SHA does not prove which revision built active `dist`; bootstrap must redeploy and validate one exact main SHA before publishing LKG.
+- The current updater deletes active `dist` before replacement is proven. Managed mode needs a stage and retained previous runtime.
+- The deployment job cannot safely own host recovery after cancellation; it must submit a durable request to a root-owned service and poll status.
+- Hashing entire live runner directories is unstable because runner diagnostics, work files, and credentials are mutable. Immutable control-plane files, runner identity metadata, and mutable state transitions require separate validation.
+- Hashing or exporting runner credential contents is unnecessary and unsafe. Credential files are checked only for expected type, owner, mode, and location.
+- Health execution as `github-runner` would expose its home and registration material. Runtime readability is checked as `github-runner`, while executable health runs under a dedicated locked account in a systemd sandbox.
+- Temporary branch mode was requested for a manual branch, not for PR selection. PR-number and draft-PR semantics are outside scope.
+- A commit may require an installed infrastructure migration even when runtime code itself validates. Automatic and temporary deployment must compare declared required host schema with installed host schema before drain.
+- Direct `update.sh` mutation outside the controller would desynchronize journal, runtime backup, and LKG. The administrator recovery path must invoke controller-owned managed update rather than bypass it.
 
 ## Decision Log
 
-- Decision: use a second persistent organization runner on the same VM, not an ephemeral or JIT runner.
-  Rationale: the host is long-lived and needs a channel independent of the primary runner process. Ephemeral lifecycle adds persistent API credentials and cleanup without VM isolation.
-  Date/Author: 2026-07-21 / architecture review.
+- Decision: use a second persistent organization runner on the same VM.
+  Rationale: the host is long lived and requires a recovery path independent of the primary runner process; ephemeral creation adds persistent API credentials and lifecycle complexity without VM isolation.
+  Date/Author: 2026-07-21 / operator-approved architecture.
 
-- Decision: describe restoration as best effort for accidental failures.
-  Rationale: privileged target code can defeat every same-VM control.
-  Date/Author: 2026-07-21 / adversarial review.
+- Decision: support automatic current-`main` deployment and manual same-repository **branch** testing only.
+  Rationale: this matches the operator request. PR-number, draft-state, merge-ref, tag, arbitrary SHA, fork, and arbitrary repository inputs are unnecessary and increase resolver scope.
+  Date/Author: 2026-07-21 / scope correction.
 
-- Decision: use four direct workflows pinned to protected main: `deploy-main.yml`, `deploy-temporary.yml`, `deploy-bootstrap.yml`, and `deploy-status.yml`.
-  Rationale: direct selected workflows remove reusable-caller ambiguity and custom authentication code.
-  Date/Author: 2026-07-21 / workflow design.
+- Decision: use two direct human-maintained workflows from protected `main`: `deploy-main.yml` and `deploy-branch.yml`.
+  Rationale: one workflow handles push and manual retry of current main; one handles approved temporary branch testing. Bootstrap is an administrator migration operation, and status is available through the deployment job summary and local read-only controller command. Additional privileged workflows are unnecessary.
+  Date/Author: 2026-07-21 / simplification review.
 
-- Decision: restrict deployment runner group to exactly those four workflow paths at `refs/heads/main`, selected repository `Divorium/agent-relay`, and label `agent-relay-deploy`.
-  Rationale: only directly defined reviewed jobs may reach the privileged runner.
-  Date/Author: 2026-07-21 / access-control review.
+- Decision: restrict the deployment runner group to `Divorium/agent-relay`, public repository access, and those two workflow paths pinned to `refs/heads/main`; route it with `agent-relay-deploy`.
+  Rationale: labels alone are not an access boundary. Milestone 0 must prove these controls are available and writable before the runner is installed.
+  Date/Author: 2026-07-21 / GitHub access review.
 
-- Decision: complete temporary/bootstrap environment approval before deployment-job concurrency and reject `workflowRunAttempt != 1` for those modes.
-  Rationale: repository write access alone must not authorize privileged code, unresolved approval must not block main, and a rerun must not reuse prior approval without a fresh dispatch.
+- Decision: use GitHub-hosted Linux for exact-SHA portable validation.
+  Rationale: validation must still run when the primary runner is broken or stopped and must not execute unaccepted branch code on another privileged self-hosted runner. The existing complete host-specific checks remain required in repository CI and disposable-host acceptance.
+  Date/Author: 2026-07-21 / validation correction.
+
+- Decision: temporary approval occurs in a GitHub-hosted approval job before the privileged job enters shared job-level concurrency.
+  Rationale: an environment attached directly to a queued privileged job may hold the deployment queue while waiting for a reviewer. The approval job references the protected environment; the subsequent deploy job uses the common concurrency group.
+  Date/Author: 2026-07-21 / workflow-ordering correction.
+
+- Decision: configure the two privileged deploy jobs with the same job-level concurrency group, `queue: max`, and no `cancel-in-progress: true`.
+  Rationale: GitHub supports up to 100 pending items and processes them according to queue-entry order, but ordering is not guaranteed from event dispatch. The host lock and current-main check remain authoritative.
+  Date/Author: 2026-07-21 / queue review.
+
+- Decision: reject temporary runs unless `github.ref == refs/heads/main`, `github.run_attempt == 1`, the environment was approved, and the actor is in the root-owned operator allowlist.
+  Rationale: a same-repository branch is privileged code. Fresh dispatch prevents a previously approved run from being replayed after its context is stale.
   Date/Author: 2026-07-21 / authorization review.
 
-- Decision: validate exact target on `ubuntu-latest`, pin every external action to a full commit SHA, declare minimum permissions, and set explicit job timeouts.
-  Rationale: validation must not require either self-hosted runner, and workflow dependencies are part of the trust boundary.
-  Date/Author: 2026-07-21 / validation review.
+- Decision: the root-owned controller owns the entire host transaction.
+  Rationale: drain, Git mutation, updater execution, activation, state publication, restoration, and recovery require one lock, one journal, and one restart owner.
+  Date/Author: 2026-07-21 / transaction design.
 
-- Decision: keep deployment runner under locked `agent-relay-deployer` with no direct checkout or root-state write access.
-  Rationale: the runner executes reviewed workflow shell and fixed no-argument helpers only. Root service owns mutation.
+- Decision: stop the primary listener, wait a bounded time for existing `Runner.Worker` processes, and mutate nothing if drain fails.
+  Rationale: active jobs read the checkout. The controller must not kill them automatically. On timeout it restarts the listener and exits with checkout and runtime unchanged.
+  Date/Author: 2026-07-21 / safety review.
+
+- Decision: run Git as the recorded administrator and keep the deployment account unable to write checkout, root state, controller files, or recovery data.
+  Rationale: this preserves the existing checkout ownership contract. The deployment account may invoke only fixed no-argument submission/status helpers through sudo.
   Date/Author: 2026-07-21 / ownership review.
 
-- Decision: use mode-specific no-argument submission helpers that read bounded canonical JSON from standard input, plus a read-only status helper.
-  Rationale: mode derives from installed executable, not an untrusted option, and credentials need not be stored or passed.
-  Date/Author: 2026-07-21 / request-boundary review.
+- Decision: introduce a versioned managed updater protocol.
+  Rationale: automated execution cannot depend on interactive sudo. In controller mode, root runs the target updater inside a transient systemd unit with a fixed sanitized environment. The updater builds only into a controller-provided stage and declares supported non-control-plane host operations. The controller, not the updater, activates runtime or writes deployment state.
+  Date/Author: 2026-07-21 / updater boundary review.
 
-- Decision: serialize submission with a root-only request lock and exclusive `pending-request.json` creation.
-  Rationale: exactly one pending or active request may exist even when GitHub jobs start concurrently.
-  Date/Author: 2026-07-21 / concurrency review.
+- Decision: preserve an administrator recovery command that routes through the controller.
+  Rationale: disabling all manual update ability would regress the current operational contract. The recorded administrator can invoke a controller command such as `agent-relay-deploy admin-update-current-main`; it performs the same lock, drain, validation, staging, activation, and recovery rules. Direct unmanaged `./update.sh` refuses after migration.
+  Date/Author: 2026-07-21 / recovery-path correction.
 
-- Decision: run the host transaction in a root-owned systemd service independent of workflow lifetime.
-  Rationale: workflow cancellation or deployment-runner death must not interrupt safety after mutation begins.
-  Date/Author: 2026-07-21 / cancellation review.
+- Decision: declare `requiredHostSchema` and deployment protocol versions in repository metadata.
+  Rationale: temporary branches cannot test installer, runner, unit, sudoers, or breaking controller changes. If target requirements exceed installed schema or protocol compatibility, the controller rejects before drain. Current-main deployment reports `migration_required` and leaves LKG active until the administrator runs an explicit migration.
+  Date/Author: 2026-07-21 / infrastructure-scope correction.
 
-- Decision: use dedicated immutable `/var/lib/agent-relay-deploy/transaction.lock` for managed transaction and recovery.
-  Rationale: the administrator file is identity configuration, not a durable mutex. Existing-host migration acquires both the legacy administrator-file lock and new managed lock during cutover; afterward new direct updater refuses, eliminating dual-lock mutation paths.
-  Date/Author: 2026-07-21 / lock review.
+- Decision: store accepted Git objects in a root-owned bare recovery repository with `refs/agent-relay/last-known-good`.
+  Rationale: rollback must not depend on `origin/main`, GitHub availability, or retention of an unreferenced object in the production checkout.
+  Date/Author: 2026-07-21 / recovery design.
 
-- Decision: stop and boundedly drain all primary workers before checkout mutation, then runtime-mask primary for the entire mutation window.
-  Rationale: active jobs consume checkout files and temporary code must never serve ordinary work.
-  Date/Author: 2026-07-21 / isolation review.
+- Decision: stage runtime on the same filesystem, retain the previous active runtime, and use journaled rename steps.
+  Rationale: directory replacement is not a cross-directory atomic transaction. With the primary stopped, ordered same-filesystem renames plus a durable journal make every crash state distinguishable and recoverable without claiming impossible multi-directory atomicity.
+  Date/Author: 2026-07-21 / activation correction.
 
-- Decision: monitor primary service, mask, `Runner.Listener`, and `Runner.Worker` continuously while target updater runs.
-  Rationale: a buggy privileged updater could launch runner directly. Detection terminates updater and requires stop, re-mask, and bounded re-drain before further mutation.
-  Date/Author: 2026-07-21 / scheduling-race review.
+- Decision: validate immutable control-plane files separately from mutable runner and deployment state.
+  Rationale: the immutable inventory includes installed controller/helper binaries, selected systemd unit files, sudoers policy, managed lock path metadata, and protocol files. Runner credentials are validated by type/owner/mode/location only. Journals, refs, logs, work directories, diagnostics, and other mutable state use strict schemas and expected transition checks rather than one unstable tree digest.
+  Date/Author: 2026-07-21 / control-plane correction.
 
-- Decision: run Git mutation as the recorded administrator through the root controller.
-  Rationale: the trusted checkout remains administrator-owned while deployment runner remains unable to write it.
-  Date/Author: 2026-07-21 / ownership review.
+- Decision: run health under locked `agent-relay-health`, not `github-runner`.
+  Rationale: first verify active runtime readability as `github-runner`, then run a fixed health entrypoint under a dedicated account with `PrivateNetwork=yes`, `NoNewPrivileges=yes`, `PrivateTmp=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, no writable host paths, inaccessible checkout/runner/home/work/recovery paths, and a read-only bind mount of finalized runtime to `/run/agent-relay-runtime`.
+  Date/Author: 2026-07-21 / credential-exposure correction.
 
-- Decision: require `controlPlaneSha` to equal current protected `origin/main` for every mutating mode.
-  Rationale: stale queued workflow code must not remain authoritative. Main/bootstrap target also equals current main; temporary target remains independently pinned.
-  Date/Author: 2026-07-21 / freshness review.
+- Decision: do not claim post-deployment GitHub job acceptance.
+  Rationale: starting the primary while a transaction is provisional can allow unrelated queued work to race a smoke job. Local listener and sandboxed runtime checks are the accepted guarantee for this plan.
+  Date/Author: 2026-07-21 / smoke-scope correction.
 
-- Decision: require a protected-main ruleset that mandates PRs for normal changes and blocks force push, deletion, and deployment-workflow bypass.
-  Rationale: only under that policy does `push` to main represent an accepted merge result. Missing enforcement blocks this architecture.
-  Date/Author: 2026-07-21 / branch-policy review.
-
-- Decision: define a backward-compatible deployment protocol before managed deployment.
-  Rationale: installed controller cannot safely execute a pre-protocol or breaking updater. Old temporary branches must merge/rebase the protocol baseline.
-  Date/Author: 2026-07-21 / compatibility review.
-
-- Decision: execute managed target updater as root only in `agent-relay-update@<transaction>.service` with fixed validated environment.
-  Rationale: automation has no interactive sudo ticket. Root updater must not call `sudo`; compilation still runs as unprivileged builder.
-  Date/Author: 2026-07-21 / authority review.
-
-- Decision: make managed target updater a stage producer only.
-  Rationale: installed controller alone must own journal and active-runtime activation. Updater may produce stage and declared non-control-plane host changes but may not modify runner services, control plane, active runtime, refs, or journal.
-  Date/Author: 2026-07-21 / activation review.
-
-- Decision: record deterministic full-tree digests for active runtime and protected deployment control plane before and after updater.
-  Rationale: accidental in-place mutation must be detected before stage activation. Runtime digest covers path, type, UID, GID, mode, and file contents. Protected-control-plane digest uses an exact canonical inventory with explicitly allowed transaction-owned changes.
-  Date/Author: 2026-07-21 / integrity review.
-
-- Decision: restrict finalized active/staged runtime to regular files and directories.
-  Rationale: symlinks and special files make hashing, activation, and recovery ambiguous.
-  Date/Author: 2026-07-21 / filesystem review.
-
-- Decision: disable automatic software updates for both self-hosted runners using supported `--disableupdate` registration.
-  Rationale: deterministic runner binaries are part of the deployment control plane. Existing-host migration may re-register primary under the same stable name/labels while preserving home/work/Codex state, and records that numeric runner identity may change. GitHub requires disabled-update runners to be upgraded regularly, including within the documented support window. citeturn383438search0turn577599search1
-  Date/Author: 2026-07-21 / runner-maintenance review.
-
-- Decision: perform runner software upgrades only through an explicit administrator maintenance/migration procedure under managed lock.
-  Rationale: target updater and temporary deployment must not mutate runner installations. The procedure updates pinned runner version/checksum, verifies both registrations/services, and must occur within GitHub's supported update window.
-  Date/Author: 2026-07-21 / runner-maintenance review.
-
-- Decision: run runtime health as `github-runner` in a separate sandboxed systemd unit.
-  Rationale: health must prove unprivileged runtime readability without network, Codex credentials, source access, or persistent writes. The unit bind-mounts active runtime read-only to `/run/agent-relay-runtime` and makes the original checkout inaccessible.
-  Date/Author: 2026-07-21 / health review.
-
-- Decision: make recovery Git refs authoritative and metadata descriptive.
-  Rationale: atomic refs retain accepted objects; metadata publication is journal-recoverable.
-  Date/Author: 2026-07-21 / recovery review.
-
-- Decision: use latest-only semantics for automatic main deployment.
-  Rationale: stale target or stale control plane becomes `superseded` without mutation rather than downgrading host.
-  Date/Author: 2026-07-21 / ordering review.
-
-- Decision: accept only bootstrap and status before initial LKG, and reject every direct invocation of the new managed updater.
-  Rationale: bootstrap is the only supported first mutation after migration. Direct mutation would invalidate pre-bootstrap fallback or accepted state.
-  Date/Author: 2026-07-21 / transition review.
-
-- Decision: validate compatible controller candidate before accepted refs; temporary mode may self-test candidate but never activate it.
-  Rationale: active controller changes are part of main acceptance. Temporary test cannot alter deployment control plane.
-  Date/Author: 2026-07-21 / controller-upgrade review.
-
-- Decision: preserve deployment runner read-only status availability during critical recovery when its own service remains valid.
-  Rationale: unknown recovery state should block primary and mutation without removing the diagnostic channel.
-  Date/Author: 2026-07-21 / recovery-channel review.
-
-- Decision: preserve `DOCKER_PROVISIONING_ENABLED=0`.
-  Rationale: Docker-host provisioning is a separate design and remains out of scope.
-  Date/Author: 2026-07-21 / scope review.
+- Decision: retain `DOCKER_PROVISIONING_ENABLED=0`.
+  Rationale: Docker host provisioning is a separate decision and is outside this deployment plan.
+  Date/Author: 2026-07-21 / scope preservation.
 
 ## Outcomes & Retrospective
 
-This plan remains active. No installer, updater, controller, workflow, service, runner registration, GitHub setting, or production-host behavior has changed through plan-only commits.
+This plan remains active. No production behavior has changed through plan-only commits.
 
-The design now resolves the known circular dependencies: validation does not require primary, temporary health does not start primary, bootstrap has pre-LKG fallback, transaction lifetime is independent of workflow lifetime, controller alone activates runtime, prior runtime remains retained, request admission is atomic, managed lock cutover excludes legacy updater, and self-hosted runner binaries are deterministic rather than auto-mutating.
+The revised design intentionally limits itself to automatic current-main deployment, manual branch testing, safe drain, stage/activate, exact accepted state, and best-effort accidental recovery. It does not attempt hostile-code isolation, dynamic runner control, or full infrastructure migration through a temporary branch.
 
-The remaining fundamental limitation is explicit: privileged target code can defeat same-VM recovery controls. Milestone 0 blocks implementation if the required GitHub controls cannot be enforced in the actual organization.
-
-Update this section after every accepted milestone. On completion, state the final real-host and disposable-VM results and move this same plan to `completed` without replacing it with a summary.
+Update this section after each accepted milestone with implemented behavior, deviations, validation evidence, and operational lessons. On completion, state production and disposable-VM results and move this same plan to `completed` without replacing it with a summary.
 
 ## Context and Orientation
 
-Current host contracts:
+Current installation:
 
-- `/srv/github-runner/storage/agent-relay`: administrator-owned checkout and root-owned `dist`;
-- `/srv/github-runner/storage/work`, `runner`, and `home`: primary work, runner installation, and Codex home;
-- `/srv/github-runner/storage/build` and `build-home`: builder state;
-- `github-runner`: primary runner and Codex account, without sudo;
-- `agent-relay-builder`: compiler account, without sudo;
-- `/etc/agent-relay/administrator`: recorded administrator and legacy updater lock;
-- `actions.runner.Divorium.gh-runner.service`: primary runner service.
+- `/srv/github-runner/storage/agent-relay`: administrator-owned source checkout; active `dist` currently root-owned inside it;
+- `/srv/github-runner/storage/work`, `runner`, and `home`: primary runner state owned by `github-runner`;
+- `/srv/github-runner/storage/build` and `build-home`: builder state owned by `agent-relay-builder`;
+- `/etc/agent-relay/administrator`: root-owned recorded administrator identity and current legacy updater lock file;
+- `actions.runner.Divorium.gh-runner.service`: primary service with `KillMode=process`;
+- current `install.sh`: one-time setup, PAT exchanged for short-lived registration token and not persisted;
+- current `update.sh`: recorded-administrator only, interactive sudo acquisition, listener stop, unbounded worker wait, active `dist` deletion/rebuild, listener restart, Docker disabled;
+- current workflows use bare `[self-hosted]` and must be routed before a second runner starts.
 
-Current `install.sh` is one-time. It installs pinned tools, creates accounts/directories, verifies official runner archive, obtains a short-lived registration token from an interactively supplied organization credential, configures primary, records administrator, and performs Codex login. It does not persist PAT.
-
-Current `update.sh` is administrator-only, locks the administrator file, acquires sudo, stops primary, waits workers indefinitely, deletes and rebuilds active `dist`, starts primary, and leaves Docker provisioning disabled.
-
-Current CI and Codex jobs use bare `[self-hosted]`. Every ordinary job must be routed to `agent-relay-main` before the deployment runner starts.
-
-Expected managed layout is equivalent to:
+Expected host additions are equivalent to:
 
     /srv/github-runner/storage/deploy-runner
     /srv/github-runner/storage/deploy-work
     /srv/github-runner/storage/deploy-home
     /srv/github-runner/storage/runtime-stage/
-    /srv/github-runner/storage/runtime-backups/
+    /srv/github-runner/storage/runtime-backup/
     /var/lib/agent-relay-deploy/
-      transaction.lock
-      request.lock
-      pending-request.json
-      bootstrap-pending
       bootstrap-complete
-      managed-mode
+      installed-host-schema
       active-transaction.json
+      pending-request.json
       accepted-state.json
       deployed-state.json
       recovery.git/
       controller-versions/
-      results/
       logs/
+    /usr/local/libexec/agent-relay-deploy
     /usr/local/libexec/agent-relay-submit-main
-    /usr/local/libexec/agent-relay-submit-temporary
-    /usr/local/libexec/agent-relay-submit-bootstrap
+    /usr/local/libexec/agent-relay-submit-branch
     /usr/local/libexec/agent-relay-deploy-status
-    /usr/local/libexec/agent-relay-deploy-admin
-    /usr/local/libexec/agent-relay-runtime-activate
-    /usr/local/libexec/agent-relay-deploy-controller -> /var/lib/agent-relay-deploy/controller-versions/<version>/controller
-    /etc/agent-relay/deployer
+    /etc/agent-relay/deployment-operators
     /etc/sudoers.d/agent-relay-deployer
-    /etc/systemd/system/agent-relay-deploy-transaction.service
-    /etc/systemd/system/agent-relay-deploy-recover.service
 
-Terms:
-
-- **primary runner**: `gh-runner`, which executes ordinary CI/Codex only after final state selection;
-- **deployment runner**: `gh-deploy-runner`, which executes only selected deployment/status workflows;
-- **control-plane SHA**: commit containing workflow code used by request and required to equal current main before mutation;
-- **portable validation**: GitHub-hosted checks that do not assume dedicated host paths;
-- **protected deployment control plane**: exact inventory of runner installations/configuration, runner and controller units, controller/helper binaries, sudoers, managed locks, recovery configuration and schemas that target updater may not change;
-- **deployment protocol**: versioned contract among controller, target updater, stage, manifest, candidate, and journal;
-- **LKG**: `refs/agent-relay/current` in recovery repository;
-- **pre-bootstrap state**: exact checkout, retained runtime, and prior primary-service state used only for failed bootstrap recovery;
-- **sandboxed runtime health**: fixed network-free command run as `github-runner` against read-only bind-mounted runtime while checkout is hidden;
-- **critical recovery**: mutation occurred and final accepted/restored state cannot be proven.
+Expected accounts include `agent-relay-deployer` and locked `agent-relay-health`, both distinct from `github-runner` and `agent-relay-builder`.
 
 ## Plan of Work
 
 ### Milestone 0: Prove GitHub-side feasibility
 
-Verify on the actual organization/repository:
+Verify on the actual organization and repository that:
 
-- organization runner group can be managed, allows this public repository, and restricts access to exactly four workflows at `refs/heads/main`;
-- workflow restrictions are writable, not inherited read-only;
-- installation credential has only permissions required for group, labels, runner registration, and inspection;
-- protected environments/reviewers exist for temporary/bootstrap and the user accepts actual self-review and administrator-bypass behavior;
-- main ruleset requires PRs for normal changes, blocks force push/deletion, and prevents bypass for deployment workflow changes;
-- `queue: max` works and the 100-pending-job bound is acceptable;
-- runner maintenance process can satisfy GitHub's disabled-update support window. citeturn577599search1
+- an organization runner group can be created and can allow this public repository;
+- workflow restriction can be written for exactly `deploy-main.yml@refs/heads/main` and `deploy-branch.yml@refs/heads/main`;
+- the repository environment supports required reviewers and prevention of self-review where desired;
+- the authorized deployment operators are identified;
+- a ruleset protects `main` from force-push, deletion, direct push, workflow-file bypass, and unauthorized rule bypass;
+- `queue: max` validates and the 100-pending limit is acceptable;
+- GitHub-hosted Linux runners are allowed for portable validation;
+- all actions used by the two workflows can be pinned to full commit SHAs;
+- minimum `GITHUB_TOKEN` permissions required by each job are available.
 
-Missing required control is `[blocked]`; do not register/start privileged deployment runner.
+If a required control is unavailable or inherited read-only in an incompatible form, record `[blocked]`, do not install a privileged deployment runner, and return to architecture review.
 
-### Milestone 1: Define stable protocol and portable validation
+### Milestone 1: Define protocol and portable validation
 
-Revalidate baseline and current contracts.
+Add versioned repository metadata declaring:
 
-Add a versioned protocol document equivalent to:
+- deployment protocol range;
+- updater protocol version;
+- runtime manifest schema;
+- controller-candidate schema;
+- `requiredHostSchema`;
+- fixed health entrypoint and expected behavior.
 
-    schemaVersion: 1
-    updaterControllerProtocol: 1
-    runtimeManifestSchema: 1
-    controllerCandidateSchema: 1
-    protectedControlPlaneSchema: 1
-    minimumControllerProtocol: 1
-    maximumControllerProtocol: 1
+Add `npm run check:portable`, runnable on GitHub-hosted Linux without the production host, Codex login, Docker daemon, PAT, systemd mutation, or self-hosted paths. It must include dependency installation, typecheck, tests, production runtime build, shell syntax, Node script syntax, and portable system-contract tests. Existing complete `npm run check` remains required by normal repository CI and final acceptance.
 
-Reject unsupported target before drain. Pre-protocol temporary branch must merge/rebase baseline. Breaking protocol requires separate migration.
+Define the temporary-scope check. Before privileged temporary deployment, compare the branch against current `main`. Reject when it requires a higher host schema, an incompatible controller/updater protocol, or changes that are explicitly marked migration-only. Do not claim such a branch was tested.
 
-Add `npm run check:portable` for hosted typecheck, tests, runtime build, shell/Node syntax, and portable system tests without dedicated host paths, Codex login, Docker daemon, PAT, or self-hosted runner. Keep complete `npm run check` and host toolchain checks.
+### Milestone 2: Implement installation, migration, and bootstrap
 
-Define fixed compiled runtime-health entrypoint and exact sandbox contract.
+Extend fresh installation and add a restartable existing-host migration that:
 
-Define managed stage protocol: controller creates paths; root updater writes stage/build and explicitly allowed non-control-plane host state, finalizes manifest, and leaves active runtime, runner installations, systemd control-plane, controller state, refs, journal, locks, and masks unchanged.
+- creates the deployment and health accounts with locked passwords and exact homes/shells;
+- creates isolated runner, work, and home directories;
+- creates or validates the selected runner group and labels while PAT is only in memory;
+- registers the deployment runner using a separate short-lived registration token;
+- installs controller versions, fixed helpers, transaction/recovery units, sudoers, state, recovery repository, stage, backup, and bounded logs;
+- routes existing ordinary workflows to `agent-relay-main` before starting the deployment service;
+- installs the managed transaction lock and performs a tested dual-lock cutover from the legacy administrator-file updater lock;
+- keeps the deployment runner service stopped until bootstrap is complete;
+- bootstraps one exact current-main SHA by validating it, draining primary, preserving the current runtime as fallback, running managed update into stage, validating stage, activating it, validating active runtime, storing the accepted Git object/ref, and publishing accepted/deployed state;
+- writes `bootstrap-complete` last and starts the deployment runner service last;
+- retains no PAT or registration token.
 
-Define canonical full-tree runtime digest and protected-control-plane inventory/digest. Exact allowed transaction-owned mutable records are listed individually; broad directory exclusions are prohibited.
+Partial or conflicting state fails closed. Re-running exact completed migration validates state and performs no destructive work.
 
-### Milestone 2: Implement human-maintained workflows
+### Milestone 3: Add the two human-maintained workflows
 
-Add four direct workflows. Pin all external actions to full commit SHAs, use minimum permissions, and set explicit timeouts.
+`deploy-main.yml`:
 
-- `deploy-main.yml`: `push` to main plus `workflow_dispatch` from main only; target/control-plane SHA = `github.sha`; GitHub-hosted portable validation; directly defined deployment job using selected group/label and shared `queue: max`; main submit/status.
-- `deploy-temporary.yml`: `workflow_dispatch` from main only, attempt 1 only; resolve exact same-repo PR/branch, draft allowed; reject fork/tag/merge ref/URL/malformed/protocol; hosted validation; GitHub-hosted protected approval; directly defined deployment job after approval; temporary submit/status.
-- `deploy-bootstrap.yml`: `workflow_dispatch` from main only, attempt 1 only; exact current main; hosted validation; protected approval; directly defined deployment job; bootstrap submit/status.
-- `deploy-status.yml`: main-only dispatch; directly defined read-only deployment-runner status job, no target/concurrency/mutation.
+- triggers on `push` to `main` and manual retry of current `main`;
+- resolves the exact current main SHA;
+- runs `check:portable` on GitHub-hosted Linux with checkout credentials disabled;
+- enters the shared job-level deployment concurrency only for the privileged submit/poll job;
+- uses the selected deployment runner group and `agent-relay-deploy` label;
+- submits a canonical request through the fixed no-argument helper and polls status;
+- treats `superseded` as a successful no-op and reports other terminal outcomes accurately.
 
-Runner group allows exactly those four paths at main. No reusable workflow. Deployment jobs never checkout or execute target, expose persistent organization credential, or print raw updater output.
+`deploy-branch.yml`:
 
-Canceled prior workflow may leave host busy. Next deployment job polls read-only status until idle or bounded expiry and never cancels/replaces the active host transaction.
+- runs only through `workflow_dispatch` from `refs/heads/main`;
+- accepts one same-repository branch name and rejects tags, SHAs, URLs, merge refs, forks, malformed names, and ambiguous refs;
+- rejects `github.run_attempt != 1`;
+- resolves the branch once to an exact SHA and never follows the branch afterward;
+- runs portable validation and temporary-scope validation on GitHub-hosted Linux;
+- uses a separate GitHub-hosted approval job referencing the protected environment;
+- after approval, enters the same job-level concurrency and submits through the selected deployment runner;
+- passes canonical event metadata without exposing credentials to the target updater.
 
-Update current workflows/examples so no ordinary job retains bare `[self-hosted]`; ordinary jobs require `agent-relay-main`.
+Both deploy jobs use `queue: max`, no `cancel-in-progress: true`, exact minimum permissions, fixed timeouts, full-SHA action pins, normalized bounded logs, and no target-provided workflow code in the privileged job. All existing self-hosted jobs and examples receive explicit `agent-relay-main` routing before the deployment runner is enabled.
 
-### Milestone 3: Install, migrate, pin runner versions, and enter bootstrap-pending
+### Milestone 4: Implement durable submission and transaction ownership
 
-Fresh install and restartable existing-host migration must:
+The deployment account can invoke only fixed root-owned helpers:
 
-- create isolated deployment account/runner paths with no Codex login;
-- register both runners with explicit labels and supported `--disableupdate`; existing primary may be re-registered under stable name during migration, preserving its home/work/Codex state while documenting that numeric runner identity can change;
-- install pinned runner version/checksum for both registrations and validate version before services start;
-- configure selected workflow group for deployment runner;
-- install immutable controller versions, submission/status/admin/activation helpers, transaction/recovery units, recovery repository, stage/backup/state/log roots, and narrow sudoers;
-- allow deployer only fixed submit/status helpers;
-- keep PAT and registration/removal tokens in memory only;
-- create managed transaction lock once as root-owned regular non-symlink;
-- acquire legacy administrator-file lock and managed lock together during existing-host cutover, prove no legacy updater or managed transaction, then install new updater/bootstrap-pending while both remain held;
-- make new updater refuse direct invocation, eliminating dual-lock mutation after cutover;
-- initialize recovery repository without inventing LKG;
-- require clean administrator-owned exact current main and reject tracked/unexpected nonignored state;
-- import `bootstrap-source`, record primary service state and runtime fallback, validate regular-only runtime tree, filesystem/capacity, and protected-control-plane baseline;
-- start deployment runner in bootstrap-pending, accept only bootstrap/status;
-- write bootstrap-complete/managed-mode only after successful bootstrap.
+- `agent-relay-submit-main`;
+- `agent-relay-submit-branch`;
+- `agent-relay-deploy-status`.
 
-Failed bootstrap restores pre-bootstrap source/runtime/service, remains pending, and creates no LKG.
+Submission helpers accept no shell arguments. They read a bounded canonical request from a fixed inherited file descriptor or standard input, validate mode-specific schema, create `pending-request.json` exclusively with file sync, and start the root-owned transaction unit. They do not execute target code.
 
-Add explicit administrator runner-maintenance command. It acquires managed lock with both runners drained/stopped, installs new pinned runner archive/checksum, validates registrations/services, preserves homes/workspaces, and restarts. Documentation requires execution within GitHub's supported disabled-update window. citeturn577599search1
+The transaction service claims the pending request under the managed lock, writes a durable journal, and continues independently of the workflow process. Cancellation after claim does not terminate the host transaction. A later workflow or administrator can read bounded sanitized status. Only one pending or active request may exist.
 
-### Milestone 4: Implement atomic submission and independent transaction lifetime
+At boot, a recovery unit runs before the primary runner. It completes or enters critical recovery for any nonterminal journal before primary may start.
 
-Mode helper accepts no arguments and reads bounded canonical JSON safely generated by trusted workflow. It acquires request lock, validates schema/repository/SHA/source/run/audit/control-plane fields, rejects unknown/control characters/state conflicts, requires attempt 1 for temporary/bootstrap, and exclusively creates/fsyncs pending request before starting transaction service.
+### Milestone 5: Implement the host transaction
 
-Service claims pending request into journal while holding managed lock. Start failure removes only caller-owned pending file. Stale pending recovery is deterministic and validates owner/mode/content.
+Preflight before primary stop:
 
-Selected workflow plus locked deploy account is authentication boundary. Root transaction service owns lock, journal, Git, updater cgroup, stage activation, acceptance/restoration, and result. Workflow loss does not kill it. Status is bounded and read-only. Service uses fixed protected environment and inherits no workflow token.
+- validate request, actor, mode, workflow identity, workflow ref, run attempt, protocol, bootstrap marker, installed host schema, controller version, checkout canonical path/owner/remote, clean tracked and untracked state, recovery repository, LKG ref/object, filesystem identity, free-space reserve, stage/backup emptiness, and journal consistency;
+- fetch origin as recorded administrator;
+- ensure target object is local and copy it into the recovery repository under a transaction ref before mutation;
+- for main, compare requested SHA with current `origin/main`; return `superseded` without host mutation when they differ;
+- for branch, require the exact previously resolved object and compatible temporary scope;
+- capture immutable control-plane hashes and separate mutable-state metadata/invariants.
 
-Boot recovery is required before primary startup but independent of deployment runner. Unknown state keeps primary/mutation blocked while status remains available when deployment runner itself is valid.
+Drain:
 
-### Milestone 5: Implement host transaction
+- stop only the primary listener service;
+- wait up to a configured deadline for every `github-runner` `Runner.Worker`;
+- do not kill active jobs;
+- on timeout or inspection failure, restart the listener if it was initially active, leave checkout/runtime unchanged, and finish with `drain_failed`;
+- after successful drain, runtime-mask the primary service and monitor that no primary listener or worker appears during mutation.
 
-Preflight under managed lock:
+Checkout and update:
 
-1. validate request/mode/protocol/checkout owner/remote/config/no submodule/alternate worktree/recovery refs/controller/journal/lock;
-2. require clean tracked state and no unexpected nonignored untracked files;
-3. fetch expected source ref into transaction namespace as administrator with hooks disabled;
-4. verify object equals target and supports protocol;
-5. import exact object into recovery transaction ref;
-6. fetch current origin/main; require control-plane SHA current for all modes; main/bootstrap target current; stale main `superseded`, stale temporary/bootstrap fail;
-7. verify LKG or bootstrap fallback;
-8. verify same filesystem, capacity, paths, ownership, modes, and no symlinks;
-9. run installed host compatibility checks only;
-10. calculate deterministic active-runtime digest and protected-control-plane digest.
+- write journal state before every irreversible step;
+- reset and clean the production checkout as recorded administrator to the exact target SHA;
+- reject unexpected ignored dependency state when the updater protocol requires a clean dependency boundary;
+- create transaction-owned stage and backup paths on the same filesystem as active `dist`;
+- run target `update.sh` in managed controller mode as root inside a transient systemd service/cgroup with fixed environment, bounded output, timeout, TERM/KILL escalation, and no inherited GitHub token or runner environment;
+- require updater cgroup inactivity and no surviving descendants before continuing;
+- require primary service still masked and no listener/worker process;
+- require active runtime unchanged while updater worked;
+- require immutable control-plane files unchanged and mutable state to match expected transition rules;
+- validate staged runtime regular-file/directory shape, manifest, complete tree digest, source SHA, protocol, and health entrypoint.
 
-Drain/isolation:
+Activation and local health:
 
-1. journal prior primary state;
-2. stop primary and boundedly drain workers;
-3. timeout restores prior state and mutates nothing;
-4. runtime-mask primary and verify no listener/worker;
-5. journal durable drained state;
-6. monitor mask/service/listener/worker while updater runs; violation terminates updater and requires stop/re-mask/re-drain before further mutation.
-
-Managed updater/staging:
-
-1. reset/clean tracked checkout to exact target as administrator and verify owner/HEAD;
-2. create transaction build/stage roots;
-3. start exact administrator-owned regular non-symlink target updater as root in transient `agent-relay-update@id.service` with fixed validated environment, no workflow credentials, no sudo, and builder subprocess;
-4. updater may produce stage and protocol-declared non-control-plane host changes only;
-5. wait for updater cgroup inactivity with TERM/KILL escalation;
-6. require primary masked/inactive, no primary processes, deployment service unchanged, exact clean checkout, active-runtime digest unchanged, protected-control-plane digest unchanged except exact journal-owned allowed transitions;
-7. verify finalized stage regular-only tree, manifest, digests, owner/mode, and clean dependency provenance;
-8. controller journals stage, renames active runtime to backup, journals, renames stage active, journals;
-9. verify active manifest/tree;
-10. run health transient unit as `github-runner` with `PrivateNetwork=yes`, `NoNewPrivileges=yes`, `PrivateTmp=yes`, temporary HOME, original checkout inaccessible, and active runtime bind-mounted read-only at `/run/agent-relay-runtime`;
-11. retain prior runtime backup until terminal state.
+- retain current active runtime as transaction backup;
+- replace active `dist` through journaled same-filesystem rename steps; do not claim multi-directory atomicity;
+- verify active runtime readability as `github-runner` without executing target code under that account;
+- run the fixed health entrypoint under `agent-relay-health` in a transient sandbox with private network, strict system/home protection, no writable host paths, inaccessible checkout/runner/home/work/recovery paths, and only active runtime bind-mounted read-only at `/run/agent-relay-runtime`;
+- validate the expected bounded machine-readable health result.
 
 Main acceptance:
 
-- stage/self-test compatible controller candidate and provisionally switch before accepted refs;
-- verify transaction object;
-- atomically update previous/current/generation refs and journal metadata;
-- remove primary mask only after accepted runtime/controller/refs complete;
-- start primary and verify stable listener, expected registration identity/labels/version, and credential metadata;
-- failure after start requires stop/re-mask/re-drain before reverting refs/controller/checkout/runtime; inability to drain enters critical recovery;
-- final consistency and bounded retention required.
+- if target contains a backward-compatible controller candidate, stage, validate, self-test, and atomically switch the controller symlink while retaining the previous version; switch back on failure;
+- store target in the accepted recovery ref only after runtime and required controller activation succeed;
+- publish accepted and deployed state through an ordered recoverable protocol;
+- unmask and start primary, verify service and listener process become ready within deadline;
+- remove transaction backup only after terminal success and retention policy permits it.
 
-Temporary:
+Temporary completion:
 
-- record target health, never change accepted refs;
-- run controller-candidate isolated self-test only, never switch;
-- keep primary masked;
-- restore LKG checkout, run LKG managed stage updater, controller activation, manifest and sandboxed health;
-- safely unmask/start primary after LKG complete;
-- report target/restoration separately; unproven restoration is critical.
+- record target success or failure;
+- never activate controller candidates or update LKG;
+- restore checkout and runtime from local LKG and retained recovery data without fetching GitHub;
+- run stable managed updater when required by the LKG manifest;
+- validate restored runtime with the same sandbox;
+- unmask/start primary only after restoration is proven;
+- report target and restoration outcomes separately.
 
-Bootstrap:
+Any failure after mutation invokes restoration. If restoration cannot be proven, keep primary masked/stopped, preserve journal and bounded logs, retain LKG unchanged, and enter `critical_recovery` without automatic retry loops.
 
-- start with bootstrap-source/runtime fallback and no LKG;
-- deploy exact current main through stage/activation/health;
-- validate compatible candidate before refs;
-- create current+generation, leave previous absent;
-- safely start primary and write bootstrap-complete/managed-mode last;
-- any failure restores fallback and remains pending.
+### Milestone 6: Implement recovery, administrator path, and controller upgrades
 
-### Milestone 6: Implement updater, activation, recovery, runner maintenance, and controller upgrade
+`agent-relay-deploy recover` is administrator-only and never retries the failed target. It terminates accidental surviving target processes, restores the recorded LKG checkout/runtime/controller from local recovery state, validates health, and starts primary only after success.
 
-New updater has no direct mutation mode. Before migration old baseline updater remains legacy. Once new code is checked out, direct invocation always refuses with migration/bootstrap/deployment/recovery instruction.
+`agent-relay-deploy admin-update-current-main` is administrator-only and provides the supported manual update path after migration. It validates current main and then uses the same managed transaction. Direct unmanaged target `update.sh` refuses after migration except when invoked by the controller's authenticated managed mode.
 
-Controller invokes root managed stage-only mode using exact fixed environment. Updater does not call sudo; builder remains unprivileged; no source dependency cache; finalized manifest required; Docker disabled.
+`agent-relay-deploy acknowledge-repair` is administrator-only, does not mutate the host, requires independently verified active SHA/runtime/controller evidence, and archives a critical journal. It cannot silently promote a temporary SHA or change LKG.
 
-Recovery refs current/previous/bootstrap-source/transactions/generations update atomically and retain objects. Offline recovery restores source, runs stable stage updater, controller activation, sandboxed health, controller, then safe primary start. Emergency Git reconstruction is allowed. Valid LKG runtime backup may be started only as explicit degraded critical action if stable updater fails; journal remains.
+Controller candidates must declare compatibility with current journal and host schema. Version directories are immutable, symlink switch is atomic, prior version remains retained, and journal schema changes require backward-compatible reading or explicit migration before activation.
 
-Controller candidates use immutable version directories and atomic symlink switch, validate before refs, and remain protocol-compatible. Temporary mode only self-tests. Breaking migration is separate.
+Infrastructure changes that raise `requiredHostSchema` are installed only through explicit administrator migration under the managed lock. Automatic main deployment reports `migration_required` and leaves the previous LKG active until migration completes. Temporary branches requiring such migration are rejected before drain.
 
-Runner binaries are outside target updater scope. Runner upgrades use the explicit maintenance command under managed lock, update pinned version/checksum, and satisfy GitHub's documented update requirement for disabled-update runners. citeturn577599search1
+### Milestone 7: Documentation and acceptance
 
-### Milestone 7: Complete documentation and acceptance
-
-Document hosted validation, direct workflows, PR-only main, approvals/fresh attempts, temporary scope, control-plane freshness/digest, bootstrap, lock cutover, atomic admission, queue/busy, drain/mask/monitor/cgroup, root stage updater/controller activation, runtime digest/manifest, bind-mounted health sandbox, latest-main, direct updater refusal, recovery/critical state, controller and runner maintenance, bounded logs, Docker disabled, and best-effort limitation.
-
-Run focused and complete tests, exact-head CI, independent review, real-host migration/temporary/main demonstrations, and disposable-VM failure/restart/bootstrap/controller/runner-maintenance demonstrations. Keep plan active until every item has evidence.
+Update current-state documentation only after implementation exists. Describe installation, migration, two workflows, branch-only manual target, approval and rerun rules, portable validation, host-schema gating, drain, lock cutover, transaction service, staging/activation, health sandbox, local recovery, controller upgrades, administrator recovery, critical recovery, bounded logs, Docker remaining disabled, and best-effort rollback limitations.
 
 ## Concrete Steps
 
-Run repository commands from repository root. Codex performs no Git mutation and does not edit human-maintained workflows.
-
-Baseline verification:
+Before implementation:
 
     git cat-file -e e9ec636e5abf383f8831fc126b99f04e2e005a3c^{commit}
     git merge-base --is-ancestor e9ec636e5abf383f8831fc126b99f04e2e005a3c HEAD
@@ -550,30 +384,31 @@ Baseline verification:
     git grep -n 'DOCKER_PROVISIONING_ENABLED=0' e9ec636e5abf383f8831fc126b99f04e2e005a3c -- update.sh
     git diff --exit-code e9ec636e5abf383f8831fc126b99f04e2e005a3c -- .agent/PLANS.md .github/workflows examples/github-actions
 
-Milestone 0 evidence must show actual group/repository/workflow restrictions, environments/review/bypass, PR-only main ruleset, concurrency support, installation credential permissions, and accepted runner-maintenance schedule.
+Expected: all commands succeed and Docker provisioning remains disabled. Any unexplained mismatch is `[blocked]`.
 
-Portable validation:
+Milestone 0 evidence must include sanitized API/settings output for runner-group repository/workflow restriction, public-repository permission, environment reviewers, ruleset enforcement/bypass, GitHub-hosted allowance, and concurrency queue syntax.
 
-    npm ci
-    npm run check:portable
+Focused implementation tests must cover at least:
 
-Focused implementation validation must include equivalent commands:
+- protocol and host-schema compatibility;
+- branch resolver and rejection matrix;
+- portable validation contract;
+- install/migration absent/exact/partial/conflict states and token non-persistence;
+- dual-lock cutover;
+- exclusive request admission and cancellation-independent transaction service;
+- preflight ownership, clean tree, object retention, capacity, filesystem, and immutable/mutable control-plane checks;
+- bounded drain and no-mutation timeout;
+- updater root managed mode, stage-only behavior, cgroup/process cleanup, timeout, and Docker-disabled invariant;
+- journaled runtime activation crash windows;
+- dedicated health user sandbox and credential-path inaccessibility;
+- main success, superseded, migration-required, failed-main restoration;
+- temporary success/failure with mandatory LKG restoration;
+- controller activation/switchback;
+- boot recovery and critical recovery;
+- administrator manual update/recover/acknowledge semantics;
+- bounded normalized logs and truncation markers.
 
-    bash -n install.sh update.sh scripts/*.sh test-system/*.sh
-    npm run build
-    node --test dist/test/deployment-protocol.test.js
-    node --test dist/test/deployment-controller.test.js
-    node --test dist/test/deployment-state.test.js
-    node --test dist/test/deployment-resolver.test.js
-    node --test dist/test/runtime-manifest.test.js
-    node --test dist/test/protected-control-plane.test.js
-    bash test-system/deployment-install.integration.sh
-    bash test-system/deployment-migration.integration.sh
-    bash test-system/deployment-transaction.integration.sh
-    bash test-system/deployment-recovery.integration.sh
-    bash test-system/runner-maintenance.integration.sh
-
-Complete validation:
+Complete repository validation:
 
     npm ci
     npm run typecheck
@@ -587,203 +422,129 @@ Complete validation:
     git diff --check
     git grep -n 'DOCKER_PROVISIONING_ENABLED=0' -- update.sh
 
-Real-host migration/bootstrap demonstrates labels/group, both runners on pinned `--disableupdate` version, no Codex on deployer, dual-lock cutover, pending normal rejection, direct updater refusal, ownership/modes, no retained tokens, device/capacity, protected-control-plane baseline, exact-current-main bootstrap, stage/activation/manifest/sandboxed health, safe primary start, current ref, previous absent, and markers written last.
+Expected: every command succeeds, coverage thresholds remain satisfied, no baseline test is weakened without an equal or stronger replacement recorded in `Progress`, and Docker provisioning remains disabled.
 
-Production demonstrations:
+Production-VM demonstrations:
 
-1. temporary success with primary masked, controller candidate self-test only, and restoration;
-2. target updater failure preserving runtime and restoring LKG;
-3. drain timeout with no mutation;
-4. stale target/control-plane with no mutation;
-5. successful main acceptance;
-6. direct updater refusal;
-7. workflow cancellation while root transaction completes/restores;
-8. status for active/terminal transaction;
-9. unexpected untracked block;
-10. updater control-plane/runtime/checkout/service/mask mutation detection;
-11. concurrent submission admitting one pending request;
-12. direct main push blocked by ruleset;
-13. direct primary listener launch detected and safely re-drained;
-14. health sandbox proves runtime access but no network/source/persistent home/Codex credentials;
-15. managed root updater works without sudo and rejects missing protocol;
-16. temporary/bootstrap rerun rejected and fresh dispatch re-approval required;
-17. migration cannot cut over while legacy updater or managed transaction lock is held;
-18. explicit runner maintenance upgrades pinned versions and returns both registrations healthy.
+1. existing-host migration and exact-main bootstrap;
+2. successful temporary branch update followed by successful mandatory restoration;
+3. controlled temporary updater failure followed by successful restoration;
+4. drain timeout with no checkout/runtime mutation and listener restoration;
+5. superseded automatic-main request producing no host mutation;
+6. current-main deployment becoming LKG;
+7. administrator `admin-update-current-main` using the same controller path.
 
-Disposable demonstrations cover bootstrap failure before/after activation, failed main offline restoration, kill at every rename phase, boot recovery, Git reconstruction, candidate switchback, incompatible protocol, double failure, cgroup descendants, disk/device failure, in-place runtime mutation, stale pending request, invalid tree shape, bootstrap direct-refusal, managed-lock tamper, protected-control-plane mutation, and runner-maintenance interruption/recovery.
+Disposable clone or snapshot-equivalent VM demonstrations:
+
+1. failed main deployment with GitHub network unavailable and successful LKG restoration;
+2. restart during checkout/update and deterministic boot recovery;
+3. restart during runtime activation and deterministic old-or-new state recovery;
+4. restart during restoration and successful `recover` continuation;
+5. controller candidate activation success and switchback failure path;
+6. target plus restoration failure entering critical recovery while preserving evidence;
+7. target attempts to alter immutable control-plane files and is rejected/restored;
+8. target requiring higher host schema returns `migration_required` without mutation.
 
 ## Validation and Acceptance
 
-Acceptance categories:
+Acceptance requires observable behavior, not intended design or code presence.
 
-- actual GitHub feasibility, selected workflow routing, PR-only main, action pins, permissions, and timeouts;
-- exact hosted portable validation, approval before concurrency, fresh privileged attempts, and control-plane freshness;
-- atomic admission, dual-lock migration cutover, managed serialization, and queue overflow visibility;
-- clean checkout and bounded cleanup ownership;
-- primary drain, mask, process monitor, and guarded re-drain;
-- ownership and managed root updater authority;
-- stage-only protocol, runtime and protected-control-plane digest invariants;
-- regular-only runtime shape, staged activation, cgroup termination;
-- bind-mounted private-network health sandbox;
-- temporary isolation and explicit limited acceptance scope;
-- bootstrap fallback and current-only initial LKG;
-- main atomic acceptance/revert;
-- pinned disabled-update runner installations and explicit maintenance;
-- listener readiness without claiming a scheduled job;
-- cancellation, boot recovery, offline recovery, and critical-state preservation;
-- bounded logging.
+- GitHub feasibility proves exact runner-group and workflow restrictions, environment approval, ruleset, action pins, minimum permissions, and `queue: max` on the actual repository.
+- Scope acceptance proves manual input is a same-repository branch only and that unsupported PR/tag/SHA/URL/fork/merge-ref inputs cannot reach privileged execution.
+- Validation acceptance proves the exact target SHA passes hosted portable validation before submission and a failed validation cannot create a pending host request.
+- Authorization acceptance proves non-main workflow ref, rerun attempt, unapproved environment, or unauthorized actor cannot submit.
+- Queue acceptance starts at least three runs and proves pending runs are retained up to configured limits, host mutation never interleaves, and stale main runs return `superseded`.
+- Drain acceptance proves checkout and runtime do not change while a primary worker exists and timeout restores listener without killing the job.
+- Ownership acceptance proves deployer cannot directly mutate checkout, state, recovery, controller, sudoers, or runtime; Git operations preserve administrator ownership.
+- Protocol acceptance proves incompatible updater/controller/host schema is rejected before drain.
+- Stage acceptance proves target updater cannot activate runtime or mutate deployment state and leaves active runtime unchanged.
+- Control-plane acceptance proves immutable files are checked deterministically, mutable state follows strict expected transitions, and runner credential contents are never hashed, logged, or exported.
+- Health acceptance proves `github-runner` can read active runtime while health execution under `agent-relay-health` cannot access network, source checkout, runner home/configuration, workflow workspaces, or recovery state.
+- Main acceptance proves current main is staged, validated, activated, locally health-checked, optionally controller-upgraded, accepted in local recovery, and primary listener started.
+- Temporary acceptance proves both target success and target failure end on unchanged LKG and never activate controller or infrastructure changes.
+- Recovery acceptance proves restoration does not fetch GitHub, every journal crash phase is deterministic, and primary remains unavailable while state is unproven.
+- Logging acceptance defines exact byte limits, normalized GitHub output, root-only local transcript policy, truncation marker, retention, and credential omission.
+- Critical-recovery acceptance proves no automatic retry loop, unchanged LKG, preserved bounded evidence, primary masked/stopped, and explicit administrator recovery requirement.
 
-Outcome semantics:
-
-- superseded main: workflow success, no mutation;
-- successful main: accepted success;
-- failed main with healthy restoration: workflow failure, host healthy at prior LKG;
-- successful temporary target plus healthy restoration: workflow success only for documented updater/runtime scope;
-- failed temporary target plus healthy restoration: workflow failure, host healthy at LKG;
-- stale or rerun temporary/bootstrap: workflow failure without mutation;
-- unproven restoration: workflow failure with critical recovery.
-
-Completion requires every unchecked `Progress` item checked with evidence, focused and complete tests passing, exact-head CI passing, independent review with no unresolved action point, and all production/disposable demonstrations passing.
+The plan is complete only when every unchecked `Progress` item is checked with evidence, all focused and complete tests pass, exact-head CI passes, independent review has no unresolved action point, production demonstrations pass, and disposable-VM failure/restart/controller scenarios pass.
 
 ## Idempotence and Recovery
 
-Fresh installation remains one-time. Setup and migration classify absent, exact, partial, and conflicting states and compensate only attempt-owned resources.
+Fresh install remains one-time. Migration distinguishes absent, exact, partial, and conflicting state and compensates only attempt-owned resources. Exact completed migration is validation-only.
 
-Existing-host migration is restartable. Dual-lock cutover prevents overlap with legacy updater or managed transaction. Runner re-registration with `--disableupdate` preserves home/work/Codex state but may change numeric runner identity; partial registration states are detected and resumed or failed closed.
+The managed transaction lock serializes migration, deployment, administrator update, and recovery. Dual-lock cutover prevents overlap with an old manual updater during migration.
 
-Submission uses request lock and exclusive pending file. Reused request IDs with different content fail. Status is read-only.
+Pending request creation is exclusive and durable. The journal is strict-schema, bounded, credential-free, atomically replaced, and records enough information to distinguish preflight, drain, checkout, updater, stage, activation, health, controller switch, acceptance, restoration, listener start, completion, superseded, migration-required, and critical recovery.
 
-Managed transaction lock is root-owned regular non-symlink, created once and never replaced. Controller verifies device/inode/owner/mode at start and after target updater.
+Runtime activation uses same-filesystem stage, active, and backup locations with ordered journaled renames. Recovery recognizes every possible rename crash window and selects the manifest/digest-proven old or new runtime; it does not infer state from directory names alone.
 
-Root journal uses strict bounded schema, durable temporary replacement, and atomic rename. It records request, control-plane/target refs, primary mask/monitor/drain, checkout, updater and health units, runtime/control-plane digests, stage/activation, candidate, accepted refs, start, restoration, and terminal outcome.
+LKG publication stores the Git object and local ref before publishing matching accepted metadata. A crash leaves either the old accepted state or a detectable incomplete publication. Temporary and failed targets never change LKG.
 
-Target updater never writes journal. Controller derives observed state independently before phase transitions.
+Recovery never retries target code. It restores local LKG, stable controller version, stable checkout, and stable runtime, then validates health and listener readiness. Unknown or contradictory state blocks mutation and primary start but still permits bounded read-only status.
 
-Runtime states old-active, stage-only, backup-without-active, and new-active-plus-backup are distinguishable. Invalid tree shapes fail.
-
-Accepted refs update atomically. Metadata is separately journaled. Bootstrap creates current only. Transaction/generation refs prevent pruning.
-
-Recover never retries target. It converges to pre-bootstrap fallback or LKG, keeps primary unavailable while mutating, restores source/runtime/controller, runs sandboxed health, safely starts primary, and archives journal only after success.
-
-Unknown state blocks primary and mutation but allows read-only status when possible. Local administrator repair is required.
-
-Direct unmanaged mutation is prohibited. Emergency repair is explicit, recorded, and followed by accepted-main or rebootstrap reconciliation.
-
-Tests use temporary roots, local Git repositories, fake systemd/process/service adapters, fake runner registrations, and deterministic barriers. They do not mutate real GitHub settings or production host and do not require external network.
+Tests use temporary roots, local repositories, fake APIs, fake process tables/services, and disposable VMs. They must not register real runners, alter production organization settings, stop the real primary runner, or mutate production checkout except in the explicitly approved production demonstrations.
 
 ## Artifacts and Notes
 
 Keep evidence append-only.
 
-- 2026-07-21: Reviewed baseline repository and GitHub runner/deployment contracts.
-- 2026-07-21: Created draft PR #47 with an active plan only and converted it to the PR #3 living structure.
-- 2026-07-21: Performed twelve adversarial review passes and revised the plan as recorded in `Progress`.
+- 2026-07-21: reviewed repository deployment contracts on baseline `e9ec636e5abf383f8831fc126b99f04e2e005a3c`.
+- 2026-07-21: reviewed GitHub self-hosted runner groups, selected workflows, environments, manual dispatch, rerun semantics, and concurrency queueing.
+- 2026-07-21: created draft PR #47 with an active plan and no implementation.
+- 2026-07-21: converted the plan to the repository living ExecPlan structure.
+- 2026-07-21: repeated adversarial reviews corrected transaction, recovery, updater, workflow, and acceptance defects.
+- 2026-07-21: twelfth adversarial review aligned manual scope to branch-only testing, reduced privileged workflows to two, added host-schema gating, corrected control-plane and health-account handling, and preserved administrator managed update.
 
-Required future evidence includes GitHub settings, baseline hashes, exact tests/counts/coverage, runner group/workflows/environments/ruleset, runner versions and update policy, locks/cutover, ownership/device/capacity, admission, runtime/control-plane digests, health sandbox, phases/cgroups/restoration, recovery refs/fsck, cancellation/boot, demonstrations, exact-head CI, and final independent review.
+Future evidence must include GitHub settings/API results, workflow hashes and pins, baseline hashes, exact test counts, ownership/modes, migration output, lock cutover, request/journal transitions, drain timing, runtime manifests/digests, health sandbox proof, recovery ref/object verification, transaction outcomes, bounded log behavior, production/disposable demonstrations, CI run IDs, and independent review result.
 
 GitHub documentation reviewed:
 
-- `https://docs.github.com/en/actions/reference/runners/self-hosted-runners`
-- `https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/manage-access`
+- `https://docs.github.com/en/actions/how-tos/managing-self-hosted-runners/managing-access-to-self-hosted-runners-using-groups`
 - `https://docs.github.com/en/rest/actions/self-hosted-runner-groups`
-- `https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow`
 - `https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments`
-- `https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency`
-- `https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/choose-the-runner-for-a-job`
-- `https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot`
+- `https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs`
+- `https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax`
+- `https://docs.github.com/en/actions/concepts/security/github_token`
 
 Non-goals:
 
-- hostile-code isolation;
-- guaranteed recovery from malicious root, VM, disk, network, systemd, or resource-exhaustion failure;
+- hostile-code isolation or guaranteed recovery from malicious root code;
+- VM, disk, network, systemd, or resource-exhaustion disaster recovery;
 - autoscaling or ephemeral/JIT runners;
 - persistent PAT or GitHub App credentials;
-- fork or arbitrary-repository targets;
+- PR, fork, tag, arbitrary SHA, arbitrary repository, or arbitrary URL targets;
 - parallel host mutation;
-- proof of GitHub job scheduling before promotion;
+- guaranteed post-deployment GitHub job execution;
 - VM snapshot management by Agent Relay;
-- general reversal of package, credential, database, Docker-volume, or application-data mutation;
-- re-enabling Docker provisioning;
-- testing pre-protocol branches without rebase/merge;
-- automatic breaking protocol migration;
-- temporary activation or acceptance of infrastructure/control-plane changes.
+- automatic reversal of arbitrary package, credential, database, Docker-volume, or application-data changes;
+- temporary testing of installer, runner registration, workflow/settings, sudoers, service-control-plane, or breaking controller changes;
+- re-enabling Docker provisioning.
 
 ## Interfaces and Dependencies
 
-No public Agent Relay job API, Codex request/result contract, prompt contract, finalizer decision, or workspace sandbox interface changes are required.
+No public Agent Relay job API, Codex prompt/request/result contract, finalizer decision, or workspace sandbox interface changes are required.
 
-Required identities and registrations:
+Identities and registrations:
 
-    administrator: /etc/agent-relay/administrator
-    primary: github-runner / gh-runner / agent-relay-main
-    builder: agent-relay-builder
-    deployer: agent-relay-deployer / gh-deploy-runner / agent-relay-deploy
-    deployment group: agent-relay-deployment
+    recorded administrator:    /etc/agent-relay/administrator
+    primary user/runner/label: github-runner / gh-runner / agent-relay-main
+    builder user:              agent-relay-builder
+    deployment user/runner:    agent-relay-deployer / gh-deploy-runner
+    deployment label/group:    agent-relay-deploy / agent-relay-deployment
+    health user:               agent-relay-health
 
-Both runner registrations use a pinned runner version and `--disableupdate`. Runner version/checksum and maintenance deadline are documented state.
+The deployment account may invoke only fixed root-owned submit/status helpers. The health account has no login, no sudo, no persistent writable home, and no access to runner credentials.
 
-Required services:
+Canonical request includes schema version, request ID, workflow run ID, run attempt, actor, event mode, workflow path/ref/control-plane SHA, source branch when applicable, target SHA, portable-validation result identity, required host schema, and protocol versions. It contains no credential.
 
-    actions.runner.Divorium.gh-runner.service
-    actions.runner.Divorium.gh-deploy-runner.service
-    agent-relay-deploy-transaction.service
-    agent-relay-deploy-recover.service
-    agent-relay-update@<transaction-id>.service
-    agent-relay-health@<transaction-id>.service
+The managed updater environment includes only mode, transaction ID, exact source root, controller-created build/stage paths, expected target SHA, installed host schema, and fixed locale/path. It receives no GitHub token, runner environment, arbitrary caller environment, or user-supplied command.
 
-Recovery is required before primary startup; deployment runner remains independent for status.
+Runtime manifest includes schema, target SHA, deployment/updater protocol, required host schema, health entrypoint, complete canonical tree digest, file count, total bytes, creation timestamp, and finalized marker. Runtime trees contain only regular directories and regular files; symlinks, devices, sockets, FIFOs, hard-link surprises, and writable-by-group/other entries are rejected.
 
-Submission helpers accept no arguments and canonical JSON over stdin. Administrator recovery and runner maintenance are unavailable in deployer sudoers.
+Immutable control-plane inventory includes exact selected controller/helper binaries, controller symlink target metadata, selected systemd unit files, sudoers policy, protocol files, and managed-lock path metadata. Runner registration credential contents are excluded. Runner identity files are checked for expected location, type, owner, and mode. Mutable journal, accepted/deployed state, recovery refs, logs, runner diagnostics, and work directories are validated through explicit schemas and phase-specific transition rules.
 
-Request schema is equivalent to:
+Bounded configuration must include portable validation timeout, approval timeout, queue limit assumptions, request size, drain deadline, fetch timeout, updater timeout, TERM/KILL grace, health timeout/output bytes, transaction deadline, busy polling, disk reserve, local/GitHub log bytes, log retention, runtime backup retention, and controller-version retention.
 
-    interface DeploymentRequest {
-      schemaVersion: 1;
-      requestId: string;
-      workflowRunId: number;
-      workflowRunAttempt: number;
-      actor: string;
-      controlPlaneSha: string;
-      sourceType: "push" | "pr" | "branch";
-      source: string;
-      targetRef: string;
-      targetSha: string;
-      protocolVersion: 1;
-    }
+Use existing pinned host tools where possible: Bash, Git, curl, jq, systemd, coreutils, Node.js, and the official GitHub Actions runner archive. Add no third-party runtime dependency unless the plan records why existing tools cannot provide deterministic parsing, process control, API handling, or durable state.
 
-Mode derives from helper. Values are revalidated against Git. No credential is included. Temporary/bootstrap require attempt 1.
-
-Managed updater environment is equivalent to:
-
-    AGENT_RELAY_UPDATE_MODE=controller-stage-v1
-    AGENT_RELAY_TRANSACTION_ID=<validated-id>
-    AGENT_RELAY_BUILD_ROOT=<controller-created-path>
-    AGENT_RELAY_RUNTIME_STAGE=<controller-created-path>
-    AGENT_RELAY_EXPECTED_SOURCE_SHA=<target-sha>
-
-Updater runs as root only in controller-created transient unit, does not call sudo, writes stage and declared non-control-plane host state only, and leaves active runtime, runner installations, systemd control plane, controller, journal, refs, lock, and mask unchanged.
-
-Runtime manifest is equivalent to:
-
-    interface RuntimeBuildManifest {
-      schemaVersion: 1;
-      sourceSha: string;
-      deploymentProtocol: 1;
-      updaterVersion: string;
-      runtimeEntrypoint: "src/run-codex.js";
-      runtimeEntrypointSha256: string;
-      healthEntrypoint: "src/runtime-health.js";
-      healthEntrypointSha256: string;
-      builtAt: string;
-      finalized: true;
-    }
-
-Protected-control-plane schema defines exact canonical inventory and allowed mutable transaction records. It includes pinned runner binaries and registration identity/configuration, relevant systemd units, controller/helper binaries and symlink target, sudoers, managed lock metadata, recovery refs/configuration, and root state schemas. Volatile `_work`, `_diag`, transaction logs/results, and credential contents are not blindly hashed; they are either excluded explicitly or validated through exact type/ownership/mode/identity rules. Secrets are never logged or exported.
-
-Journal includes request, mode, control plane, target, transaction refs, previous state, controller version, primary state/mask/monitor, updater/health units, runtime and protected-control-plane digests, stage/backup, phases, results, final state, log path, and timestamps. Exact serialization may differ but must be bounded, strict, credential-free, and restart-sufficient.
-
-Bounded configuration includes request, validation, approval, drain, fetch, host, updater, health, primary, transaction, busy deadlines, monitor interval, TERM/KILL grace, disk headroom, status polling, log limits, and retention of requests/results/transactions/backups/generations/controllers.
-
-Use pinned existing host tools where possible. Add no third-party runtime dependency without recorded necessity.
-
-Revision note (2026-07-21): Twelfth adversarial review restored the full living-ExecPlan evidence and decision format and resolved runner auto-update nondeterminism. Both self-hosted runners are now pinned with `--disableupdate`; existing-host migration may re-register primary under its stable name while preserving home/work/Codex state; and an explicit managed-lock runner-maintenance procedure must keep both runners inside GitHub's supported update window. Plan only; implementation is not complete.
+Revision note (2026-07-21): Twelfth adversarial review simplified the design to the requested automatic-main and manual-branch modes, reduced privileged workflows to two, moved approval ahead of deployment concurrency, introduced explicit installed-host-schema gating, separated immutable control-plane hashes from mutable runner/state invariants, removed credential-content hashing, moved health execution to a dedicated sandboxed account, preserved administrator-managed manual update through the controller, and made runtime activation explicitly journaled rather than falsely multi-directory atomic. This revision changes only the active ExecPlan and does not claim implementation complete.

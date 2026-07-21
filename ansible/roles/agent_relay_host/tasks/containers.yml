@@ -1,5 +1,5 @@
 ---
-- name: Create container and restart-policy configuration directories
+- name: Create container configuration directories
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
@@ -9,7 +9,6 @@
   loop:
     - /etc/docker
     - /etc/containerd
-    - /etc/needrestart/conf.d
 
 - name: Configure Docker daemon
   ansible.builtin.template:
@@ -18,7 +17,7 @@
     owner: root
     group: root
     mode: "0644"
-  notify: Restart container stack
+  register: agent_relay_docker_config
 
 - name: Configure containerd
   ansible.builtin.template:
@@ -27,25 +26,22 @@
     owner: root
     group: root
     mode: "0644"
-  notify: Restart container stack
+  register: agent_relay_containerd_config
 
-- name: Flush container service handlers
-  ansible.builtin.meta: flush_handlers
-
-- name: Enable and start container services
+- name: Enable and start containerd
   ansible.builtin.systemd_service:
-    name: "{{ item }}"
+    name: containerd.service
+    enabled: true
+    state: "{{ 'restarted' if agent_relay_containerd_config.changed else 'started' }}"
+
+- name: Enable and start Docker socket
+  ansible.builtin.systemd_service:
+    name: docker.socket
     enabled: true
     state: started
-  loop:
-    - containerd.service
-    - docker.socket
-    - docker.service
 
-- name: Install needrestart policy for GitHub runner units
-  ansible.builtin.copy:
-    dest: /etc/needrestart/conf.d/actions_runner_services.conf
-    owner: root
-    group: root
-    mode: "0644"
-    content: "$nrconf{override_rc}{qr(^actions\\.runner\\..+\\.service$)} = 0;\n"
+- name: Enable and start Docker
+  ansible.builtin.systemd_service:
+    name: docker.service
+    enabled: true
+    state: "{{ 'restarted' if (agent_relay_docker_config.changed or agent_relay_containerd_config.changed) else 'started' }}"

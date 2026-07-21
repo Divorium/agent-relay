@@ -3,9 +3,12 @@
   ansible.builtin.assert:
     that:
       - agent_relay_admin_user is match('^[a-z_][a-z0-9_-]*$')
+      - agent_relay_admin_authorized_keys is sequence
+      - agent_relay_admin_authorized_keys is not string
       - agent_relay_admin_authorized_keys | length > 0
-      - agent_relay_extra_apt_packages is iterable
-    fail_msg: Configure a valid administrator name and at least one SSH public key.
+      - agent_relay_extra_apt_packages is sequence
+      - agent_relay_extra_apt_packages is not string
+    fail_msg: Configure a valid administrator name, a list of SSH public keys, and a package list.
 
 - name: Install repository bootstrap packages
   ansible.builtin.apt:
@@ -15,6 +18,7 @@
       - curl
       - gnupg
       - python3
+      - python3-apt
       - sudo
     state: present
     update_cache: true

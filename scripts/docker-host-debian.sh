@@ -14,6 +14,11 @@ DOCKER_DEBIAN_MANAGED_KEY_STAGE_GLOB=/etc/apt/keyrings/.agent-relay-docker.asc.t
 DOCKER_DEBIAN_MANAGED_SOURCE_STAGE_GLOB=/etc/apt/sources.list.d/.agent-relay-docker.sources.tmp.
 DOCKER_DEBIAN_RESIDUAL_PURGE_TIMEOUT_SECONDS=120
 DOCKER_DEBIAN_APT_DIRECTORY=/etc/apt
+DOCKER_DEBIAN_DPKG_CONFFILE_OPTIONS=(--force-confdef --force-confold)
+DOCKER_DEBIAN_APT_CONFFILE_OPTIONS=(
+  -o Dpkg::Options::=--force-confdef
+  -o Dpkg::Options::=--force-confold
+)
 
 docker_debian_require_host() {
   [[ "$(/usr/bin/uname -m)" == x86_64 ]] \
@@ -781,6 +786,17 @@ docker_debian_selected_dependency_closure() {
   ' "${requested}" "${selected}" "${edges}"
 }
 
+docker_debian_install_exact_packages() {
+  (( $# > 0 )) || return 0
+  DEBIAN_FRONTEND=noninteractive LC_ALL=C LANG=C /usr/bin/apt-get \
+    --yes --no-install-recommends "${DOCKER_DEBIAN_APT_CONFFILE_OPTIONS[@]}" install "$@"
+}
+
+docker_debian_configure_pending_packages() {
+  DEBIAN_FRONTEND=noninteractive LC_ALL=C LANG=C /usr/bin/dpkg \
+    "${DOCKER_DEBIAN_DPKG_CONFFILE_OPTIONS[@]}" --configure -a
+}
+
 docker_debian_install_components() {
   (( $# > 0 )) || return 0
   docker_debian_assert_clean_dpkg
@@ -824,8 +840,8 @@ docker_debian_install_components() {
   /usr/bin/install -o root -g root -m 0600 "${DOCKER_HOST_STATE_ROOT}/accepted.txt" "${DOCKER_HOST_STATE_ROOT}/resolved-packages.txt"
   docker_host_publish_marker transaction "${DOCKER_HOST_STATE_ROOT}/resolved-packages.txt"
   if (( ${#selected_exact[@]} > 0 )); then
-    DEBIAN_FRONTEND=noninteractive LC_ALL=C LANG=C /usr/bin/apt-get --yes --no-install-recommends install "${selected_exact[@]}" \
-      || docker_host_fail package "Docker package installation failed; make dpkg clean before rerunning ./update.sh"
+    docker_debian_install_exact_packages "${selected_exact[@]}" \
+      || docker_host_fail package "Docker package installation failed; rerun ./update.sh to resume the recorded transaction"
   fi
   : > "${DOCKER_HOST_STATE_ROOT}/resolved-packages.txt"
   for package in "${DOCKER_DEBIAN_PACKAGES[@]}"; do

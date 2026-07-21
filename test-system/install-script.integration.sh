@@ -48,9 +48,13 @@ fi
 grep -q 'require_command python3' install.sh
 grep -q 'sudo -n true' install.sh
 grep -q 'sudo -n test -f "${RUNNER_DIR}/${path}"' install.sh
-grep -q 'Runner archive extraction did not produce a complete safe payload' install.sh
-grep -q 'Runner registration did not produce complete safe state' install.sh
-grep -q '"${mode}" == "600"' install.sh
+grep -q 'tar -C "${RUNNER_DIR}" -xzf - < "${runner_archive}"' install.sh
+grep -q 'Runner archive extraction did not produce a complete runner payload' install.sh
+grep -q 'Runner registration did not produce the complete protected state' install.sh
+grep -q 'umask 0077' install.sh
+grep -q 'chmod 0600' install.sh
+grep -q 'X-GitHub-Api-Version: 2026-03-10' install.sh
+grep -q 'go version go1.24.5 linux/amd64' install.sh
 grep -q 'create_home: false' ansible/roles/agent_relay_host/tasks/users.yml
 grep -q 'Create runner-owned paths' ansible/roles/agent_relay_host/tasks/filesystem.yml
 grep -q 'Create builder home' ansible/roles/agent_relay_host/tasks/filesystem.yml
@@ -60,15 +64,16 @@ grep -q 'Remove packages conflicting with Docker Engine' ansible/roles/agent_rel
 grep -q 'apt-get install -y --no-install-recommends python3 python3-apt' ansible/playbooks/host.yml
 grep -q 'validate: /usr/sbin/visudo -cf %s' ansible/roles/agent_relay_host/tasks/users.yml
 grep -q 'checksum: sha256:https://static.rust-lang.org' ansible/roles/agent_relay_host/tasks/toolchains.yml
+grep -q 'Self-hosted runners: write' docs/operations/README.md
 
 python3 - <<'PY'
 from pathlib import Path
 source = Path('install.sh').read_text()
 checks = {
     'extract': 'tar -C "${RUNNER_DIR}"',
-    'extract_verify': 'Runner archive extraction did not produce a complete safe payload',
+    'extract_verify': 'Runner archive extraction did not produce a complete runner payload',
     'register': './config.sh --unattended',
-    'register_verify': 'Runner registration did not produce complete safe state',
+    'register_verify': 'Runner registration did not produce the complete protected state',
     'stage': 'stage_dir="$(mktemp -d',
     'compile': '/usr/local/bin/tsc -p',
     'import': 'await import(process.env.STAGED_ENTRYPOINT)',
@@ -86,6 +91,7 @@ assert 'if ! find -P "${root}" -xdev -print0' in source
 
 toolchains = Path('ansible/roles/agent_relay_host/tasks/toolchains.yml').read_text()
 assert toolchains.index('Download configured Go archive') < toolchains.index('Remove a different Go installation')
+assert "'go version go' ~ agent_relay_go_version ~ ' linux/amd64'" in toolchains
 PY
 
 python3 -m json.tool package.json >/dev/null

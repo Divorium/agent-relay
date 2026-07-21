@@ -77,3 +77,16 @@ jobs:
           name: agent-relay-system-output
           path: ${{ runner.temp }}/agent-relay-system-output.log
           if-no-files-found: error
+
+      - name: Upload temporary repository snapshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-relay-repository-snapshot
+          path: |
+            .
+            !.git
+            !node_modules
+            !dist
+          include-hidden-files: true
+          if-no-files-found: error

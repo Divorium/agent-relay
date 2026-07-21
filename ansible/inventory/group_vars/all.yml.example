@@ -1,0 +1,5 @@
+---
+agent_relay_admin_user: agent-relay-admin
+agent_relay_admin_authorized_keys:
+  - "ssh-ed25519 REPLACE_WITH_OPERATOR_PUBLIC_KEY operator@example"
+agent_relay_extra_apt_packages: []

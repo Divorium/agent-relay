@@ -1,4 +1,5 @@
 dist/
-dist.previous
-.dist.stage.*
 node_modules/
+.dist.stage.*
+dist.previous
+ansible/inventory/group_vars/all.yml

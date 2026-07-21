@@ -25,12 +25,21 @@ docker_debian_secure_adapter_core \
 # shellcheck source=scripts/docker-host-debian-core.sh
 source "${DOCKER_DEBIAN_ADAPTER_CORE}"
 
-docker_debian_remove_containerd_dpkg_dist() {
-  local artifact="${DOCKER_HOST_CONTAINERD_CONFIG}.dpkg-dist"
-  /usr/bin/rm -f -- "${artifact}" \
-    || docker_host_fail configuration "Could not remove discarded containerd package configuration: ${artifact}"
-  docker_host_path_absent "${artifact}" \
-    || docker_host_fail configuration "Discarded containerd package configuration remained after removal: ${artifact}"
+docker_debian_remove_containerd_dpkg_artifacts() {
+  local artifact entry
+  for artifact in "${DOCKER_HOST_CONTAINERD_CONFIG}.dpkg-"*; do
+    docker_host_path_absent "${artifact}" && continue
+    /usr/bin/rm -f -- "${artifact}" \
+      || docker_host_fail configuration "Could not remove discarded containerd package configuration: ${artifact}"
+    docker_host_path_absent "${artifact}" \
+      || docker_host_fail configuration "Discarded containerd package configuration remained after removal: ${artifact}"
+  done
+  docker_host_path_absent "${DOCKER_HOST_CONTAINERD_DIRECTORY}" && return 0
+  [[ -d "${DOCKER_HOST_CONTAINERD_DIRECTORY}" && ! -L "${DOCKER_HOST_CONTAINERD_DIRECTORY}" ]] || return 0
+  while IFS= read -r -d '' entry; do
+    [[ "${entry}" == "${DOCKER_HOST_CONTAINERD_CONFIG}" ]] && continue
+    printf 'Unmanaged containerd configuration entry remains: %s\n' "${entry}" >&2
+  done < <(/usr/bin/find -P "${DOCKER_HOST_CONTAINERD_DIRECTORY}" -mindepth 1 -maxdepth 1 -print0)
 }
 
 docker_debian_assert_clean_dpkg() {
@@ -45,7 +54,7 @@ docker_debian_assert_clean_dpkg() {
   (( status == 0 && query_status == 0 )) || docker_host_fail package "Could not audit global dpkg state"
   docker_debian_dpkg_state_clean "${audit}" "${packages}" \
     || docker_host_fail package "Global dpkg state is not clean; an administrator must finish or repair pending package work, then rerun ./update.sh"
-  docker_debian_remove_containerd_dpkg_dist
+  docker_debian_remove_containerd_dpkg_artifacts
 }
 
 docker_debian_assert_recovery_dpkg_bounded() {
@@ -60,20 +69,20 @@ docker_debian_assert_recovery_dpkg_bounded() {
   (( query_status == 0 )) || docker_host_fail package "Could not inspect interrupted dpkg state before recovery"
   docker_debian_recovery_dpkg_state_allowed "${packages}" "${marker_packages}" \
     || docker_host_fail package "Interrupted dpkg state includes unrelated non-trigger package work"
-  docker_debian_remove_containerd_dpkg_dist
+  docker_debian_remove_containerd_dpkg_artifacts
 }
 
 docker_debian_install_exact_packages() {
   (( $# > 0 )) || return 0
   DEBIAN_FRONTEND=noninteractive LC_ALL=C LANG=C /usr/bin/apt-get \
     --yes --no-install-recommends "${DOCKER_DEBIAN_APT_CONFFILE_OPTIONS[@]}" install "$@" || return $?
-  docker_debian_remove_containerd_dpkg_dist
+  docker_debian_remove_containerd_dpkg_artifacts
 }
 
 docker_debian_configure_pending_packages() {
   DEBIAN_FRONTEND=noninteractive LC_ALL=C LANG=C /usr/bin/dpkg \
     "${DOCKER_DEBIAN_DPKG_CONFFILE_OPTIONS[@]}" --configure -a || return $?
-  docker_debian_remove_containerd_dpkg_dist
+  docker_debian_remove_containerd_dpkg_artifacts
 }
 
 # Static contract markers implemented by docker-host-debian-core.sh:

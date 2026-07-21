@@ -131,7 +131,7 @@ test("one trusted profile defines the complete host toolchain environment", asyn
   assert.match(update, /\/usr\/local\/bin\/tsc/);
 });
 
-test("update finalizes the runtime before Docker provisioning and runner restoration", async () => {
+test("update finalizes the runtime and restores the runner before the disabled Docker path", async () => {
   const { update } = await scripts();
   const stop = update.indexOf('sudo -n systemctl stop "${SERVICE_NAME}"');
   const wait = update.indexOf('process_table="$(/usr/bin/ps -e -o euid=,comm=)"', stop);
@@ -142,11 +142,16 @@ test("update finalizes the runtime before Docker provisioning and runner restora
   const entrypoint = update.indexOf('sudo -n -u "${BUILD_USER}" /usr/bin/test -f "${SOURCE_ROOT}/dist/src/run-codex.js"', compile);
   const adopt = update.indexOf('sudo -n /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -exec /usr/bin/chown -h root:root', entrypoint);
   const finalized = update.indexOf("runtime_finalized=1", adopt);
-  const provision = update.indexOf("/usr/bin/setsid --wait", finalized);
-  const restore = update.indexOf("\nrestore_runner\nrunner_status=", provision);
+  const disabled = update.indexOf("if (( DOCKER_PROVISIONING_ENABLED == 0 ))", finalized);
+  const restore = update.indexOf("if ! restore_runner; then", disabled);
+  const success = update.indexOf("Docker provisioning is disabled", restore);
+  const exit = update.indexOf("exit 0", success);
+  const dormantProvisioner = update.indexOf("/usr/bin/setsid --wait", exit);
   assert.ok(stop >= 0 && wait > stop && removeBuild > wait && removeRuntime > removeBuild);
   assert.ok(createRuntime > removeRuntime && compile > createRuntime && entrypoint > compile);
-  assert.ok(adopt > entrypoint && finalized > adopt && provision > finalized && restore > provision);
+  assert.ok(adopt > entrypoint && finalized > adopt && disabled > finalized);
+  assert.ok(restore > disabled && success > restore && exit > success && dormantProvisioner > exit);
+  assert.match(update, /^DOCKER_PROVISIONING_ENABLED=0$/mu);
   assert.match(update, /sudo -n -u "\$\{BUILD_USER\}" \/usr\/bin\/env -i/);
   assert.match(update, /-p "\$\{SOURCE_ROOT\}\/tsconfig\.runtime\.json"/);
   assert.match(update, /--outDir "\$\{SOURCE_ROOT\}\/dist"/);
@@ -174,10 +179,11 @@ test("runtime adoption does not follow links and applies production modes", asyn
   assert.doesNotMatch(update, /chown -R/);
 });
 
-test("install remains free of Docker provisioning and both scripts contain no Relay transport deployment", async () => {
+test("install remains free of Docker provisioning and update does not require Docker scripts", async () => {
   const { install, update } = await scripts();
   assert.doesNotMatch(install, /apt-get[^\n]*(?:docker-ce|containerd\.io)|groupadd docker|usermod[^\n]*docker|systemctl[^\n]*docker/iu);
-  assert.match(update, /scripts\/docker-host\.sh/u);
+  assert.match(update, /^DOCKER_PROVISIONING_ENABLED=0$/mu);
+  assert.doesNotMatch(update, /secure_source_executable "\$\{DOCKER_(?:PROVISIONER|ADAPTER)\}"/u);
   for (const script of [install, update]) {
     assert.doesNotMatch(script, /compose\.yml|AGENT_RELAY_TOKEN|AGENT_RELAY_URL|HOST_UID|HOST_GID/iu);
     assert.doesNotMatch(script, /\.env/);

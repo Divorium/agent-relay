@@ -10,6 +10,7 @@ BUILD_USER=agent-relay-builder
 RUNNER_USER=github-runner
 SERVICE_NAME=actions.runner.Divorium.gh-runner.service
 ADMIN_FILE=/etc/agent-relay/administrator
+DOCKER_PROVISIONING_ENABLED=0
 DOCKER_PROVISIONER=${SOURCE_ROOT}/scripts/docker-host.sh
 DOCKER_ADAPTER=${SOURCE_ROOT}/scripts/docker-host-debian.sh
 PROCESS_GROUP_WAIT_STEPS=300
@@ -184,15 +185,13 @@ if [[ "$(/usr/bin/ps -p 1 -o comm= | /usr/bin/tr -d '[:space:]')" != systemd ]];
   echo "systemd must run as PID 1 before update.sh" >&2
   exit 1
 fi
-for command in /usr/bin/flock /usr/bin/kill /usr/bin/ps /usr/bin/setsid /usr/bin/sleep /usr/bin/stat /usr/local/bin/tsc; do
+for command in /usr/bin/flock /usr/bin/ps /usr/bin/sleep /usr/bin/stat /usr/local/bin/tsc; do
   [[ -x "${command}" ]] || { echo "Missing required update command: ${command}" >&2; exit 1; }
 done
 [[ -f "${SOURCE_ROOT}/tsconfig.runtime.json" && ! -L "${SOURCE_ROOT}/tsconfig.runtime.json" ]] || {
   echo "Missing trusted runtime TypeScript configuration" >&2
   exit 1
 }
-secure_source_executable "${DOCKER_PROVISIONER}" || { echo "Docker provisioner must be an administrator-owned regular file that can be secured as executable" >&2; exit 1; }
-secure_source_executable "${DOCKER_ADAPTER}" || { echo "Docker adapter must be an administrator-owned regular file that can be secured as executable" >&2; exit 1; }
 /usr/bin/id -u "${BUILD_USER}" >/dev/null 2>&1 || { echo "Missing build account: ${BUILD_USER}" >&2; exit 1; }
 /usr/bin/id -u "${RUNNER_USER}" >/dev/null 2>&1 || { echo "Missing runner account: ${RUNNER_USER}" >&2; exit 1; }
 
@@ -241,6 +240,16 @@ sudo -n /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -exec /usr/bin/chown -h roo
 sudo -n /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -type d -exec /usr/bin/chmod 0755 {} +
 sudo -n /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -type f -exec /usr/bin/chmod 0644 {} +
 runtime_finalized=1
+
+if (( DOCKER_PROVISIONING_ENABLED == 0 )); then
+  if ! restore_runner; then
+    printf 'Runner restoration failed after runtime finalization. The finalized runtime remains at %s. Rerun ./update.sh after correcting the service failure.\n' "${SOURCE_ROOT}/dist" >&2
+    exit 70
+  fi
+  runner_needs_restore=0
+  printf 'Update completed. Runner is active with the finalized runtime. Docker provisioning is disabled.\n'
+  exit 0
+fi
 
 provisioner_control_dir="$(/usr/bin/mktemp -d /tmp/agent-relay-provisioner.XXXXXXXX)"
 /usr/bin/chmod 0700 "${provisioner_control_dir}"

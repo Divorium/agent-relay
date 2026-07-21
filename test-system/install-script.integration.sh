@@ -48,7 +48,7 @@ fi
 grep -q 'require_command python3' install.sh
 grep -q 'sudo -n true' install.sh
 grep -q 'agent_relay_extra_apt_packages' ansible/roles/agent_relay_host/defaults/main.yml
-grep -q 'apt-get install -y --no-install-recommends python3' ansible/playbooks/host.yml
+grep -q 'apt-get install -y --no-install-recommends python3 python3-apt' ansible/playbooks/host.yml
 grep -q 'validate: /usr/sbin/visudo -cf %s' ansible/roles/agent_relay_host/tasks/users.yml
 grep -q 'checksum: sha256:https://static.rust-lang.org' ansible/roles/agent_relay_host/tasks/toolchains.yml
 

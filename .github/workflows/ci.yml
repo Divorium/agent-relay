@@ -58,11 +58,5 @@ jobs:
       - name: Validate toolchain
         run: npm run check:toolchain
 
-      - name: Validate install system script
-        run: bash test-system/install-script.integration.sh
-
-      - name: Validate update system script
-        run: bash test-system/update-script.integration.sh
-
-      - name: Validate Docker system script
-        run: bash test-system/docker-host.repository-safe.sh
+      - name: Validate system scripts
+        run: npm run check:system

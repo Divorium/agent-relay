@@ -5,14 +5,14 @@
   become: false
 
   pre_tasks:
-    - name: Bootstrap Python 3 when absent
+    - name: Bootstrap Python and python3-apt when absent
       ansible.builtin.raw: |
-        if test -x /usr/bin/python3; then
+        if test -x /usr/bin/python3 && dpkg-query -W -f='${Status}' python3-apt 2>/dev/null | grep -q 'install ok installed'; then
           printf 'PYTHON_PRESENT\n'
         else
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
-          apt-get install -y --no-install-recommends python3
+          apt-get install -y --no-install-recommends python3 python3-apt
           printf 'PYTHON_INSTALLED\n'
         fi
       register: agent_relay_python_bootstrap

@@ -27,7 +27,6 @@
 - name: Install repository bootstrap packages
   ansible.builtin.apt:
     name:
-      - apt-transport-https
       - ca-certificates
       - curl
       - gnupg
@@ -134,3 +133,19 @@
     state: present
     update_cache: true
     policy_rc_d: 101
+
+- name: Create needrestart policy directory
+  ansible.builtin.file:
+    path: /etc/needrestart/conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Protect GitHub runner units from automatic needrestart restarts
+  ansible.builtin.copy:
+    dest: /etc/needrestart/conf.d/actions_runner_services.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: "$nrconf{override_rc}{qr(^actions\\.runner\\..+\\.service$)} = 0;\n"

@@ -3,12 +3,26 @@
   ansible.builtin.assert:
     that:
       - agent_relay_admin_user is match('^[a-z_][a-z0-9_-]*$')
+      - agent_relay_admin_user | length <= 32
+      - agent_relay_admin_user not in ['root', agent_relay_runner_user, agent_relay_builder_user]
       - agent_relay_admin_authorized_keys is sequence
       - agent_relay_admin_authorized_keys is not string
       - agent_relay_admin_authorized_keys | length > 0
       - agent_relay_extra_apt_packages is sequence
       - agent_relay_extra_apt_packages is not string
-    fail_msg: Configure a valid administrator name, a list of SSH public keys, and a package list.
+      - agent_relay_extra_apt_packages | intersect(agent_relay_docker_conflicting_packages) | length == 0
+    fail_msg: Configure a valid non-reserved administrator, SSH public keys, and non-conflicting package list.
+
+- name: Validate administrator public keys
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item | trim | length > 0
+      - "'\n' not in item"
+      - "'\r' not in item"
+    fail_msg: Each administrator authorized key must be one nonempty physical line.
+  loop: "{{ agent_relay_admin_authorized_keys }}"
+  no_log: true
 
 - name: Install repository bootstrap packages
   ansible.builtin.apt:
@@ -103,6 +117,11 @@
     name: "{{ (agent_relay_required_apt_packages + agent_relay_extra_apt_packages + ['nodejs', 'temurin-' ~ agent_relay_java_major ~ '-jdk']) | unique }}"
     state: present
     update_cache: true
+
+- name: Remove packages conflicting with Docker Engine
+  ansible.builtin.apt:
+    name: "{{ agent_relay_docker_conflicting_packages }}"
+    state: absent
 
 - name: Install Docker packages without premature service start
   ansible.builtin.apt:

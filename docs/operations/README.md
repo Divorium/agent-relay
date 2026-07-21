@@ -41,6 +41,8 @@ cd /srv/github-runner/storage/agent-relay
 
 Codex login is manual. `install.sh` neither performs nor verifies authentication.
 
+On the first run, provide a GitHub credential that may create an organization runner registration token. A fine-grained token needs the organization `Self-hosted runners: write` permission. A classic PAT needs `admin:org` and, for a private repository, `repo`. The credential is exchanged for a short-lived registration token and is not stored by the installer.
+
 The installer validates Python 3, passwordless sudo, users, directories, toolchains, Docker, checkout ownership and the current runtime before mutation. It installs runner binaries and registration only when absent. It never calls Ansible, `apt`, `dpkg`, `useradd`, Docker provisioning, `installdependencies.sh` or Codex login.
 
 ## Release update

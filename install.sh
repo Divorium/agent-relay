@@ -1,14 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ORGANIZATION=Divorium
-ORGANIZATION_URL=https://github.com/Divorium
-RUNNER_NAME=gh-runner
-RUNNER_VERSION=2.335.1
-RUNNER_SHA256=4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf
-TYPESCRIPT_VERSION=5.8.3
-CODEX_VERSION=0.144.4
-BASE_ROOT=/srv/github-runner
+SOURCE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+HOST_CONFIG_FILE=${SOURCE_ROOT}/config/runner-host.json
+HOST_CONFIG_LOADER=${SOURCE_ROOT}/scripts/host-config.sh
+TOOLCHAIN_PROFILE=${SOURCE_ROOT}/scripts/toolchain-environment.sh
+HOST_TOOLCHAIN_CHECK=${SOURCE_ROOT}/scripts/host-toolchain-check.sh
+SCRATCH_PREFIX=/tmp/agent-relay-install.$$
+
+fail() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "Required command is missing: $1"
+}
+
+require_regular_file() {
+  local path=$1
+  [[ -f "${path}" && ! -L "${path}" ]] || fail "Required regular non-symlink file is missing: ${path}"
+}
+
+require_command python3
+require_regular_file "${HOST_CONFIG_FILE}"
+require_regular_file "${HOST_CONFIG_LOADER}"
+source "${HOST_CONFIG_LOADER}"
+host_config_load "${HOST_CONFIG_FILE}" || fail "Could not load ${HOST_CONFIG_FILE}"
+
 STORAGE_ROOT=${BASE_ROOT}/storage
 EXPECTED_SOURCE_ROOT=${STORAGE_ROOT}/agent-relay
 WORK_ROOT=${STORAGE_ROOT}/work
@@ -17,15 +36,10 @@ RUNNER_HOME=${STORAGE_ROOT}/home
 BUILD_HOME=${STORAGE_ROOT}/build-home
 DOCKER_STORAGE_ROOT=${STORAGE_ROOT}/docker
 DOCKER_ROOT=${DOCKER_STORAGE_ROOT}/engine
-CONTAINERD_ROOT=${STORAGE_ROOT}/docker/containerd
-RUNNER_USER=github-runner
-BUILD_USER=agent-relay-builder
-SERVICE_NAME=actions.runner.Divorium.gh-runner.service
+CONTAINERD_ROOT=${DOCKER_STORAGE_ROOT}/containerd
+SERVICE_NAME=actions.runner.${ORGANIZATION}.${RUNNER_NAME}.service
 LOCK_ROOT=/var/lib/agent-relay
 LOCK_FILE=${LOCK_ROOT}/install.lock
-SOURCE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-TOOLCHAIN_PROFILE=${SOURCE_ROOT}/scripts/toolchain-environment.sh
-SCRATCH_PREFIX=/tmp/agent-relay-install.$$
 
 runner_archive=""
 service_temp=""
@@ -43,15 +57,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-fail() {
-  printf '%s\n' "$*" >&2
-  exit 1
-}
-
-require_command() {
-  command -v "$1" >/dev/null 2>&1 || fail "Required command is missing: $1"
-}
-
 new_scratch_file() {
   mktemp "${SCRATCH_PREFIX}.XXXXXXXX"
 }
@@ -60,13 +65,7 @@ stat_uid() { stat -c '%u' -- "$1"; }
 stat_gid() { stat -c '%g' -- "$1"; }
 stat_mode() { stat -c '%a' -- "$1"; }
 sudo_stat_uid() { sudo -n stat -c '%u' -- "$1"; }
-sudo_stat_gid() { sudo -n stat -c '%g' -- "$1"; }
 sudo_stat_mode() { sudo -n stat -c '%a' -- "$1"; }
-
-require_regular_file() {
-  local path=$1
-  [[ -f "${path}" && ! -L "${path}" ]] || fail "Required regular non-symlink file is missing: ${path}"
-}
 
 require_directory() {
   local path=$1 owner_uid=$2 owner_gid=$3 mode=$4
@@ -96,6 +95,7 @@ require_locked_account() {
 validate_checkout() {
   local admin_uid=$1 entry uid mode listing
   local -a trusted=(
+    config/runner-host.json
     install.sh
     package.json
     tsconfig.runtime.json
@@ -105,6 +105,8 @@ validate_checkout() {
     runner/resolve-request.mjs
     runner/run-codex.mjs
     scripts/codex-run
+    scripts/host-config.sh
+    scripts/host-toolchain-check.sh
     scripts/toolchain-environment.sh
     scripts/toolchain-smoke.sh
   )
@@ -305,7 +307,6 @@ fi
 [[ "${SOURCE_ROOT}" == "${EXPECTED_SOURCE_ROOT}" ]] || fail "The repository must be checked out at ${EXPECTED_SOURCE_ROOT}"
 [[ ! -L "${SOURCE_ROOT}" ]] || fail "The source root must not be a symlink"
 
-require_command python3
 python3 -c 'raise SystemExit(0)'
 require_command sudo
 sudo -n true || fail "The administrator requires passwordless sudo"
@@ -319,13 +320,10 @@ require_command curl
 require_command jq
 require_command sha256sum
 require_command tar
-require_command node
-require_command npm
-require_command java
-require_command javac
 require_command docker
-require_command git-lfs
 require_regular_file "${TOOLCHAIN_PROFILE}"
+require_regular_file "${HOST_TOOLCHAIN_CHECK}"
+[[ -x "${HOST_TOOLCHAIN_CHECK}" ]] || fail "Host toolchain check must be executable"
 source "${TOOLCHAIN_PROFILE}"
 
 [[ "$(uname -m)" == "x86_64" ]] || fail "Only x86-64 is supported"
@@ -361,6 +359,7 @@ require_directory "${RUNNER_DIR}" "${runner_uid}" "${runner_gid}" 700
 require_directory "${WORK_ROOT}" "${runner_uid}" "${runner_gid}" 700
 require_directory "${RUNNER_HOME}" "${runner_uid}" "${runner_gid}" 700
 require_directory "${BUILD_HOME}" "${builder_uid}" "${builder_gid}" 700
+require_directory "${BUILD_HOME}/tmp" "${builder_uid}" "${builder_gid}" 700
 require_directory "${DOCKER_STORAGE_ROOT}" 0 0 711
 require_directory "${DOCKER_ROOT}" 0 0 711
 require_directory "${CONTAINERD_ROOT}" 0 0 711
@@ -373,17 +372,23 @@ require_regular_file /etc/containerd/config.toml
   && "$(stat_mode /etc/containerd/config.toml)" == "644" ]] \
   || fail "containerd configuration has unexpected ownership or mode"
 
-[[ "$(node --version)" == v22.* ]] || fail "Node.js 22 is required"
-java -version 2>&1 | head -n1 | grep -Eq 'version "21\.' || fail "Java 21 is required"
-[[ -x "${TOOLCHAIN_GO_ROOT}/bin/go" ]] || fail "Go is missing from ${TOOLCHAIN_GO_ROOT}"
-[[ "$("${TOOLCHAIN_GO_ROOT}/bin/go" version)" == "go version go1.24.5 linux/amd64" ]] || fail "Go 1.24.5 is required"
-[[ -x "${TOOLCHAIN_RUST_BIN}/rustc" && -x "${TOOLCHAIN_RUST_BIN}/cargo" && -x "${TOOLCHAIN_RUST_BIN}/rustup" ]] || fail "Rust stable toolchain is missing"
-RUSTUP_HOME="${TOOLCHAIN_RUSTUP_HOME}" CARGO_HOME="${TOOLCHAIN_RUST_CARGO_HOME}" \
-  "${TOOLCHAIN_RUST_BIN}/rustup" show active-toolchain | grep -Eq '^stable-' || fail "Rust stable toolchain is not active"
-[[ "$(/usr/local/bin/tsc --version)" == "Version ${TYPESCRIPT_VERSION}" ]] || fail "TypeScript ${TYPESCRIPT_VERSION} is required"
-[[ -x /usr/local/bin/codex ]] || fail "Codex CLI is missing"
-/usr/local/bin/codex --version | grep -Eq "(^|[[:space:]])${CODEX_VERSION//./\.}$" || fail "Codex CLI ${CODEX_VERSION} is required"
-git lfs version >/dev/null || fail "Git LFS is unavailable"
+PATH="${TOOLCHAIN_PATH}" \
+JAVA_HOME="${TOOLCHAIN_JAVA_HOME}" \
+RUSTUP_HOME="${TOOLCHAIN_RUSTUP_HOME}" \
+CARGO_HOME="${TOOLCHAIN_RUST_CARGO_HOME}" \
+TOOLCHAIN_JAVA_HOME="${TOOLCHAIN_JAVA_HOME}" \
+TOOLCHAIN_GO_ROOT="${TOOLCHAIN_GO_ROOT}" \
+TOOLCHAIN_RUST_BIN="${TOOLCHAIN_RUST_BIN}" \
+TOOLCHAIN_RUSTUP_HOME="${TOOLCHAIN_RUSTUP_HOME}" \
+TOOLCHAIN_RUST_CARGO_HOME="${TOOLCHAIN_RUST_CARGO_HOME}" \
+EXPECTED_NODE_MAJOR="${NODE_MAJOR}" \
+EXPECTED_JAVA_MAJOR="${JAVA_MAJOR}" \
+EXPECTED_GO_VERSION="${GO_VERSION}" \
+EXPECTED_RUST_TOOLCHAIN="${RUST_TOOLCHAIN}" \
+EXPECTED_TYPESCRIPT_VERSION="${TYPESCRIPT_VERSION}" \
+EXPECTED_CODEX_VERSION="${CODEX_VERSION}" \
+"${HOST_TOOLCHAIN_CHECK}"
+
 sudo -n -u "${RUNNER_USER}" -H docker info >/dev/null || fail "${RUNNER_USER} cannot access Docker"
 sudo -n -u "${RUNNER_USER}" -H docker compose version >/dev/null || fail "Docker Compose plugin is unavailable"
 [[ "$(sudo -n -u "${RUNNER_USER}" -H docker info --format '{{.DockerRootDir}}')" == "${DOCKER_ROOT}" ]] \
@@ -435,7 +440,7 @@ case "${registration}" in
         | curl -fsSL --retry 3 -X POST \
             -H 'Accept: application/vnd.github+json' \
             -H @- \
-            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
             "https://api.github.com/orgs/${ORGANIZATION}/actions/runners/registration-token"
     )"; then
       unset github_token
@@ -475,7 +480,18 @@ done
 stage_dir="$(mktemp -d "${SOURCE_ROOT}/.dist.stage.XXXXXXXX")"
 sudo -n chown "${BUILD_USER}:${BUILD_USER}" "${stage_dir}"
 sudo -n chmod 0700 "${stage_dir}"
-toolchain_environment_build "${BUILD_USER}" "${BUILD_HOME}" "${BUILD_HOME}" build_environment
+build_environment=(
+  "HOME=${BUILD_HOME}"
+  "USER=${BUILD_USER}"
+  "LOGNAME=${BUILD_USER}"
+  "SHELL=/usr/sbin/nologin"
+  "LANG=C.UTF-8"
+  "LC_ALL=C.UTF-8"
+  "TMPDIR=${BUILD_HOME}/tmp"
+  "TMP=${BUILD_HOME}/tmp"
+  "TEMP=${BUILD_HOME}/tmp"
+  "PATH=${TOOLCHAIN_PATH}"
+)
 sudo -n -u "${BUILD_USER}" /usr/bin/env -i "${build_environment[@]}" \
   /usr/local/bin/tsc -p "${SOURCE_ROOT}/tsconfig.runtime.json" --outDir "${stage_dir}"
 validate_stage_tree "${stage_dir}"

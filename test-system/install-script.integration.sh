@@ -50,7 +50,14 @@ grep -q 'sudo -n true' install.sh
 grep -q 'agent_relay_extra_apt_packages' ansible/roles/agent_relay_host/defaults/main.yml
 grep -q 'apt-get install -y --no-install-recommends python3 python3-apt' ansible/playbooks/host.yml
 grep -q 'validate: /usr/sbin/visudo -cf %s' ansible/roles/agent_relay_host/tasks/users.yml
+grep -A12 -q 'Create GitHub runner account' ansible/roles/agent_relay_host/tasks/users.yml
+grep -q 'create_home: false' ansible/roles/agent_relay_host/tasks/users.yml
+grep -q 'Create runner-owned paths' ansible/roles/agent_relay_host/tasks/filesystem.yml
 grep -q 'checksum: sha256:https://static.rust-lang.org' ansible/roles/agent_relay_host/tasks/toolchains.yml
+grep -q 'Runner archive extraction did not produce a complete runner payload' install.sh
+grep -q 'Runner registration did not produce the complete protected state' install.sh
+grep -q 'chmod 0600' install.sh
+grep -q 'tar -C "${RUNNER_DIR}" -xzf - < "${runner_archive}"' install.sh
 
 python3 - <<'PY'
 from pathlib import Path

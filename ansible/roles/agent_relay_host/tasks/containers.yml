@@ -1,0 +1,50 @@
+---
+- name: Create container configuration directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/docker
+    - /etc/containerd
+
+- name: Configure Docker daemon
+  ansible.builtin.template:
+    src: daemon.json.j2
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart container stack
+
+- name: Configure containerd
+  ansible.builtin.template:
+    src: containerd-config.toml.j2
+    dest: /etc/containerd/config.toml
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart container stack
+
+- name: Flush container service handlers
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start container services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - containerd.service
+    - docker.socket
+    - docker.service
+
+- name: Install needrestart policy for GitHub runner units
+  ansible.builtin.copy:
+    dest: /etc/needrestart/conf.d/actions_runner_services.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: "$nrconf{override_rc}{qr(^actions\\.runner\\..+\\.service$)} = 0;\n"

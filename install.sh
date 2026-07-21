@@ -374,9 +374,9 @@ require_regular_file /etc/containerd/config.toml
   || fail "containerd configuration has unexpected ownership or mode"
 
 [[ "$(node --version)" == v22.* ]] || fail "Node.js 22 is required"
-java -version 2>&1 | head -n1 | grep -Eq 'version "21\.|openjdk 21' || fail "Java 21 is required"
+java -version 2>&1 | head -n1 | grep -Eq 'version "21\.' || fail "Java 21 is required"
 [[ -x "${TOOLCHAIN_GO_ROOT}/bin/go" ]] || fail "Go is missing from ${TOOLCHAIN_GO_ROOT}"
-"${TOOLCHAIN_GO_ROOT}/bin/go" version | grep -q 'go1\.24\.5' || fail "Go 1.24.5 is required"
+[[ "$("${TOOLCHAIN_GO_ROOT}/bin/go" version)" == "go version go1.24.5 linux/amd64" ]] || fail "Go 1.24.5 is required"
 [[ -x "${TOOLCHAIN_RUST_BIN}/rustc" && -x "${TOOLCHAIN_RUST_BIN}/cargo" && -x "${TOOLCHAIN_RUST_BIN}/rustup" ]] || fail "Rust stable toolchain is missing"
 RUSTUP_HOME="${TOOLCHAIN_RUSTUP_HOME}" CARGO_HOME="${TOOLCHAIN_RUST_CARGO_HOME}" \
   "${TOOLCHAIN_RUST_BIN}/rustup" show active-toolchain | grep -Eq '^stable-' || fail "Rust stable toolchain is not active"
@@ -435,7 +435,7 @@ case "${registration}" in
         | curl -fsSL --retry 3 -X POST \
             -H 'Accept: application/vnd.github+json' \
             -H @- \
-            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
             "https://api.github.com/orgs/${ORGANIZATION}/actions/runners/registration-token"
     )"; then
       unset github_token

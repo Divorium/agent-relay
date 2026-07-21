@@ -34,6 +34,16 @@ protected_source_file() {
   [[ "${owner_uid}" == "$(/usr/bin/id -u)" && "${mode}" =~ ^[0-7]{3,4}$ && $((8#${mode} & 8#022)) == 0 ]]
 }
 
+secure_source_executable() {
+  local path="$1" metadata owner_uid
+  [[ -f "${path}" && ! -L "${path}" ]] || return 1
+  metadata="$(/usr/bin/stat -c '%u' -- "${path}")" || return 1
+  owner_uid=${metadata}
+  [[ "${owner_uid}" == "$(/usr/bin/id -u)" ]] || return 1
+  /usr/bin/chmod 0755 -- "${path}" || return 1
+  protected_source_file "${path}"
+}
+
 restore_runner() {
   sudo -n systemctl enable "${SERVICE_NAME}" \
     && sudo -n systemctl start "${SERVICE_NAME}" \
@@ -181,8 +191,8 @@ done
   echo "Missing trusted runtime TypeScript configuration" >&2
   exit 1
 }
-protected_source_file "${DOCKER_PROVISIONER}" || { echo "Docker provisioner must be a protected executable regular file" >&2; exit 1; }
-protected_source_file "${DOCKER_ADAPTER}" || { echo "Docker adapter must be a protected executable regular file" >&2; exit 1; }
+secure_source_executable "${DOCKER_PROVISIONER}" || { echo "Docker provisioner must be an administrator-owned regular file that can be secured as executable" >&2; exit 1; }
+secure_source_executable "${DOCKER_ADAPTER}" || { echo "Docker adapter must be an administrator-owned regular file that can be secured as executable" >&2; exit 1; }
 /usr/bin/id -u "${BUILD_USER}" >/dev/null 2>&1 || { echo "Missing build account: ${BUILD_USER}" >&2; exit 1; }
 /usr/bin/id -u "${RUNNER_USER}" >/dev/null 2>&1 || { echo "Missing runner account: ${RUNNER_USER}" >&2; exit 1; }
 

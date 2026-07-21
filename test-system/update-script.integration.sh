@@ -26,7 +26,7 @@ printf 'test-admin\n' > "${ADMIN_FILE}"
 chmod 0600 "${ADMIN_FILE}"
 cp scripts/docker-host.sh "${DOCKER_PROVISIONER}"
 cp scripts/docker-host-debian.sh "${DOCKER_ADAPTER}"
-chmod 0755 "${DOCKER_PROVISIONER}" "${DOCKER_ADAPTER}"
+chmod 0775 "${DOCKER_PROVISIONER}" "${DOCKER_ADAPTER}"
 printf '{"extends":"./tsconfig.json"}\n' > "${SOURCE_ROOT}/tsconfig.runtime.json"
 : > "${COMMAND_LOG}"
 : > "${DOCKER_LOG}"
@@ -281,6 +281,10 @@ grep -Fq 'systemctl stop actions.runner.Divorium.gh-runner.service' "${COMMAND_L
 grep -Fq 'systemctl enable actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
 grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
 grep -Fq 'Update completed. Runner is active with the finalized runtime and Docker access.' "${ROOT}/success.out"
+[[ "$(/usr/bin/stat -c '%a' -- "${DOCKER_PROVISIONER}")" == 755 ]] \
+  || { echo 'update.sh did not remove group-write permission from the Docker provisioner' >&2; exit 1; }
+[[ "$(/usr/bin/stat -c '%a' -- "${DOCKER_ADAPTER}")" == 755 ]] \
+  || { echo 'update.sh did not remove group-write permission from the Docker adapter' >&2; exit 1; }
 assert_control_clean
 
 set +e

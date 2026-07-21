@@ -48,6 +48,40 @@ docker_debian_package_absent() {
   [[ "${current}" == n || "${current}" == c ]]
 }
 
+docker_debian_conffile_digest() {
+  local package="$1" conffile="$2" admindir="${3:-/var/lib/dpkg}"
+  /usr/bin/env LC_ALL=C LANG=C /usr/bin/dpkg-query --admindir="${admindir}" -W -f='${Conffiles}\n' "${package}" \
+    | /usr/bin/awk -v conffile="${conffile}" '
+        $1 == conffile && $2 ~ /^[0-9a-f]{32}$/ { count += 1; digest = $2 }
+        END { if (count == 1) print digest; else exit 1 }
+      '
+}
+
+docker_debian_remove_discarded_conffile() {
+  local package="$1" conffile="$2" host_path="$3" admindir="${4:-/var/lib/dpkg}"
+  local artifact="${host_path}.dpkg-dist" expected_digest actual_digest
+  docker_host_path_absent "${artifact}" && return 0
+  docker_host_exact_metadata "${artifact}" file "${DOCKER_HOST_OWNER_UID}:${DOCKER_HOST_OWNER_GID}|644" \
+    || docker_host_fail configuration "Discarded package conffile is unsafe: ${artifact}"
+  expected_digest="$(docker_debian_conffile_digest "${package}" "${conffile}" "${admindir}")" \
+    || docker_host_fail configuration "Could not verify discarded package conffile ownership: ${artifact}"
+  actual_digest="$(/usr/bin/md5sum -- "${artifact}")" \
+    || docker_host_fail configuration "Could not digest discarded package conffile: ${artifact}"
+  actual_digest=${actual_digest%% *}
+  [[ "${actual_digest}" == "${expected_digest}" ]] \
+    || docker_host_fail configuration "Discarded package conffile differs from the package record: ${artifact}"
+  /usr/bin/rm -f -- "${artifact}" \
+    || docker_host_fail configuration "Could not remove discarded package conffile: ${artifact}"
+  docker_host_path_absent "${artifact}" \
+    || docker_host_fail configuration "Discarded package conffile remained after removal: ${artifact}"
+}
+
+docker_debian_reconcile_conffile_artifacts() {
+  local admindir="${1:-/var/lib/dpkg}"
+  docker_debian_remove_discarded_conffile containerd.io /etc/containerd/config.toml \
+    "${DOCKER_HOST_CONTAINERD_CONFIG}" "${admindir}"
+}
+
 docker_debian_related_package_records() {
   local package_file="$1"
   /usr/bin/awk -F'|' '
@@ -162,6 +196,7 @@ docker_debian_assert_clean_dpkg() {
   (( status == 0 && query_status == 0 )) || docker_host_fail package "Could not audit global dpkg state"
   docker_debian_dpkg_state_clean "${audit}" "${packages}" \
     || docker_host_fail package "Global dpkg state is not clean; an administrator must finish or repair pending package work, then rerun ./update.sh"
+  docker_debian_reconcile_conffile_artifacts
 }
 
 docker_debian_assert_recovery_dpkg_bounded() {
@@ -176,6 +211,7 @@ docker_debian_assert_recovery_dpkg_bounded() {
   (( query_status == 0 )) || docker_host_fail package "Could not inspect interrupted dpkg state before recovery"
   docker_debian_recovery_dpkg_state_allowed "${packages}" "${marker_packages}" \
     || docker_host_fail package "Interrupted dpkg state includes unrelated non-trigger package work"
+  docker_debian_reconcile_conffile_artifacts
 }
 
 docker_debian_parse_list_source() {
@@ -789,7 +825,9 @@ docker_debian_selected_dependency_closure() {
 docker_debian_install_exact_packages() {
   (( $# > 0 )) || return 0
   DEBIAN_FRONTEND=noninteractive LC_ALL=C LANG=C /usr/bin/apt-get \
-    --yes --no-install-recommends "${DOCKER_DEBIAN_APT_CONFFILE_OPTIONS[@]}" install "$@"
+    --yes --no-install-recommends "${DOCKER_DEBIAN_APT_CONFFILE_OPTIONS[@]}" install "$@" \
+    || return $?
+  docker_debian_reconcile_conffile_artifacts
 }
 
 docker_debian_configure_pending_packages() {

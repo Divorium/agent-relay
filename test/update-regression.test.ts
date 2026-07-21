@@ -23,7 +23,7 @@ test("update leaves Git and repository validation outside deployment", async () 
   assert.match(update, /tsconfig\.runtime\.json/u);
 });
 
-test("update stops intake, waits, finalizes runtime, provisions Docker and restores runner", async () => {
+test("update stops intake, waits, finalizes runtime and restores the runner without Docker", async () => {
   const update = await read("update.sh");
   const responsibility = update.indexOf("runner_needs_restore=1");
   const stop = update.indexOf('sudo -n systemctl stop "${SERVICE_NAME}"', responsibility);
@@ -36,13 +36,17 @@ test("update stops intake, waits, finalizes runtime, provisions Docker and resto
   const entrypoint = update.indexOf('sudo -n -u "${BUILD_USER}" /usr/bin/test -f "${SOURCE_ROOT}/dist/src/run-codex.js"', compile);
   const adopt = update.indexOf('sudo -n /usr/bin/find -P "${SOURCE_ROOT}/dist" -xdev -exec /usr/bin/chown -h root:root', entrypoint);
   const finalized = update.indexOf("runtime_finalized=1", adopt);
-  const provision = update.indexOf("/usr/bin/setsid --wait", finalized);
-  const dockerStatus = update.indexOf("docker_status=$?", provision);
-  const restore = update.indexOf("\nrestore_runner\nrunner_status=", dockerStatus);
+  const disabled = update.indexOf("if (( DOCKER_PROVISIONING_ENABLED == 0 ))", finalized);
+  const restore = update.indexOf("if ! restore_runner; then", disabled);
+  const success = update.indexOf("Docker provisioning is disabled", restore);
+  const exit = update.indexOf("exit 0", success);
+  const dormantProvisioner = update.indexOf("/usr/bin/setsid --wait", exit);
   assert.ok(responsibility >= 0 && stop > responsibility && runnerUid > stop && wait > runnerUid);
   assert.ok(removeBuild > wait && removeRuntime > removeBuild && createRuntime > removeRuntime);
   assert.ok(compile > createRuntime && entrypoint > compile && adopt > entrypoint && finalized > adopt);
-  assert.ok(provision > finalized && dockerStatus > provision && restore > dockerStatus);
+  assert.ok(disabled > finalized && restore > disabled && success > restore && exit > success && dormantProvisioner > exit);
+  assert.match(update, /^DOCKER_PROVISIONING_ENABLED=0$/mu);
+  assert.doesNotMatch(update, /secure_source_executable "\$\{DOCKER_(?:PROVISIONER|ADAPTER)\}"/u);
   assert.match(update, /sudo -n -u "\$\{BUILD_USER\}" \/usr\/bin\/env -i/u);
   assert.match(update, /--outDir "\$\{SOURCE_ROOT\}\/dist"/u);
   assert.match(update, /-type d -exec \/usr\/bin\/chmod 0755/u);
@@ -63,7 +67,7 @@ test("runner wait scans the complete process table and filters by numeric UID", 
   assert.doesNotMatch(update, /\/usr\/bin\/pgrep/u);
 });
 
-test("Docker provisioner process group is race-safe and signal handling is bounded", async () => {
+test("dormant Docker provisioner process control remains unchanged", async () => {
   const update = await read("update.sh");
   assert.match(update, /provisioner_control_dir="\$\(\/usr\/bin\/mktemp -d \/tmp\/agent-relay-provisioner\.XXXXXXXX\)"/u);
   assert.match(update, /provisioner_pgid_file="\$\{provisioner_control_dir\}\/pgid"/u);

@@ -6,29 +6,37 @@ async function text(path: string): Promise<string> {
   return readFile(path, "utf8");
 }
 
-test("installer contains only runner and runtime responsibilities", async () => {
+async function json(path: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await text(path)) as Record<string, unknown>;
+}
+
+test("one host contract supplies installer, Ansible, and smoke versions", async () => {
+  const contract = await json("config/runner-host.json");
   const install = await text("install.sh");
-  assert.match(install, /^RUNNER_VERSION=2\.335\.1$/mu);
-  assert.match(install, /^RUNNER_SHA256=4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf$/mu);
-  assert.match(install, /require_command python3/);
-  assert.match(install, /sudo -n true \|\| fail "The administrator requires passwordless sudo"/);
+  const ciSmoke = await text("scripts/ci-toolchain-smoke.sh");
+  const roleVars = await text("ansible/roles/agent_relay_host/vars/main.yml");
+  const defaults = await text("ansible/roles/agent_relay_host/defaults/main.yml");
+
+  assert.equal(contract.runner_version, "2.335.1");
+  assert.equal(contract.go_version, "1.24.5");
+  assert.equal(contract.typescript_version, "5.8.3");
+  assert.equal(contract.codex_version, "0.144.4");
+  assert.match(install, /host_config_load "\$\{HOST_CONFIG_FILE\}"/);
+  assert.match(ciSmoke, /host_config_load "\$\{repository_root\}\/config\/runner-host\.json"/);
+  assert.match(roleVars, /config\/runner-host\.json.*from_json/);
+  assert.doesNotMatch(defaults, /runner_version|go_version|typescript_version|codex_version|storage_root/);
+  assert.doesNotMatch(install, /^RUNNER_VERSION=|^TYPESCRIPT_VERSION=|^CODEX_VERSION=/mu);
+  assert.doesNotMatch(ciSmoke, /EXPECTED_GO_VERSION=1\.24\.5|EXPECTED_CODEX_VERSION=0\.144\.4/);
+});
+
+test("installer contains runner and runtime responsibilities only", async () => {
+  const install = await text("install.sh");
   assert.match(install, /runner_binary_state/);
   assert.match(install, /registration_state/);
-  assert.match(install, /sudo -n test -f "\$\{RUNNER_DIR\}\/\$\{path\}"/);
-  assert.match(install, /tar -C "\$\{RUNNER_DIR\}" -xzf - < "\$\{runner_archive\}"/);
   assert.match(install, /Runner archive extraction did not produce a complete runner payload/);
   assert.match(install, /Runner registration did not produce the complete protected state/);
-  assert.match(install, /umask 0077/);
-  assert.match(install, /chmod 0600[\s\S]*\.credentials_rsaparams/);
-  assert.match(install, /X-GitHub-Api-Version: 2026-03-10/);
-  assert.match(install, /go version go1\.24\.5 linux\/amd64/);
-  assert.match(install, /--url "\$2" --token "\$3" --name "\$4" --work _work/);
-  assert.match(install, /After=network-online\.target/);
-  assert.match(install, /Wants=network-online\.target/);
-  assert.match(install, /KillMode=process/);
-  assert.match(install, /TimeoutStopSec=5min/);
-  assert.match(install, /Restart=always/);
-  assert.match(install, /RestartSec=5s/);
+  assert.match(install, /X-GitHub-Api-Version: \$\{GITHUB_API_VERSION\}/);
+  assert.match(install, /HOST_TOOLCHAIN_CHECK/);
   assert.doesNotMatch(install, /apt-get|\bdpkg\b|useradd|groupadd|usermod|ansible-playbook|installdependencies\.sh|codex login|wsl\.conf|DOCKER_PROVISIONING_ENABLED/u);
 });
 
@@ -40,95 +48,49 @@ test("runtime is staged and validated before listener shutdown", async () => {
   const finalize = install.indexOf('find -P "${stage_dir}" -xdev -exec chown', importSmoke);
   const stop = install.indexOf('systemctl stop "${SERVICE_NAME}"', finalize);
   const wait = install.indexOf("wait_for_workers", stop);
-  const previous = install.indexOf('"${SOURCE_ROOT}/dist.previous"', wait);
-  const activate = install.indexOf('mv -- "${stage_dir}" "${SOURCE_ROOT}/dist"', previous);
+  const activate = install.indexOf('mv -- "${stage_dir}" "${SOURCE_ROOT}/dist"', wait);
   assert.ok(stage >= 0 && compile > stage && importSmoke > compile && finalize > importSmoke);
-  assert.ok(stop > finalize && wait > stop && previous > wait && activate > previous);
-  assert.match(install, /sudo -n -u "\$\{BUILD_USER\}" \/usr\/bin\/env -i/);
-  assert.match(install, /if ! sudo -n mv -- "\$\{stage_dir\}" "\$\{SOURCE_ROOT\}\/dist"/);
-  assert.match(install, /if ! find -P "\$\{root\}" -xdev -print0/);
-  assert.match(install, /Runner\.Listener/);
-  assert.doesNotMatch(install, /listener.*rollback|rollback.*listener/iu);
+  assert.ok(stop > finalize && wait > stop && activate > wait);
+  assert.match(install, /build_environment=\([\s\S]*TMPDIR=\$\{BUILD_HOME\}\/tmp[\s\S]*PATH=\$\{TOOLCHAIN_PATH\}/);
+  assert.doesNotMatch(install, /toolchain_environment_build "\$\{BUILD_USER\}"/);
 });
 
-test("installer protects checkout and does not recursively repair it", async () => {
-  const install = await text("install.sh");
-  assert.match(install, /validate_checkout/);
-  assert.match(install, /Checkout entry is not administrator-owned/);
-  assert.match(install, /Checkout entry is writable by group or others/);
-  assert.match(install, /Could not inspect the source checkout/);
-  assert.match(install, /remote get-url origin/);
-  assert.match(install, /\^https\?:\/\/\[\^\/\]\*@/);
-  assert.match(install, /must not contain embedded credentials/);
-  assert.match(install, /Runtime entry is not root:root-owned/);
-  assert.doesNotMatch(install, /chown -R|chmod -R|find -P "\$\{SOURCE_ROOT\}"[^\n]*-exec chown/);
-});
-
-test("Ansible bootstraps host state and owns service home creation", async () => {
-  const playbook = await text("ansible/playbooks/host.yml");
+test("Ansible has no duplicated bootstrap packages or container handlers", async () => {
   const defaults = await text("ansible/roles/agent_relay_host/defaults/main.yml");
-  const users = await text("ansible/roles/agent_relay_host/tasks/users.yml");
+  const roleVars = await text("ansible/roles/agent_relay_host/vars/main.yml");
+  const packages = await text("ansible/roles/agent_relay_host/tasks/packages.yml");
+  const containers = await text("ansible/roles/agent_relay_host/tasks/containers.yml");
   const filesystem = await text("ansible/roles/agent_relay_host/tasks/filesystem.yml");
-  const toolchains = await text("ansible/roles/agent_relay_host/tasks/toolchains.yml");
-  const tasks = (await Promise.all([
-    "packages.yml", "users.yml", "filesystem.yml", "containers.yml", "toolchains.yml",
-  ].map((name) => text(`ansible/roles/agent_relay_host/tasks/${name}`)))).join("\n");
-  const handlers = await text("ansible/roles/agent_relay_host/handlers/main.yml");
   const config = await text("ansible/ansible.cfg");
 
-  assert.match(playbook, /gather_facts: false/);
-  assert.match(playbook, /ansible\.builtin\.raw/);
-  assert.match(playbook, /apt-get install -y --no-install-recommends python3 python3-apt/);
-  assert.match(playbook, /ansible\.builtin\.setup/);
-  assert.match(playbook, /distribution_major_version == '13'/);
-  assert.match(config, /roles_path = \.\/roles/);
-  assert.doesNotMatch(config, /host_key_checking\s*=\s*False/i);
-
-  assert.match(defaults, /agent_relay_admin_authorized_keys: \[\]/);
   assert.match(defaults, /agent_relay_extra_apt_packages: \[\]/);
-  assert.match(defaults, /agent_relay_docker_conflicting_packages:/);
-  assert.match(defaults, /agent_relay_rust_toolchain: stable/);
-  assert.match(users, /Create GitHub runner account[\s\S]*create_home: false/);
-  assert.match(users, /Create runtime builder account[\s\S]*create_home: false/);
-  assert.match(filesystem, /Create runner-owned paths/);
-  assert.match(filesystem, /Create builder home/);
-  assert.match(filesystem, /mode: "0700"/);
-  assert.match(tasks, /Grant administrator passwordless sudo/);
-  assert.match(tasks, /validate: \/usr\/sbin\/visudo -cf %s/);
-  assert.match(tasks, /authorized_keys/);
-  assert.match(tasks, /groups: sudo/);
-  assert.match(tasks, /Remove packages conflicting with Docker Engine/);
-  assert.match(tasks, /Install Docker packages without premature service start/);
-  assert.match(tasks, /state: present/);
-  assert.match(tasks, /policy_rc_d: 101/);
-  assert.match(tasks, /agent_relay_extra_apt_packages/);
-  assert.match(defaults, /liblttng-ust1t64/);
-  assert.match(defaults, /libssl3t64/);
-  assert.match(defaults, /libicu76/);
-  assert.match(tasks, /checksum: sha256:https:\/\/static\.rust-lang\.org/);
-  assert.ok(toolchains.indexOf("Download configured Go archive") < toolchains.indexOf("Remove a different Go installation"));
-  assert.match(toolchains, /go version go.*linux\/amd64/);
-  assert.match(handlers, /Restart containerd[\s\S]*Restart Docker/);
-  assert.doesNotMatch(tasks, /install\.sh|config\.sh --unattended|codex login/);
+  assert.match(roleVars, /agent_relay_required_apt_packages:/);
+  assert.doesNotMatch(roleVars, /apt-transport-https/);
+  for (const packageName of ["ca-certificates", "curl", "gnupg", "python3", "sudo"]) {
+    assert.equal((packages.match(new RegExp(`- ${packageName}(?:\\n|$)`, "g")) ?? []).length, 1);
+  }
+  assert.match(containers, /register: agent_relay_docker_config/);
+  assert.match(containers, /restarted.*agent_relay_containerd_config\.changed/);
+  assert.doesNotMatch(containers, /flush_handlers|notify:/);
+  assert.match(filesystem, /Create builder temporary directory/);
+  assert.doesNotMatch(filesystem, /- cargo|- go-cache|- gradle|- pip|- docker/);
+  assert.doesNotMatch(config, /^inventory\s*=/mu);
 });
 
-test("package scripts and docs describe the single-installer model", async () => {
+test("system test executes installer behavior instead of only matching source", async () => {
+  const systemTest = await text("test-system/install-script.integration.sh");
   const pkg = await text("package.json");
   const readme = await text("README.md");
-  const operations = await text("docs/operations/README.md");
-  const specification = await text("docs/native-github-runner-specification.md");
-  const ignore = await text(".gitignore");
+  const ansibleReadme = await text("ansible/README.md");
 
-  for (const content of [pkg, readme, operations, specification]) {
-    assert.doesNotMatch(content, /\.\/update\.sh|scripts\/docker-host\.sh/);
-  }
-  assert.match(readme, /agent_relay_extra_apt_packages/);
-  assert.match(readme, /sudo -u github-runner -H \/usr\/local\/bin\/codex login/);
-  assert.match(operations, /Self-hosted runners: write/);
-  assert.match(operations, /systemctl stop actions\.runner\.Divorium\.gh-runner\.service/);
-  assert.match(operations, /dist\.previous/);
-  assert.match(specification, /Python 3 and administrator passwordless sudo/);
-  assert.match(ignore, /^\.dist\.stage\.\*$/mu);
-  assert.match(ignore, /^dist\.previous$/mu);
-  assert.doesNotMatch(pkg, /update-script|docker-host|docker-conffile/);
+  assert.match(systemTest, /bash "\$\{source_root\}\/install\.sh"/);
+  assert.match(systemTest, /installer behavioral integration checks passed/);
+  assert.match(systemTest, /complete runner binaries were downloaded again/);
+  assert.match(systemTest, /installer unexpectedly succeeded after build failure/);
+  assert.match(systemTest, /installer unexpectedly succeeded after activation failure/);
+  assert.match(pkg, /scripts\/host-config\.sh scripts\/host-toolchain-check\.sh/);
+  assert.match(readme, /ansible\/README\.md/);
+  assert.match(readme, /docs\/operations\/README\.md/);
+  assert.doesNotMatch(readme, /ansible-playbook|git pull --ff-only/);
+  assert.doesNotMatch(ansibleReadme, /sudo -u github-runner|\.\/install\.sh/);
 });

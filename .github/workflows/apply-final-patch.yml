@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   apply:
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,7 +20,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Apply verified patch and clean staging files
+      - name: Apply locally verified patch and clean staging files
         shell: bash
         run: |
           set -euo pipefail

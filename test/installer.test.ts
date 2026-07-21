@@ -14,6 +14,9 @@ test("installer contains only runner and runtime responsibilities", async () => 
   assert.match(install, /sudo -n true \|\| fail "The administrator requires passwordless sudo"/);
   assert.match(install, /runner_binary_state/);
   assert.match(install, /registration_state/);
+  assert.match(install, /Runner archive extraction did not produce a complete runner payload/);
+  assert.match(install, /chmod 0600[\s\S]*\.credentials_rsaparams/);
+  assert.match(install, /Runner registration did not produce the complete protected state/);
   assert.match(install, /complete binaries plus absent registration|Complete binaries plus absent registration|binary_state/u);
   assert.match(install, /--url "\$2" --token "\$3" --name "\$4" --work _work/);
   assert.match(install, /After=network-online\.target/);
@@ -49,7 +52,9 @@ test("installer protects checkout and does not recursively repair it", async () 
   assert.match(install, /Checkout entry is not administrator-owned/);
   assert.match(install, /Checkout entry is writable by group or others/);
   assert.match(install, /remote get-url origin/);
+  assert.match(install, /\^https\?:\/\/\[\^\/\]\*@/);
   assert.match(install, /must not contain embedded credentials/);
+  assert.match(install, /root:root-owned/);
   assert.doesNotMatch(install, /chown -R|chmod -R|find -P "\$\{SOURCE_ROOT\}"[^\n]*-exec chown/);
 });
 
@@ -77,9 +82,14 @@ test("Ansible bootstraps host state and creates the administrator", async () => 
   assert.match(tasks, /validate: \/usr\/sbin\/visudo -cf %s/);
   assert.match(tasks, /authorized_keys/);
   assert.match(tasks, /groups: sudo/);
+  assert.match(tasks, /Create GitHub runner account[\s\S]*create_home: false/);
+  assert.match(tasks, /Create runtime builder account[\s\S]*create_home: false/);
+  assert.match(tasks, /Create runner-owned paths/);
+  assert.match(tasks, /Create builder home/);
   assert.match(tasks, /Install Docker packages without premature service start/);
   assert.match(tasks, /state: present/);
   assert.match(tasks, /policy_rc_d: 101/);
+  assert.match(tasks, /Remove packages conflicting with Docker Engine/);
   assert.match(tasks, /agent_relay_extra_apt_packages/);
   assert.match(defaults, /liblttng-ust1t64/);
   assert.match(defaults, /libssl3t64/);

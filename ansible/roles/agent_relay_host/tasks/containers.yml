@@ -1,5 +1,5 @@
 ---
-- name: Create container configuration directories
+- name: Create container and restart-policy configuration directories
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
@@ -9,6 +9,7 @@
   loop:
     - /etc/docker
     - /etc/containerd
+    - /etc/needrestart/conf.d
 
 - name: Configure Docker daemon
   ansible.builtin.template:

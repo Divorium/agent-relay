@@ -37,13 +37,13 @@
     group: root
     mode: "0644"
     checksum: "sha256:{{ agent_relay_go_sha256 }}"
-  when: "'go' ~ agent_relay_go_version not in agent_relay_go_current.stdout"
+  when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
 
 - name: Remove stale Go staging directory
   ansible.builtin.file:
     path: "/usr/local/.agent-relay-go-{{ agent_relay_go_version }}"
     state: absent
-  when: "'go' ~ agent_relay_go_version not in agent_relay_go_current.stdout"
+  when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
 
 - name: Create Go staging directory
   ansible.builtin.file:
@@ -52,7 +52,7 @@
     owner: root
     group: root
     mode: "0755"
-  when: "'go' ~ agent_relay_go_version not in agent_relay_go_current.stdout"
+  when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
 
 - name: Extract configured Go archive to staging
   ansible.builtin.unarchive:
@@ -61,7 +61,7 @@
     remote_src: true
     owner: root
     group: root
-  when: "'go' ~ agent_relay_go_version not in agent_relay_go_current.stdout"
+  when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
 
 - name: Validate staged Go toolchain
   ansible.builtin.command:
@@ -70,14 +70,14 @@
       - version
   register: agent_relay_go_staged
   changed_when: false
-  failed_when: "'go' ~ agent_relay_go_version not in agent_relay_go_staged.stdout"
-  when: "'go' ~ agent_relay_go_version not in agent_relay_go_current.stdout"
+  failed_when: (agent_relay_go_staged.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
+  when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
 
 - name: Remove a different Go installation
   ansible.builtin.file:
     path: /usr/local/go
     state: absent
-  when: "'go' ~ agent_relay_go_version not in agent_relay_go_current.stdout"
+  when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
 
 - name: Activate staged Go toolchain
   ansible.builtin.command:
@@ -86,13 +86,13 @@
       - "/usr/local/.agent-relay-go-{{ agent_relay_go_version }}/go"
       - /usr/local/go
     creates: /usr/local/go/bin/go
-  when: "'go' ~ agent_relay_go_version not in agent_relay_go_current.stdout"
+  when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
 
 - name: Remove empty Go staging directory
   ansible.builtin.file:
     path: "/usr/local/.agent-relay-go-{{ agent_relay_go_version }}"
     state: absent
-  when: "'go' ~ agent_relay_go_version not in agent_relay_go_current.stdout"
+  when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
 
 - name: Create Rust toolchain roots
   ansible.builtin.file:

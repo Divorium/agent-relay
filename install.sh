@@ -147,26 +147,39 @@ validate_runtime_tree() {
 
 validate_stage_tree() {
   local root=$1 entry
-  [[ -d "${root}" && ! -L "${root}" ]] || fail "Build stage is not a regular directory"
-  mountpoint -q "${root}" && fail "Build stage must not be a mount point"
+  sudo -n test -d "${root}" || fail "Build stage is not a regular directory"
+  sudo -n test ! -L "${root}" || fail "Build stage must not be a symlink"
+  sudo -n mountpoint -q "${root}" && fail "Build stage must not be a mount point"
   while IFS= read -r -d '' entry; do
-    mountpoint -q "${entry}" && fail "Build stage contains a mount point: ${entry}"
-    if [[ -L "${entry}" ]] || { [[ ! -d "${entry}" ]] && [[ ! -f "${entry}" ]]; }; then
-      fail "Build stage contains a symlink or special file: ${entry}"
+    sudo -n mountpoint -q "${entry}" && fail "Build stage contains a mount point: ${entry}"
+    if sudo -n test -L "${entry}"; then
+      fail "Build stage contains a symlink: ${entry}"
     fi
-  done < <(find -P "${root}" -xdev -print0)
-  require_regular_file "${root}/src/run-codex.js"
+    if ! sudo -n test -d "${entry}" && ! sudo -n test -f "${entry}"; then
+      fail "Build stage contains a special file: ${entry}"
+    fi
+  done < <(sudo -n find -P "${root}" -xdev -print0)
+  sudo -n test -f "${root}/src/run-codex.js" || fail "Compiled entrypoint is missing from the build stage"
+  sudo -n test ! -L "${root}/src/run-codex.js" || fail "Compiled entrypoint must not be a symlink"
 }
 
 runner_binary_state() {
   local -a required=(bin/Runner.Listener bin/Runner.Worker bin/runsvc.sh config.sh)
-  local path present=0 complete=1
+  local path present=0 complete=1 runner_uid mode
+  runner_uid="$(id -u "${RUNNER_USER}")"
   for path in "${required[@]}"; do
     if [[ -e "${RUNNER_DIR}/${path}" || -L "${RUNNER_DIR}/${path}" ]]; then
       present=1
     fi
     if [[ ! -f "${RUNNER_DIR}/${path}" || -L "${RUNNER_DIR}/${path}" || ! -x "${RUNNER_DIR}/${path}" ]]; then
       complete=0
+    elif [[ "$(stat_uid "${RUNNER_DIR}/${path}")" != "${runner_uid}" ]]; then
+      complete=0
+    else
+      mode="$(stat_mode "${RUNNER_DIR}/${path}")"
+      if (( (8#${mode} & 8#022) != 0 )); then
+        complete=0
+      fi
     fi
   done
   if (( complete == 1 )); then

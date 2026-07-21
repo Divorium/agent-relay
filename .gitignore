@@ -1,2 +1,4 @@
 dist/
+dist.previous
+.dist.stage.*
 node_modules/

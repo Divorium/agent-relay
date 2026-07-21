@@ -64,7 +64,7 @@ test("Ansible bootstraps host state and creates the administrator", async () => 
 
   assert.match(playbook, /gather_facts: false/);
   assert.match(playbook, /ansible\.builtin\.raw/);
-  assert.match(playbook, /apt-get install -y --no-install-recommends python3/);
+  assert.match(playbook, /apt-get install -y --no-install-recommends python3 python3-apt/);
   assert.match(playbook, /ansible\.builtin\.setup/);
   assert.match(playbook, /distribution_major_version == '13'/);
   assert.match(config, /roles_path = \.\/roles/);

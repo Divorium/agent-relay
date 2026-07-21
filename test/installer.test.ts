@@ -15,10 +15,13 @@ test("installer contains only runner and runtime responsibilities", async () => 
   assert.match(install, /runner_binary_state/);
   assert.match(install, /registration_state/);
   assert.match(install, /sudo -n test -f "\$\{RUNNER_DIR\}\/\$\{path\}"/);
-  assert.match(install, /Runner archive extraction did not produce a complete safe payload/);
-  assert.match(install, /Runner registration did not produce complete safe state/);
-  assert.match(install, /"\$\{path\}" == \.credentials \|\| "\$\{path\}" == \.credentials_rsaparams/);
-  assert.match(install, /"\$\{mode\}" == "600"/);
+  assert.match(install, /tar -C "\$\{RUNNER_DIR\}" -xzf - < "\$\{runner_archive\}"/);
+  assert.match(install, /Runner archive extraction did not produce a complete runner payload/);
+  assert.match(install, /Runner registration did not produce the complete protected state/);
+  assert.match(install, /umask 0077/);
+  assert.match(install, /chmod 0600[\s\S]*\.credentials_rsaparams/);
+  assert.match(install, /X-GitHub-Api-Version: 2026-03-10/);
+  assert.match(install, /go version go1\.24\.5 linux\/amd64/);
   assert.match(install, /--url "\$2" --token "\$3" --name "\$4" --work _work/);
   assert.match(install, /After=network-online\.target/);
   assert.match(install, /Wants=network-online\.target/);
@@ -55,8 +58,9 @@ test("installer protects checkout and does not recursively repair it", async () 
   assert.match(install, /Checkout entry is writable by group or others/);
   assert.match(install, /Could not inspect the source checkout/);
   assert.match(install, /remote get-url origin/);
+  assert.match(install, /\^https\?:\/\/\[\^\/\]\*@/);
   assert.match(install, /must not contain embedded credentials/);
-  assert.match(install, /Runtime entry is not root-owned/);
+  assert.match(install, /Runtime entry is not root:root-owned/);
   assert.doesNotMatch(install, /chown -R|chmod -R|find -P "\$\{SOURCE_ROOT\}"[^\n]*-exec chown/);
 });
 
@@ -103,6 +107,7 @@ test("Ansible bootstraps host state and owns service home creation", async () =>
   assert.match(defaults, /libicu76/);
   assert.match(tasks, /checksum: sha256:https:\/\/static\.rust-lang\.org/);
   assert.ok(toolchains.indexOf("Download configured Go archive") < toolchains.indexOf("Remove a different Go installation"));
+  assert.match(toolchains, /go version go.*linux\/amd64/);
   assert.match(handlers, /Restart containerd[\s\S]*Restart Docker/);
   assert.doesNotMatch(tasks, /install\.sh|config\.sh --unattended|codex login/);
 });
@@ -119,6 +124,7 @@ test("package scripts and docs describe the single-installer model", async () =>
   }
   assert.match(readme, /agent_relay_extra_apt_packages/);
   assert.match(readme, /sudo -u github-runner -H \/usr\/local\/bin\/codex login/);
+  assert.match(operations, /Self-hosted runners: write/);
   assert.match(operations, /systemctl stop actions\.runner\.Divorium\.gh-runner\.service/);
   assert.match(operations, /dist\.previous/);
   assert.match(specification, /Python 3 and administrator passwordless sudo/);

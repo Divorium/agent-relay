@@ -113,14 +113,20 @@ test("package transaction pins requested and resolver-selected packages", async 
   assert.doesNotMatch(adapter, /apt-cache depends --recurse/u);
 });
 
-test("discarded containerd package configuration is removed by exact path", async () => {
+test("all discarded containerd dpkg sidecars are removed before validation", async () => {
   const adapter = await source("scripts/docker-host-debian.sh");
-  assert.match(adapter, /local artifact="\$\{DOCKER_HOST_CONTAINERD_CONFIG\}\.dpkg-dist"/u);
+  assert.match(adapter, /for artifact in "\$\{DOCKER_HOST_CONTAINERD_CONFIG\}\.dpkg-"\*/u);
   assert.match(adapter, /\/usr\/bin\/rm -f -- "\$\{artifact\}"/u);
-  assert.match(adapter, /docker_debian_assert_clean_dpkg\(\) \{[\s\S]*?docker_debian_remove_containerd_dpkg_dist[\s\S]*?\n\}/u);
-  assert.match(adapter, /docker_debian_assert_recovery_dpkg_bounded\(\) \{[\s\S]*?docker_debian_remove_containerd_dpkg_dist[\s\S]*?\n\}/u);
-  assert.match(adapter, /docker_debian_install_exact_packages\(\) \{[\s\S]*?docker_debian_remove_containerd_dpkg_dist[\s\S]*?\n\}/u);
-  assert.match(adapter, /docker_debian_configure_pending_packages\(\) \{[\s\S]*?docker_debian_remove_containerd_dpkg_dist[\s\S]*?\n\}/u);
+  assert.match(adapter, /Unmanaged containerd configuration entry remains:/u);
+  for (const boundary of [
+    "docker_debian_assert_clean_dpkg",
+    "docker_debian_assert_recovery_dpkg_bounded",
+    "docker_debian_install_exact_packages",
+    "docker_debian_configure_pending_packages",
+  ]) {
+    assert.match(adapter, new RegExp(`${boundary}\\(\\) \\{[\\s\\S]*?docker_debian_remove_containerd_dpkg_artifacts[\\s\\S]*?\\n\\}`, "u"));
+  }
+  assert.doesNotMatch(adapter, /\.dpkg-dist"$/mu);
 });
 
 test("transaction recovery starts only after the package-state boundary passes", async () => {

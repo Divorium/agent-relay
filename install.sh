@@ -7,6 +7,7 @@ RUNNER_NAME=gh-runner
 RUNNER_VERSION=2.335.1
 RUNNER_SHA256=4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf
 TYPESCRIPT_VERSION=5.8.3
+CODEX_VERSION=0.144.4
 BASE_ROOT=/srv/github-runner
 STORAGE_ROOT=${BASE_ROOT}/storage
 EXPECTED_SOURCE_ROOT=${STORAGE_ROOT}/agent-relay
@@ -14,7 +15,8 @@ WORK_ROOT=${STORAGE_ROOT}/work
 RUNNER_DIR=${STORAGE_ROOT}/runner
 RUNNER_HOME=${STORAGE_ROOT}/home
 BUILD_HOME=${STORAGE_ROOT}/build-home
-DOCKER_ROOT=${STORAGE_ROOT}/docker/engine
+DOCKER_STORAGE_ROOT=${STORAGE_ROOT}/docker
+DOCKER_ROOT=${DOCKER_STORAGE_ROOT}/engine
 CONTAINERD_ROOT=${STORAGE_ROOT}/docker/containerd
 RUNNER_USER=github-runner
 BUILD_USER=agent-relay-builder
@@ -58,6 +60,7 @@ stat_uid() { stat -c '%u' -- "$1"; }
 stat_gid() { stat -c '%g' -- "$1"; }
 stat_mode() { stat -c '%a' -- "$1"; }
 sudo_stat_uid() { sudo -n stat -c '%u' -- "$1"; }
+sudo_stat_gid() { sudo -n stat -c '%g' -- "$1"; }
 sudo_stat_mode() { sudo -n stat -c '%a' -- "$1"; }
 
 require_regular_file() {
@@ -129,13 +132,13 @@ validate_checkout() {
 
   local remote_url
   remote_url="$(git -C "${SOURCE_ROOT}" remote get-url origin 2>/dev/null || true)"
-  if [[ -n "${remote_url}" && "${remote_url}" =~ ^https?://[^/@]+:[^/@]+@ ]]; then
+  if [[ -n "${remote_url}" && "${remote_url}" =~ ^https?://[^/]*@ ]]; then
     fail "The Git remote URL must not contain embedded credentials"
   fi
 }
 
 validate_runtime_tree() {
-  local root=$1 entry mode uid listing
+  local root=$1 entry mode uid gid listing
   [[ -d "${root}" && ! -L "${root}" ]] || fail "Runtime must be a regular directory: ${root}"
   mountpoint -q "${root}" && fail "Runtime must not be a mount point: ${root}"
   listing="$(new_scratch_file)"
@@ -145,7 +148,8 @@ validate_runtime_tree() {
   while IFS= read -r -d '' entry; do
     mountpoint -q "${entry}" && fail "Runtime contains a mount point: ${entry}"
     uid="$(stat_uid "${entry}")"
-    [[ "${uid}" == "0" ]] || fail "Runtime entry is not root-owned: ${entry}"
+    gid="$(stat_gid "${entry}")"
+    [[ "${uid}" == "0" && "${gid}" == "0" ]] || fail "Runtime entry is not root:root-owned: ${entry}"
     if [[ -d "${entry}" ]]; then
       mode="$(stat_mode "${entry}")"
       [[ "${mode}" == "755" ]] || fail "Runtime directory has an unsafe mode: ${entry}"
@@ -230,14 +234,8 @@ registration_state() {
       complete=0
       continue
     fi
-    if [[ "$(sudo_stat_uid "${RUNNER_DIR}/${path}")" != "${runner_uid}" ]]; then
-      complete=0
-      continue
-    fi
     mode="$(sudo_stat_mode "${RUNNER_DIR}/${path}")"
-    if [[ "${path}" == .credentials || "${path}" == .credentials_rsaparams ]]; then
-      [[ "${mode}" == "600" ]] || complete=0
-    elif (( (8#${mode} & 8#022) != 0 )); then
+    if [[ "$(sudo_stat_uid "${RUNNER_DIR}/${path}")" != "${runner_uid}" ]] || [[ "${mode}" != "600" ]]; then
       complete=0
     fi
   done
@@ -363,16 +361,28 @@ require_directory "${RUNNER_DIR}" "${runner_uid}" "${runner_gid}" 700
 require_directory "${WORK_ROOT}" "${runner_uid}" "${runner_gid}" 700
 require_directory "${RUNNER_HOME}" "${runner_uid}" "${runner_gid}" 700
 require_directory "${BUILD_HOME}" "${builder_uid}" "${builder_gid}" 700
-[[ -d "${DOCKER_ROOT}" && ! -L "${DOCKER_ROOT}" ]] || fail "Docker data root is missing"
-[[ -d "${CONTAINERD_ROOT}" && ! -L "${CONTAINERD_ROOT}" ]] || fail "containerd data root is missing"
+require_directory "${DOCKER_STORAGE_ROOT}" 0 0 711
+require_directory "${DOCKER_ROOT}" 0 0 711
+require_directory "${CONTAINERD_ROOT}" 0 0 711
+require_regular_file /etc/docker/daemon.json
+require_regular_file /etc/containerd/config.toml
+[[ "$(stat_uid /etc/docker/daemon.json)" == "0" && "$(stat_gid /etc/docker/daemon.json)" == "0" \
+  && "$(stat_mode /etc/docker/daemon.json)" == "644" ]] \
+  || fail "Docker daemon configuration has unexpected ownership or mode"
+[[ "$(stat_uid /etc/containerd/config.toml)" == "0" && "$(stat_gid /etc/containerd/config.toml)" == "0" \
+  && "$(stat_mode /etc/containerd/config.toml)" == "644" ]] \
+  || fail "containerd configuration has unexpected ownership or mode"
 
 [[ "$(node --version)" == v22.* ]] || fail "Node.js 22 is required"
 java -version 2>&1 | head -n1 | grep -Eq 'version "21\.|openjdk 21' || fail "Java 21 is required"
 [[ -x "${TOOLCHAIN_GO_ROOT}/bin/go" ]] || fail "Go is missing from ${TOOLCHAIN_GO_ROOT}"
 "${TOOLCHAIN_GO_ROOT}/bin/go" version | grep -q 'go1\.24\.5' || fail "Go 1.24.5 is required"
-[[ -x "${TOOLCHAIN_RUST_BIN}/rustc" && -x "${TOOLCHAIN_RUST_BIN}/cargo" ]] || fail "Rust stable toolchain is missing"
+[[ -x "${TOOLCHAIN_RUST_BIN}/rustc" && -x "${TOOLCHAIN_RUST_BIN}/cargo" && -x "${TOOLCHAIN_RUST_BIN}/rustup" ]] || fail "Rust stable toolchain is missing"
+RUSTUP_HOME="${TOOLCHAIN_RUSTUP_HOME}" CARGO_HOME="${TOOLCHAIN_RUST_CARGO_HOME}" \
+  "${TOOLCHAIN_RUST_BIN}/rustup" show active-toolchain | grep -Eq '^stable-' || fail "Rust stable toolchain is not active"
 [[ "$(/usr/local/bin/tsc --version)" == "Version ${TYPESCRIPT_VERSION}" ]] || fail "TypeScript ${TYPESCRIPT_VERSION} is required"
 [[ -x /usr/local/bin/codex ]] || fail "Codex CLI is missing"
+/usr/local/bin/codex --version | grep -Eq "(^|[[:space:]])${CODEX_VERSION//./\.}$" || fail "Codex CLI ${CODEX_VERSION} is required"
 git lfs version >/dev/null || fail "Git LFS is unavailable"
 sudo -n -u "${RUNNER_USER}" -H docker info >/dev/null || fail "${RUNNER_USER} cannot access Docker"
 sudo -n -u "${RUNNER_USER}" -H docker compose version >/dev/null || fail "Docker Compose plugin is unavailable"
@@ -397,8 +407,8 @@ case "${binary_state}" in
       "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
       -o "${runner_archive}"
     printf '%s  %s\n' "${RUNNER_SHA256}" "${runner_archive}" | sha256sum -c -
-    sudo -n -u "${RUNNER_USER}" tar -C "${RUNNER_DIR}" -xzf "${runner_archive}"
-    [[ "$(runner_binary_state)" == complete ]] || fail "Runner archive extraction did not produce a complete safe payload"
+    sudo -n -u "${RUNNER_USER}" tar -C "${RUNNER_DIR}" -xzf - < "${runner_archive}"
+    [[ "$(runner_binary_state)" == "complete" ]] || fail "Runner archive extraction did not produce a complete runner payload"
     ;;
   complete) ;;
   *) fail "Runner binaries are partial or conflicting; rebuild the host or remove the state deliberately" ;;
@@ -441,7 +451,11 @@ case "${registration}" in
       ./config.sh --unattended --replace --url "$2" --token "$3" --name "$4" --work _work
     ' -- "${RUNNER_DIR}" "${ORGANIZATION_URL}" "${registration_token}" "${RUNNER_NAME}"
     unset registration_token
-    [[ "$(registration_state)" == complete ]] || fail "Runner registration did not produce complete safe state"
+    sudo -n -u "${RUNNER_USER}" chmod 0600 \
+      "${RUNNER_DIR}/.runner" \
+      "${RUNNER_DIR}/.credentials" \
+      "${RUNNER_DIR}/.credentials_rsaparams"
+    [[ "$(registration_state)" == "complete" ]] || fail "Runner registration did not produce the complete protected state"
     ;;
   complete) ;;
   *) fail "Runner registration is partial or conflicting; rebuild the host or remove the state deliberately" ;;

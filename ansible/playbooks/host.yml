@@ -22,10 +22,9 @@
       ansible.builtin.setup:
 
     - name: Read PID 1 command
-      ansible.builtin.command:
-        argv: ["/usr/bin/ps", "-p", "1", "-o", "comm="]
+      ansible.builtin.slurp:
+        src: /proc/1/comm
       register: agent_relay_pid1
-      changed_when: false
 
     - name: Validate the supported host
       ansible.builtin.assert:
@@ -34,7 +33,7 @@
           - ansible_facts.distribution_major_version == '13'
           - ansible_facts.distribution_release == 'trixie'
           - ansible_facts.architecture == 'x86_64'
-          - agent_relay_pid1.stdout | trim == 'systemd'
+          - agent_relay_pid1.content | b64decode | trim == 'systemd'
         fail_msg: Agent Relay supports only Debian 13 (trixie) x86-64 with systemd as PID 1.
 
   roles:

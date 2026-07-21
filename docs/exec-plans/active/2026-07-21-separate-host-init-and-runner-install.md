@@ -10,172 +10,169 @@ Codex may implement repository scripts, Ansible files, tests, and documentation.
 
 Prepare a fresh **Debian 13 (Trixie) x86-64 systemd host** for one Agent Relay GitHub Actions runner.
 
-Responsibilities are split into two parts:
+Responsibilities:
 
-1. **Ansible initializes the host.** It installs packages and pinned toolchains, creates system users and secure directories, and configures Docker and other operating-system state required by the runner.
-2. **`install.sh` installs and refreshes the runner.** It installs or registers the official GitHub runner when absent, configures repository-specific files and the systemd service, builds the Agent Relay runtime, activates it, and starts or restarts the runner.
+1. **Ansible initializes the host.** It installs packages and toolchains, creates users and secure directories, and configures Docker and operating-system state.
+2. **`install.sh` installs and refreshes the runner.** It installs/registers the official runner when needed, configures repository-specific files and systemd, builds the Agent Relay runtime, activates it, and starts/restarts the runner.
 
-The host may be rebuilt from scratch. This task does not preserve or migrate the current installation. There is no migration script, compatibility mode, WSL support, host schema, general repair framework, or separate updater.
+The host may be rebuilt. There is no migration, old-layout compatibility, WSL support, host schema, general repair framework, or separate updater.
 
-`install.sh` does not install Ansible, invoke `ansible-playbook`, inspect an Ansible marker, install operating-system packages, invoke the runner dependency installer, or perform Codex authentication.
+`install.sh` does not install Ansible, invoke a playbook, inspect an Ansible marker, install packages, invoke the runner dependency helper, or authenticate Codex.
 
-The target host must initially provide only:
+Minimal target prerequisites before Ansible:
 
-- network access and SSH;
-- Python 3 required by Ansible;
+- network and SSH;
+- Python 3;
 - `sudo`;
 - one existing sudo-capable administrator account.
 
-The expected flow is:
+Operator flow:
 
-1. On an operator-controlled machine with this repository checked out and Ansible already available, run the playbook against the fresh target:
+1. From an operator-controlled checkout with Ansible already installed:
 
        ansible-playbook -i ansible/inventory/example.ini ansible/playbooks/host.yml
 
-2. Clone this repository on the prepared target into `/srv/github-runner/storage/agent-relay` as the configured administrator.
-3. Authenticate Codex manually as `github-runner`. This is an operator action and is not checked or performed by `install.sh`.
+2. Clone this repository on the prepared target as the configured administrator into `/srv/github-runner/storage/agent-relay`.
+3. Authenticate Codex manually as `github-runner`; this is outside `install.sh` and installation acceptance.
 4. Run:
 
        cd /srv/github-runner/storage/agent-relay
        ./install.sh
 
-For every later repository release:
+Later releases:
 
     cd /srv/github-runner/storage/agent-relay
     git pull --ff-only
     ./install.sh
 
-Repeated `install.sh` runs are supported. One-time steps such as runner archive extraction and GitHub registration are skipped when already complete. Runtime build and service activation run safely on every invocation.
+Repeated installer runs are supported. Binary extraction and GitHub registration are skipped independently when already complete. Runtime build and activation execute safely on every run.
 
-After implementation, operators can add ordinary host packages through Ansible variables without modifying `install.sh`.
+Operators can add normal host packages through Ansible variables without editing `install.sh`.
 
 ## Progress
 
-Keep this section append-only. Checked implementation items require a repository location and passing evidence. Ansible execution itself is outside automated acceptance.
+Keep append-only. Checked implementation items require code and passing evidence. Ansible execution itself is outside automated acceptance.
 
-- [x] (2026-07-21) Reviewed current `install.sh`, `update.sh`, Docker provisioning scripts, package scripts, tests, documentation, and workflows on baseline `e9ec636e5abf383f8831fc126b99f04e2e005a3c`.
-- [x] (2026-07-21) Confirmed current `install.sh` mixes host initialization with runner installation.
-- [x] (2026-07-21) Confirmed current `update.sh` separately owns runtime build and service restart while its Docker path is disabled.
-- [x] (2026-07-21) Confirmed the new design may assume a fresh host and does not need migration or compatibility with the existing installation.
-- [x] (2026-07-21) Confirmed `install.sh` must neither install nor execute Ansible.
-- [x] (2026-07-21) Confirmed Codex login is a manual operator action and must be removed from `install.sh` and its tests.
-- [x] (2026-07-21) Added fresh-host bootstrap order, package-extension variables, the runner dependency boundary, adjacent runtime staging, and narrow activation recovery.
-- [x] (2026-07-21) Narrowed the target to Debian 13, specified the control/target prerequisites, and defined declarative repository, toolchain, Docker, runner-service, and native runner dependency contracts.
-- [ ] Rebase and revalidate the baseline before implementation.
-- [ ] Add the compact `ansible/` host-initialization structure.
-- [ ] Move all host initialization out of `install.sh` and into Ansible.
-- [ ] Merge the useful runtime lifecycle into reusable `install.sh`.
-- [ ] Delete `update.sh`, dormant Docker provisioning scripts, obsolete tests, and stale documentation references.
-- [ ] Update package scripts and focused tests for the new contract.
-- [ ] Run all non-Ansible repository checks and independently review the final diff.
-- [ ] Update `Outcomes & Retrospective` and move this same plan to `completed` only after every item is checked.
+- [x] (2026-07-21) Reviewed installer, updater, Docker scripts, package commands, tests, documentation, and workflows at baseline `e9ec636e5abf383f8831fc126b99f04e2e005a3c`.
+- [x] (2026-07-21) Confirmed the current installer mixes host initialization, runner installation, and Codex login.
+- [x] (2026-07-21) Confirmed the updater owns runtime build/service restart and its Docker path is disabled.
+- [x] (2026-07-21) Confirmed a fresh-host target with no migration or WSL compatibility.
+- [x] (2026-07-21) Removed Ansible installation/execution and Codex authentication from installer responsibility.
+- [x] (2026-07-21) Added control-machine bootstrap order, package variables, runner dependency boundary, adjacent runtime staging, and local activation recovery.
+- [x] (2026-07-21) Narrowed support to Debian 13 and defined declarative repositories, verified toolchains, Docker roots, native runner dependencies, and service semantics.
+- [x] (2026-07-21) Separated runner binary and registration states, removed duplicate exact-version validation from installer, and added safe lock-file opening and bounded listener readiness.
+- [ ] Rebase and revalidate before implementation.
+- [ ] Add the compact `ansible/` structure.
+- [ ] Move host initialization out of `install.sh` into Ansible.
+- [ ] Merge runtime lifecycle into reusable `install.sh`.
+- [ ] Delete updater, dormant Docker provisioner, obsolete tests, and stale active references.
+- [ ] Update package scripts and focused tests.
+- [ ] Run all non-Ansible checks and independently review the final diff.
+- [ ] Complete retrospective and move this same plan to `completed` only after all items pass.
 
 ## Surprises & Discoveries
 
-- Observation: the current installer provisions much more than the runner.
-  Evidence: `install.sh` installs operating-system packages and toolchains, creates users and directory roots, configures WSL, installs system Git LFS state, downloads the runner, registers it, and performs Codex login.
+- Observation: `install.sh` currently provisions the host.
+  Evidence: it installs packages/toolchains, creates users/directories, configures WSL, installs Git LFS, downloads/registers the runner, and performs Codex login.
 
-- Observation: the active part of `update.sh` is small enough to merge into `install.sh`.
-  Evidence: with Docker disabled, it stops the service, waits for a `Runner.Worker`, rebuilds `dist`, applies ownership and modes, and restores the service.
+- Observation: active updater behavior is small enough to merge.
+  Evidence: with Docker disabled, it waits for workers, builds `dist`, applies metadata, and restores the service.
 
-- Observation: the current updater stops the runner before compiling.
-  Evidence: a build failure therefore causes avoidable runner downtime. The new installer builds and validates a staged runtime before stopping the service.
+- Observation: current compilation occurs after shutdown.
+  Evidence: build failure causes avoidable downtime; staging must finish before listener stop.
 
-- Observation: the dormant Docker implementation is no longer needed.
-  Evidence: production exits before it, while three large scripts and dedicated regression tests remain solely for unreachable code.
+- Observation: the Docker shell provisioner is unreachable production code.
+  Evidence: production returns before it while three scripts and dedicated tests remain.
 
-- Observation: a fresh target cannot run a repository playbook before that repository is available somewhere.
-  Evidence: Ansible is run from an operator-controlled checkout; the target checkout is created only after host initialization.
+- Observation: the playbook must run from a control checkout.
+  Evidence: a fresh target cannot run repository content before checkout; target checkout follows host initialization.
 
-- Observation: the official runner dependency helper performs host package installation.
-  Evidence: retaining `bin/installdependencies.sh` would violate the Ansible package boundary. The pinned archive must be inspected during implementation and its Debian 13 native dependencies encoded in the role.
+- Observation: `bin/installdependencies.sh` violates the responsibility split.
+  Evidence: it installs host packages. Dependencies from the pinned runner archive must be encoded in Ansible.
 
-- Observation: staging under a generic build directory does not prove atomic activation.
-  Evidence: the validated runtime stage must be adjacent to `dist`, so stage, active runtime, and `dist.previous` are on the same filesystem.
+- Observation: runner binary state and runner registration state are independent.
+  Evidence: an interrupted first run may leave complete binaries but no `.runner`; the next run must register without redownloading.
 
-- Observation: generic package extensibility should not become arbitrary command execution.
-  Evidence: an extra APT package list is sufficient for normal packages. Packages requiring another repository or custom configuration need explicit reviewed Ansible tasks.
+- Observation: opening an unverified lock path can follow a symlink.
+  Evidence: the installer must validate path metadata before open, compare device/inode after open, then hold `flock` on that exact file description.
+
+- Observation: exact Ansible tool versions should not be duplicated as a second complete version manifest in Bash.
+  Evidence: Ansible owns installation/pinning; installer should verify required commands and compatibility needed by runtime, not independently reconcile every package version.
 
 ## Decision Log
 
-- Decision: Ansible is the repository-supported host initialization method.
-  Rationale: users, packages, secure directories, toolchains, Docker, and daemon configuration are operating-system state.
+- Decision: Ansible is the supported host initializer.
+  Rationale: packages, users, directories, toolchains, Docker, and daemons are host state.
   Date/Author: 2026-07-21 / operator requirement.
 
-- Decision: `install.sh` does not install, execute, or verify Ansible.
-  Rationale: Ansible is run separately by the human operator before runner installation.
+- Decision: `install.sh` neither installs nor executes Ansible.
+  Rationale: Ansible is an independent operator step.
   Date/Author: 2026-07-21 / operator correction.
 
-- Decision: Codex authentication is entirely manual.
-  Rationale: runner installation must neither prompt for it nor fail when authentication is absent.
+- Decision: Codex authentication is manual only.
+  Rationale: installer must neither prompt, validate, nor fail due to absent auth.
   Date/Author: 2026-07-21 / operator requirement.
 
-- Decision: support only fresh Debian 13 x86-64 hosts with systemd.
-  Rationale: the environment may be rebuilt, so WSL, multi-distribution compatibility, and migration logic add no value.
-  Date/Author: 2026-07-21 / operator clarification and review.
+- Decision: support only fresh Debian 13 x86-64 systemd hosts.
+  Rationale: rebuild is allowed; WSL, migration, and distribution abstraction are unnecessary.
+  Date/Author: 2026-07-21 / operator clarification.
 
 - Decision: keep `install.sh` as the only repository operational script and delete `update.sh`.
-  Rationale: the same command performs initial runner setup and every later refresh after `git pull`.
+  Rationale: one command handles initial setup and refresh after `git pull`.
   Date/Author: 2026-07-21 / operator requirement.
 
-- Decision: Ansible creates `github-runner`, `agent-relay-builder`, the administrator-owned source directory, secure directory roots, packages, pinned toolchains, runner native dependencies, and Docker state.
-  Rationale: these are host prerequisites, not GitHub runner registration operations.
+- Decision: Ansible creates all host prerequisites, including native runner libraries.
+  Rationale: the installer must not call package-installing helpers.
   Date/Author: 2026-07-21 / responsibility split.
 
-- Decision: `install.sh` owns runner archive extraction, registration, `_work`, source-checkout protection, `runsvc.sh`, systemd unit installation, runtime build, runtime replacement, and service activation.
-  Rationale: these operations are specific to this repository and runner instance.
+- Decision: installer owns runner extraction, registration, `_work`, `runsvc.sh`, source protection, systemd unit, runtime build/swap, and service activation.
+  Rationale: these are runner/repository operations.
   Date/Author: 2026-07-21 / responsibility split.
 
-- Decision: `install.sh` must not execute `bin/installdependencies.sh`.
-  Rationale: that helper installs packages and would bypass Ansible.
-  Date/Author: 2026-07-21 / adversarial review.
-
-- Decision: retain the existing service semantics `KillMode=process`, `TimeoutStopSec=5min`, and `Restart=always`.
-  Rationale: stopping the listener must not terminate a running `Runner.Worker`, and the service should recover from listener failure.
+- Decision: preserve `KillMode=process`, `TimeoutStopSec=5min`, `Restart=always`, and `RestartSec=5s`.
+  Rationale: listener stop must not kill a running worker.
   Date/Author: 2026-07-21 / current contract review.
 
-- Decision: build the runtime before stopping the runner.
-  Rationale: compilation failure must not interrupt the currently working service.
-  Date/Author: 2026-07-21 / review correction.
-
-- Decision: always activate the new runtime and restart the service.
-  Rationale: full runtime comparison and conditional restart add unnecessary complexity.
+- Decision: build before stopping and always activate/restart after a valid build.
+  Rationale: avoid build downtime and unnecessary full-tree comparison logic.
   Date/Author: 2026-07-21 / simplification.
 
 - Decision: remove `/etc/agent-relay/administrator`.
-  Rationale: it authorized a separate updater. The installer validates its non-root caller, source ownership, lock ownership, and sudo authority directly.
+  Rationale: source owner, secure lock, non-root execution, and sudo validation replace the updater trust file.
   Date/Author: 2026-07-21 / simplification.
 
-- Decision: support ordinary additional packages through `agent_relay_extra_apt_packages`.
-  Rationale: operators need an extension point without installer changes. New repositories and special configuration remain explicit role code.
-  Date/Author: 2026-07-21 / operator goal and review.
+- Decision: support extra normal APT packages through `agent_relay_extra_apt_packages`.
+  Rationale: package extensibility should not require installer changes or expose arbitrary command/repository injection.
+  Date/Author: 2026-07-21 / operator goal.
 
-- Decision: use declarative APT repository/key configuration and verified archives instead of setup scripts or `curl | shell`.
-  Rationale: fresh-host provisioning should be reproducible, reviewable, and idempotent.
+- Decision: use declarative signed APT repositories and checksum-verified downloads; never repository setup scripts or unverified pipe-to-shell installation.
+  Rationale: provisioning should be reviewable and repeatable.
   Date/Author: 2026-07-21 / best-practice review.
 
+- Decision: installer validates functional compatibility, not every exact Ansible package version.
+  Rationale: avoid two drifting version manifests. Ansible remains authoritative for pinned host state.
+  Date/Author: 2026-07-21 / adversarial review.
+
 - Decision: do not execute or lint Ansible in CI for this task.
-  Rationale: the operator explicitly excluded Ansible testing.
+  Rationale: Ansible testing was explicitly excluded.
   Date/Author: 2026-07-21 / operator requirement.
 
 ## Outcomes & Retrospective
 
-The plan is active and plan-only. PR #47 was closed without merge because it addressed a different two-runner deployment design. No production behavior has changed yet.
+Active plan only. PR #47 was closed without merge. No production behavior has changed.
 
-Update this section after implementation with the final file set, responsibility boundary, test results, and any prerequisite assumptions discovered while simplifying the installer.
+After implementation, record final responsibilities, removed files, package extension evidence, runner installation evidence, test results, and residual assumptions.
 
 ## Context and Orientation
 
-Current relevant files:
+Current state:
 
-- `install.sh` performs host initialization, runner installation, and Codex login.
-- `update.sh` builds runtime and restarts the service.
-- `scripts/docker-host.sh`, `scripts/docker-host-debian.sh`, and `scripts/docker-host-debian-core.sh` implement unreachable Docker provisioning.
-- installer, updater, and Docker system tests encode the current two-script design.
-- `test/installer.test.ts` and `test/update-regression.test.ts` encode the old responsibility boundary.
-- current documentation describes `install.sh`, `update.sh`, WSL handling, and automated Codex login.
+- `install.sh` performs host provisioning, runner setup, and Codex login;
+- `update.sh` builds runtime and restarts the service;
+- three Docker shell scripts and dedicated tests preserve disabled behavior;
+- current tests/docs encode WSL, two scripts, administrator trust file, and automated login.
 
-Fresh-host layout:
+Fresh target paths:
 
     /srv/github-runner/storage/agent-relay
     /srv/github-runner/storage/work
@@ -187,11 +184,11 @@ Fresh-host layout:
     /srv/github-runner/storage/docker/containerd
     /var/lib/agent-relay/install.lock
 
-Identities and service:
+Identities/service:
 
-    administrator: existing sudo-capable account selected by Ansible variable
-    runner user: github-runner
-    builder user: agent-relay-builder
+    administrator: existing sudo-capable account selected by variable
+    runner: github-runner
+    builder: agent-relay-builder
     runner name: gh-runner
     service: actions.runner.Divorium.gh-runner.service
 
@@ -199,7 +196,7 @@ These are fresh-host targets, not migration contracts.
 
 ## Plan of Work
 
-### Milestone 1: Add a compact Ansible host role
+### Milestone 1: Add the Ansible host role
 
 Add:
 
@@ -214,11 +211,16 @@ Add:
         handlers/main.yml
         templates/
 
-Split `tasks/main.yml` only when implementation size makes separate files useful.
+Split tasks only when size warrants it.
 
-The role is run from an operator-controlled checkout. The target must already have SSH, Python 3, `sudo`, and one sudo-capable login. The role requires `agent_relay_admin_user` to name that existing account; it does not create or modify it.
+Control/target contract:
 
-Defaults must include at least:
+- playbook runs from an operator checkout;
+- target already has SSH, Python 3, `sudo`, and an existing sudo-capable account;
+- `agent_relay_admin_user` is required, asserted nonempty, and must identify that existing account;
+- playbook uses privilege escalation and does not create/modify the administrator.
+
+Defaults include:
 
     agent_relay_admin_user: ""
     agent_relay_extra_apt_packages: []
@@ -228,169 +230,179 @@ Defaults must include at least:
     agent_relay_typescript_version: "5.8.3"
     agent_relay_codex_version: "0.144.4"
 
-Keep required packages separate from `agent_relay_extra_apt_packages`. Install their unique union. Document that ordinary packages available from configured repositories are added through the extra list. Do not design a generic arbitrary-repository or arbitrary-shell-command interface.
+Required package lists remain internal to the role. Install the unique union with `agent_relay_extra_apt_packages`. Packages needing another repository or special configuration require explicit reviewed tasks.
 
-The playbook must fail early unless the target is Debian 13 (`trixie`) x86-64 with systemd as PID 1.
+Fail early unless target is Debian 13 `trixie`, x86-64, with systemd PID 1.
 
-Use declarative Ansible state:
+Provisioning practices:
 
-- repository signing keys are stored in root-owned keyring files under `/etc/apt/keyrings`;
-- repository definitions use explicit `signed-by` references;
-- do not download and execute NodeSource, Docker, Java, or other repository setup scripts;
-- downloaded archives and bootstrap binaries use pinned versions and SHA-256 checksums;
-- Go installation replaces the managed version only when the configured version differs;
-- Rust uses a pinned/verified bootstrap binary and configured toolchain, not an unverified pipe to shell;
-- TypeScript and Codex CLI are installed at exact configured npm versions;
-- commands are used only when no suitable module exists and include explicit idempotence checks.
+- keys in root-owned `/etc/apt/keyrings`;
+- explicit `signed-by` repository definitions;
+- no NodeSource/Docker/Java setup scripts;
+- pinned/checksummed archives/bootstrap binaries;
+- Go replaced only when configured version differs;
+- Rust installed with a verified bootstrap and explicitly selected toolchain;
+- TypeScript/Codex CLI installed at exact configured npm versions;
+- commands only when modules are insufficient, with explicit idempotence controls.
 
-During implementation, inspect the pinned GitHub Actions Runner `2.335.1` archive and its Debian dependency helper. Encode the required Debian 13 native libraries in Ansible. Do not invoke that helper in production.
+During implementation, inspect runner archive `2.335.1` and its dependency helper, record the required Debian 13 native packages in the role, and never invoke the helper in production.
 
 The role declares:
 
-- required APT repositories, keys, base packages, build tools, native runner libraries, and `agent_relay_extra_apt_packages`;
-- Node.js 22, Java 21, Go `1.24.5`, Rust, TypeScript `5.8.3`, Codex CLI `0.144.4`, and Git LFS system state;
-- locked `github-runner` with home `/srv/github-runner/storage/home` and shell `/bin/bash`;
-- locked `agent-relay-builder` with home `/srv/github-runner/storage/build-home` and shell `/usr/sbin/nologin`;
-- neither service account belongs to `sudo` or has passwordless sudo;
-- `/srv/github-runner/storage/agent-relay` as an empty or existing directory owned by `agent_relay_admin_user` and its primary group;
-- runner, work, home, build, and build-home directories with explicit owners and restrictive modes;
-- `/var/lib/agent-relay/install.lock` as a regular non-symlink file owned by the administrator with mode `0600`;
-- Docker Engine, Compose plugin, and containerd;
-- Docker data root `/srv/github-runner/storage/docker/engine`;
-- containerd root `/srv/github-runner/storage/docker/containerd`;
-- `/etc/docker/daemon.json` and `/etc/containerd/config.toml` reflecting those roots;
-- `github-runner` membership in the Docker group, accepting that Docker socket access is host-root-equivalent;
-- enabled and active Docker, containerd, and Docker socket services;
-- needrestart policy that does not unexpectedly restart the GitHub runner during package operations.
+- repositories, base/build/native-runner packages, and extra packages;
+- Node 22, Java 21, Go `1.24.5`, Rust toolchain, TypeScript `5.8.3`, Codex CLI `0.144.4`, Git LFS system state;
+- locked `github-runner` (`/srv/github-runner/storage/home`, `/bin/bash`) and `agent-relay-builder` (`/srv/github-runner/storage/build-home`, `/usr/sbin/nologin`);
+- no sudo group/passwordless sudo for service users;
+- source directory owned by administrator and primary group;
+- runner/work/home/build/build-home paths with explicit owners/modes;
+- secure administrator-owned mode `0600` lock file;
+- Docker Engine, Compose, containerd;
+- Docker root `/srv/github-runner/storage/docker/engine` and containerd root `/srv/github-runner/storage/docker/containerd` in managed configs;
+- Docker group membership for runner, explicitly documenting root-equivalent trust;
+- active/enabled Docker/containerd/socket services;
+- needrestart policy that will not unexpectedly restart Actions runner services.
 
-Do not include WSL support or preserve shell-provisioner recovery machinery. Use ordinary package, user, group, file, template, and service tasks.
+No WSL or legacy shell-provisioner recovery machinery.
 
-The playbook must not clone/update the repository, install/extract/register the GitHub runner, request GitHub credentials, perform/validate Codex login, build `dist`, or invoke `install.sh`.
+The playbook does not clone/update repository, install/register runner, request GitHub credentials, perform/check Codex login, build runtime, or invoke installer.
 
-`ansible/README.md` documents the control machine, target prerequisites, inventory, variables, extra package example, manual playbook command, target checkout, manual Codex login, and subsequent `./install.sh`. No credentials are committed.
+`ansible/README.md` documents prerequisites, inventory, variables, extra package example, playbook command, target clone, manual Codex login, installer command, and credential exclusion.
 
-### Milestone 2: Reduce `install.sh` to runner and repository responsibilities
+### Milestone 2: Reduce `install.sh`
 
-Remove all package/repository/toolchain installation, `installdependencies.sh`, user/group creation, protected root creation, WSL handling, Docker provisioning, Git LFS system installation, Codex login/status, and administrator trust-file logic.
+Remove package/repository/toolchain installation, dependency helper, user/group creation, root directory creation, WSL, Docker provisioning, Git LFS system installation, Codex auth, and administrator trust-file behavior.
 
-At startup, acquire the installer lock and then validate before any other mutation:
+Lock acquisition before other mutation:
 
-- non-root execution by the source-directory owner and successful `sudo -v`;
-- Debian 13 x86-64 with systemd PID 1;
-- exact source path and canonical non-symlink parents;
-- `/var/lib/agent-relay/install.lock` owned by the caller, regular, non-symlink, mode `0600`;
-- required users, homes, shells, locked passwords, and lack of sudo;
-- required directory ownership/modes and absence of unsafe symlinks;
-- required commands and exact configured toolchain versions, including Codex binary availability but not authentication;
-- Docker CLI, Compose plugin, daemon, socket access as `github-runner`, and exact Docker/containerd storage roots;
-- trusted repository entrypoints after updater/Docker-script removal.
+1. verify `/var/lib/agent-relay/install.lock` with `lstat`/`stat`: regular, non-symlink, caller-owned, mode `0600`;
+2. capture path device/inode;
+3. open the file without truncation;
+4. compare opened descriptor device/inode through `/proc/self/fd/<fd>` with captured values;
+5. acquire nonblocking `flock` and keep descriptor open for the full run.
 
-Missing/invalid prerequisites fail before runner extraction, registration, token prompting, service mutation, or runtime replacement. The installer does not repair host initialization.
+Then validate:
 
-### Milestone 3: Keep runner installation idempotent
+- non-root source owner and successful `sudo -v`;
+- Debian 13 x86-64/systemd;
+- exact canonical source path and safe parents;
+- required user homes/shells/locked passwords/no sudo;
+- path ownership/modes/no unsafe symlinks;
+- required commands and functional versions needed by repository runtime (for example Node 22 and Java 21), while Ansible remains authoritative for exact package pins;
+- Codex binary presence only, not auth;
+- Docker CLI/Compose/daemon/socket access as runner and exact configured storage roots;
+- trusted repository entrypoints after file removal.
 
-`install.sh` must:
+Failure occurs before runner extraction, registration, token prompt, service mutation, or runtime swap. Installer does not repair host state.
 
-- accept no arguments and refuse root;
-- acquire a nonblocking `flock` on `/var/lib/agent-relay/install.lock` for the complete run;
-- distinguish only absent, complete, and partial/conflicting runner states;
-- download and SHA-256 verify runner `2.335.1` only when binaries are absent;
-- extract as `github-runner` without `installdependencies.sh`;
-- reject partial/conflicting state without deletion;
-- create `_work -> ../work` only when absent and validate it when present;
-- prompt for the organization PAT and run registration only when `.runner` is absent;
-- keep PAT and registration token memory-only, tracing-disabled, and unset immediately;
-- leave default GitHub runner self-update enabled; the pinned archive is only the bootstrap version;
-- copy/update top-level `runsvc.sh` from the installed runner's `bin/runsvc.sh` with mode `0755`;
-- render and atomically install the root-owned systemd unit with `User=github-runner`, `WorkingDirectory=/srv/github-runner/storage/runner`, `ExecStart=/srv/github-runner/storage/runner/runsvc.sh`, `KillMode=process`, `TimeoutStopSec=5min`, `Restart=always`, and `RestartSec=5s`;
-- run `systemctl daemon-reload` after installing the unit;
-- protect the source checkout without following symlinks and without referencing deleted files;
-- perform no Codex authentication or auth validation.
+### Milestone 3: Idempotent runner installation
 
-A second run with a complete registered runner does not redownload, prompt, register, or alter `.runner`. Unexpected state fails with an instruction to rebuild or deliberately remove the conflicting runner directory.
+Treat binaries and registration separately.
 
-### Milestone 4: Build and activate runtime in the same installer
+Binary states:
 
-After preflight and runner setup, on every invocation:
+- absent: no runner payload markers; download/verify/extract;
+- complete: required runner files, including `bin/Runner.Listener`, `bin/runsvc.sh`, and `config.sh`, are regular non-symlink executable files; reuse;
+- partial/conflicting: any payload presence without a complete set; fail without deletion.
 
-1. fail if a pre-existing `dist.previous` exists; it indicates an interrupted activation requiring operator inspection rather than automatic deletion;
-2. remove only validated installer-owned stale `.dist.stage.*` directories within the source root, never symlinks or mount points;
-3. create a private stage adjacent to `dist`, assign it to `agent-relay-builder` mode `0700`;
-4. compile `tsconfig.runtime.json` into the stage through `env -i` and the pinned TypeScript compiler;
-5. require `stage/src/run-codex.js` and reject symlinks, special files, mount crossings, or paths outside the stage;
-6. apply `root:root`, directory `0755`, and file `0644` to the stage;
-7. only after validation, stop the listener if active;
-8. wait without killing for every `Runner.Worker` owned by the numeric `github-runner` UID;
-9. rename current `dist` to `dist.previous` when present;
-10. rename the adjacent stage to `dist`;
-11. enable and restart the service;
-12. verify the service is active and a `Runner.Listener` owned by `github-runner` exists;
-13. remove `dist.previous` after success.
+Registration states:
 
-Compilation/stage failure leaves service and active `dist` untouched.
+- absent: `.runner`, `.credentials`, and `.credentials_rsaparams` all absent; prompt/register;
+- complete: all required registration files exist as regular non-symlink files owned by runner and not group/other writable; reuse;
+- partial/conflicting: only some exist or metadata is unsafe; fail without registration or deletion.
 
-Use a narrow cleanup trap with explicit stage/swap phases. If activation fails after replacement, stop the service, validate/remove the failed `dist`, restore `dist.previous` when present, restart/verify the previous service, and return the original activation error. On first installation, report that no prior runtime exists and leave the service failed/stopped.
+Thus complete binaries plus absent registration are explicitly resumable.
 
-This is local swap recovery only. Every successful run rebuilds and restarts; runtime comparison is out of scope. `install.sh` performs no Git synchronization, tests, Ansible, package installation, Docker provisioning, or Codex login.
+Installer requirements:
 
-### Milestone 5: Remove obsolete files
+- no arguments, refuse root;
+- bootstrap runner `2.335.1` only when binary state absent;
+- verify SHA-256 and extract as runner, no dependency helper;
+- exact `_work -> ../work` creation/validation;
+- PAT prompt and organization token exchange only for absent registration;
+- credentials memory-only, tracing disabled, unset promptly;
+- default runner self-update remains enabled; archive version is bootstrap only;
+- copy/update top-level `runsvc.sh` from `bin/runsvc.sh`, mode `0755`;
+- atomically install root-owned systemd unit with `User=github-runner`, runner working directory/ExecStart, `KillMode=process`, `TimeoutStopSec=5min`, `Restart=always`, `RestartSec=5s`;
+- daemon-reload after unit installation;
+- protect source checkout without following symlinks or referencing deleted files;
+- no Codex auth behavior.
+
+### Milestone 4: Runtime build and activation
+
+Every run after setup:
+
+1. fail on pre-existing `dist.previous` for operator inspection;
+2. remove only validated stale `.dist.stage.*` directories contained in source root, owned by builder or root, and not links/mounts;
+3. create a builder-owned mode `0700` stage adjacent to `dist`;
+4. compile runtime via clean `env -i`;
+5. require `src/run-codex.js`; reject symlinks, special files, mount crossings, and escape paths;
+6. finalize stage root ownership and `0755` directories/`0644` files;
+7. stop listener only now;
+8. wait without kill for workers by numeric runner UID;
+9. rename current `dist` to `dist.previous` if present;
+10. rename stage to `dist`;
+11. enable/restart service;
+12. poll for at most 60 seconds until systemd is active and a runner-owned `Runner.Listener` exists; fail otherwise;
+13. remove previous runtime after success.
+
+Build/stage failure leaves current service/runtime untouched.
+
+A narrow phase-aware trap handles only stage/swap cleanup. Post-swap activation failure stops service, validates/removes failed new runtime, restores previous when present, restarts/verifies it, and returns original failure. First install without previous runtime reports no fallback and leaves service stopped/failed.
+
+Every successful run rebuilds/restarts. No Git sync, tests, Ansible, package/Docker provisioning, or Codex login.
+
+### Milestone 5: Remove obsolete implementation
 
 Delete:
 
 - `update.sh`;
-- `scripts/docker-host.sh`;
-- `scripts/docker-host-debian.sh`;
-- `scripts/docker-host-debian-core.sh`;
-- `test-system/update-script.integration.sh`;
-- `test-system/docker-host.repository-safe.sh`;
-- `test-system/docker-conffile-recovery.integration.sh`;
-- `test/update-regression.test.ts` after moving useful single-installer assertions.
+- all three `scripts/docker-host*.sh` files;
+- updater and Docker provisioner system tests;
+- `test/update-regression.test.ts` after preserving useful installer assertions.
 
-Remove active updater, Docker-provisioner, WSL, administrator-trust-file, and automated Codex-login references from current scripts, package commands, tests, docs, and trusted-entrypoint lists. Completed ExecPlans remain historical.
+Remove active references to updater, Docker provisioner, WSL, administrator trust file, dependency helper, and automated Codex login from scripts, package commands, tests, docs, and trusted-entrypoint lists. Completed ExecPlans remain historical.
 
-### Milestone 6: Rebuild test coverage
+### Milestone 6: Tests
 
-Refactor `test-system/install-script.integration.sh` to simulate an initialized Debian 13 host and cover:
+Refactor installer integration/static tests for:
 
-- complete prerequisite success and representative fail-before-mutation cases;
-- no package/user/WSL/Docker/Ansible/runner-dependency-helper/Codex-login path in installer;
-- absent/complete/partial runner states;
-- one-time download and registration;
-- no token persistence or output;
-- exact `_work`, `runsvc.sh`, and systemd unit behavior;
-- second-run idempotence for archive and registration;
-- build before service stop;
-- stage failure leaves runtime/service untouched;
-- worker wait by numeric UID;
-- adjacent atomic activation;
-- activation rollback with previous runtime;
-- first-install activation failure without fallback;
-- successful cleanup;
-- no Codex auth check.
+- prepared-host success and representative fail-before-mutation prerequisites;
+- lock path pre-open and post-open inode validation;
+- no host provisioning/dependency-helper/Codex auth path;
+- binary absent/complete/partial states;
+- registration absent/complete/partial states, including complete binaries plus absent registration;
+- one-time archive and registration;
+- token non-persistence/non-output;
+- `_work`, `runsvc.sh`, and exact unit contract;
+- second-run idempotence;
+- build before stop;
+- stage failure isolation;
+- numeric-UID worker wait;
+- adjacent activation and bounded listener readiness;
+- activation restoration and first-install no-fallback behavior;
+- successful cleanup.
 
-Update static TypeScript tests accordingly. Remove obsolete updater/Docker/WSL/login assertions.
+Update package commands to remove deleted files/tests, retain remaining checks, and add no Ansible execution/dependency.
 
-Update `package.json` to remove deleted scripts/tests from `check:shell` and `check:system`, retain all remaining runtime/Node/shell/toolchain/installer checks, and add no Ansible dependency or execution.
+### Milestone 7: Documentation
 
-### Milestone 7: Update current documentation
+After acceptance, current docs describe:
 
-After implementation acceptance, update current README, operations, and technical specification documents to describe:
+- Debian 13 target and initial SSH/Python/sudo/admin requirements;
+- operator-machine Ansible execution;
+- extra package variable;
+- declarative host provisioning and Docker trust boundary;
+- target clone after playbook;
+- manual Codex login outside installer/acceptance;
+- one reusable installer for initial and later refresh;
+- `git pull --ff-only && ./install.sh`;
+- no updater, WSL, shell Docker provisioner, or automated login.
 
-- Debian 13 fresh-host target and minimal SSH/Python/sudo prerequisites;
-- control-machine Ansible execution;
-- extensible `agent_relay_extra_apt_packages`;
-- declarative packages/toolchains/users/directories/Docker setup;
-- target repository checkout after playbook execution;
-- manual Codex login as a separate operator step;
-- one reusable `install.sh` for first installation and later refresh;
-- `git pull --ff-only && ./install.sh` for releases;
-- no updater, WSL path, or shell Docker provisioner.
-
-No workflow, public API, request/result, routing, or output contract changes are required.
+No workflow/API/request/result/routing/output changes.
 
 ## Concrete Steps
 
-Rebase and inspect:
+Rebase/inspect:
 
     git fetch origin
     git rebase origin/main
@@ -410,7 +422,7 @@ Expected final checks:
     ! grep -Eq 'ansible-playbook|apt-get|dpkg|useradd|rustup|nodesource|DOCKER_PROVISIONING_ENABLED|codex login|installdependencies\.sh' install.sh
     grep -q 'agent_relay_extra_apt_packages' ansible/roles/agent_relay_host/defaults/main.yml
 
-Run non-Ansible validation:
+Non-Ansible validation:
 
     bash -n install.sh runner/finalize.sh scripts/codex-run scripts/toolchain-environment.sh scripts/toolchain-smoke.sh scripts/ci-runtime-build.sh scripts/ci-toolchain-smoke.sh test-system/install-script.integration.sh
     npm ci
@@ -424,89 +436,89 @@ Run non-Ansible validation:
     npm run check
     git diff --check
 
-Do not run `ansible-playbook`, `ansible-lint`, or install Ansible for task validation.
+Do not run/install Ansible or ansible-lint for task validation.
 
 ## Validation and Acceptance
 
 Acceptance requires:
 
-- a documented Ansible role prepares the complete Debian 13 runner prerequisite state from the stated minimal host prerequisites;
+- documented Ansible role prepares complete Debian 13 prerequisites from stated minimal host state;
 - ordinary packages are added through `agent_relay_extra_apt_packages`;
-- required runner native dependencies are encoded in Ansible after inspecting the pinned archive;
-- Ansible owns repositories, packages, verified/pinned toolchains, users, secure directories, Docker, and host services;
-- `install.sh` contains no host provisioning, Ansible execution, runner dependency helper, or Codex authentication;
-- `install.sh` installs/registers the official runner on the prepared host;
-- a second installer run does not repeat archive download or registration;
-- the expected `runsvc.sh` and systemd service contract are installed;
-- runtime compilation completes before shutdown;
+- required runner native dependencies are encoded after inspecting pinned archive;
+- Ansible owns repositories/packages/toolchains/users/directories/Docker/services;
+- installer contains no host provisioning, dependency helper, Ansible, or Codex auth;
+- installer installs runner from absent binary state and registers from absent registration state;
+- complete binaries without registration resume correctly;
+- complete installation skips download/registration on second run;
+- exact `runsvc.sh` and unit contract installed;
+- build completes before shutdown;
 - failed build leaves active runtime/service untouched;
-- activation failure restores one previous runtime when available;
-- updater and dormant Docker provisioner files are removed;
+- activation restores previous runtime when available;
+- updater and dormant Docker files removed;
 - all non-Ansible checks pass;
-- final review finds no stale active updater, Docker provisioner, WSL, administrator trust-file, dependency-helper, or automated Codex-login reference.
+- final review finds no stale updater/Docker/WSL/trust-file/dependency-helper/automated-login reference.
 
-The plan completes only when every `Progress` item is checked with code and passing evidence.
+Plan completes only with every Progress item checked and evidenced.
 
 ## Idempotence and Recovery
 
-The Ansible role uses idempotent modules and guarded commands. A second playbook run should report no changes when desired state already exists, apart from package-cache/external-repository metadata behavior. Ansible execution is not tested in this task.
+Ansible uses idempotent modules/guarded commands. A matching host should produce no material changes on a second run apart from repository/cache metadata behavior. Ansible execution is not tested here.
 
-`install.sh` supports only absent and complete runner states; partial/conflicting state fails without destructive repair. Rebuild is the recovery path for unknown host/runner state.
+Installer separately reconciles binary and registration absence/completeness. Partial/conflicting state fails without destructive repair. Unknown host state is rebuilt rather than migrated.
 
-The lock prevents concurrent installer runs. Existing `.runner` prevents repeat registration. Credentials remain memory-only.
+Secure lock prevents concurrent runs. Credentials remain memory-only.
 
-Runtime build uses a fresh adjacent stage. Active `dist` is untouched until validation. A pre-existing `dist.previous` blocks the next run for operator inspection. During one activation, one prior runtime is retained and removed after success.
+Runtime uses adjacent stage; active runtime remains until validation. Pre-existing previous runtime blocks a new run. One previous runtime exists only during activation and is deleted after success.
 
 ## Artifacts and Notes
 
 Keep append-only.
 
-- 2026-07-21: closed PR #47 without merge because it addressed a different design.
-- 2026-07-21: reviewed current installer, updater, Docker provisioner, tests, package scripts, workflows, and current documentation.
-- 2026-07-21: removed Ansible installation/execution requirements from installer responsibility.
-- 2026-07-21: simplified the target to a fresh Debian host with no WSL or migration.
-- 2026-07-21: removed Codex login from installer responsibility.
-- 2026-07-21: added package variables, control-machine bootstrap, runner dependency boundary, adjacent staging, and swap recovery.
-- 2026-07-21: narrowed support to Debian 13 and specified verified toolchain repositories/downloads, native runner dependency derivation, Docker roots, and exact service semantics.
+- 2026-07-21: closed PR #47 without merge.
+- 2026-07-21: reviewed current installation/update/Docker/test/doc state.
+- 2026-07-21: removed Ansible and Codex login from installer responsibility.
+- 2026-07-21: selected fresh Debian 13, no WSL/migration.
+- 2026-07-21: added package extension, verified host provisioning, dependency derivation, Docker roots, exact service semantics, adjacent stage and local restoration.
+- 2026-07-21: separated binary/registration state and added lock inode validation and bounded listener readiness.
 
-Future evidence: final file list; grep results; Ansible variable/task review; pinned runner dependency list; installer preflight fixtures; repeated-run log; prompt/token checks; systemd contract; build-before-stop order; stage/swap/rollback cases; complete CI; independent review.
+Future evidence: file list/grep; Ansible variables/tasks; runner dependency list; preflight fixtures; binary/registration state matrix; token checks; unit contract; build/swap/restore cases; CI; independent review.
 
 ## Interfaces and Dependencies
 
-Host initialization, run from the operator machine:
+From operator machine:
 
     ansible-playbook -i ansible/inventory/example.ini ansible/playbooks/host.yml
 
-Required variable:
+Required:
 
     agent_relay_admin_user: <existing sudo-capable target login>
 
-Optional package extension:
+Optional packages:
 
     agent_relay_extra_apt_packages:
       - <additional-package>
 
-Runner installation/refresh on target:
+On target:
 
     ./install.sh
 
-Manual Codex authentication:
+Manual authentication:
 
     sudo -u github-runner -H /usr/local/bin/codex login
 
-`install.sh` accepts no arguments and runs as the source owner, not root. It uses sudo only for bounded runner, runtime, ownership, and systemd operations.
+Installer runs as source owner, not root, and uses sudo only for bounded runner/runtime/ownership/systemd work.
 
-Fresh-host paths:
+Paths:
 
-- source: `/srv/github-runner/storage/agent-relay`;
-- work: `/srv/github-runner/storage/work`;
-- runner: `/srv/github-runner/storage/runner`;
-- runner home: `/srv/github-runner/storage/home`;
-- build: `/srv/github-runner/storage/build`;
-- build home: `/srv/github-runner/storage/build-home`;
-- Docker engine: `/srv/github-runner/storage/docker/engine`;
-- containerd: `/srv/github-runner/storage/docker/containerd`;
-- installer lock: `/var/lib/agent-relay/install.lock`;
-- service: `actions.runner.Divorium.gh-runner.service`.
+- source `/srv/github-runner/storage/agent-relay`;
+- work `/srv/github-runner/storage/work`;
+- runner `/srv/github-runner/storage/runner`;
+- runner home `/srv/github-runner/storage/home`;
+- build `/srv/github-runner/storage/build`;
+- build home `/srv/github-runner/storage/build-home`;
+- Docker engine `/srv/github-runner/storage/docker/engine`;
+- containerd `/srv/github-runner/storage/docker/containerd`;
+- lock `/var/lib/agent-relay/install.lock`;
+- service `actions.runner.Divorium.gh-runner.service`.
 
-Use Bash, systemd, Git, curl, jq, TypeScript, Docker, and the official runner supplied by the prepared host. Add no runtime dependency to `install.sh`.
+Use Bash, systemd, Git, curl, jq, TypeScript, Docker, and official runner supplied by the initialized host. Add no runtime dependency to installer.

@@ -1,0 +1,59 @@
+---
+agent_relay_host_contract: "{{ lookup('ansible.builtin.file', role_path ~ '/../../../config/runner-host.json') | from_json }}"
+
+agent_relay_node_major: "{{ agent_relay_host_contract.node_major }}"
+agent_relay_java_major: "{{ agent_relay_host_contract.java_major }}"
+agent_relay_go_version: "{{ agent_relay_host_contract.go_version }}"
+agent_relay_go_sha256: "{{ agent_relay_host_contract.go_sha256 }}"
+agent_relay_rust_toolchain: "{{ agent_relay_host_contract.rust_toolchain }}"
+agent_relay_typescript_version: "{{ agent_relay_host_contract.typescript_version }}"
+agent_relay_codex_version: "{{ agent_relay_host_contract.codex_version }}"
+
+agent_relay_storage_root: "{{ agent_relay_host_contract.base_root }}/storage"
+agent_relay_source_root: "{{ agent_relay_storage_root }}/agent-relay"
+agent_relay_work_root: "{{ agent_relay_storage_root }}/work"
+agent_relay_runner_root: "{{ agent_relay_storage_root }}/runner"
+agent_relay_runner_home: "{{ agent_relay_storage_root }}/home"
+agent_relay_build_home: "{{ agent_relay_storage_root }}/build-home"
+agent_relay_docker_root: "{{ agent_relay_storage_root }}/docker/engine"
+agent_relay_containerd_root: "{{ agent_relay_storage_root }}/docker/containerd"
+
+agent_relay_runner_user: "{{ agent_relay_host_contract.runner_user }}"
+agent_relay_builder_user: "{{ agent_relay_host_contract.builder_user }}"
+
+agent_relay_docker_conflicting_packages:
+  - containerd
+  - docker-compose
+  - docker-doc
+  - docker.io
+  - podman-docker
+  - runc
+
+agent_relay_required_apt_packages:
+  - build-essential
+  - clang
+  - cmake
+  - diffutils
+  - file
+  - findutils
+  - git
+  - git-lfs
+  - jq
+  - libicu76
+  - libkrb5-3
+  - liblttng-ust1t64
+  - libssl3t64
+  - needrestart
+  - openssl
+  - pkg-config
+  - procps
+  - python3-pip
+  - python3-venv
+  - tar
+  - unzip
+  - util-linux
+  - wget
+  - xz-utils
+  - zip
+  - zlib1g
+  - zstd

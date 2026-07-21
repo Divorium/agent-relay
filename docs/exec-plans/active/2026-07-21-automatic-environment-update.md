@@ -22,15 +22,15 @@ After this work:
 - manual retry deploys only current protected `main`;
 - authorized operator can select open same-repository PR, including draft, or same-repository branch, resolve once to exact SHA, validate away from both self-hosted runners, and test its real privileged `update.sh` on real VM;
 - second persistent deployment runner remains independent of primary Agent Relay runtime and can submit/inspect transactions while primary is stopped or broken;
-- controller stops primary listener, drains active `github-runner` workers, and installs a runtime systemd mask before checkout mutation; mask remains until final accepted/restored runtime is ready;
+- controller stops primary listener, drains every active `github-runner` worker, and runtime-masks primary before checkout mutation; mask remains until final accepted/restored runtime is ready;
 - target `update.sh` is managed stage producer; trusted installed controller alone owns active-runtime backup, activation rename, journal, accepted refs, service unmask/start and restoration;
 - previous active runtime remains retained until terminal acceptance/restoration, including first bootstrap before LKG;
-- temporary target cannot accidentally start primary through normal systemd service control while mask is active, so ordinary CI/Codex cannot run against temporary runtime;
+- temporary target cannot start primary through normal systemd service control, and controller continuously checks for direct `Runner.Listener` or `Runner.Worker` processes during target execution;
 - failed main attempts network-independent convergence to previous local LKG;
 - workflow cancellation does not kill post-mutation host transaction because root systemd service owns it;
 - results distinguish target, restoration and critical recovery.
 
-Selected revisions are trusted same-repository code and execute with broad host authority to test real privileged updater. System provides **best-effort rollback for accidental failures**, not malicious-code isolation or VM snapshot. Privileged target can defeat same-VM controls, including removing mask. Root ownership, runner groups, approvals, sanitization, cgroups, masks and second runner must never be described as protection from malicious privileged target.
+Selected revisions are trusted same-repository code and execute with broad host authority to test real privileged updater. System provides **best-effort rollback for accidental failures**, not malicious-code isolation or VM snapshot. Privileged target can defeat same-VM controls, including mask and monitoring. Root ownership, runner groups, approvals, sanitization, cgroups, masks and second runner must never be described as protection from malicious privileged target.
 
 Acceptance does not claim primary already accepted a GitHub job. Starting primary during temporary transaction permits queued work race. Without retained organization-management credential for dynamic runner control, transaction proves runtime locally and starts primary only after final selection.
 
@@ -51,7 +51,8 @@ Keep append-only. Checked implementation items require repository location plus 
 - [x] (2026-07-21) Fourth review added control-plane freshness, transaction refs, worktree policy, filesystem/capacity, cgroup, service invariants, clean build state.
 - [x] (2026-07-21) Fifth review made controller sole activation/journal owner and updater stage-only.
 - [x] (2026-07-21) Sixth review added atomic request admission, full active-runtime digest, PR-only main policy, timeouts.
-- [x] (2026-07-21) Seventh review added primary runtime mask for whole mutation window and mandatory re-drain before rollback after any primary start attempt.
+- [x] (2026-07-21) Seventh review added primary runtime mask and mandatory re-drain after unexpected primary start.
+- [x] (2026-07-21) Eighth review removed all post-migration direct updater modes, made bootstrap the only initial mutation path, added continuous listener/worker monitoring during updater execution, required active-runtime tree to contain no symlinks, and added non-activating controller-candidate self-test for temporary targets.
 - [ ] Complete Milestone 0 with actual GitHub evidence before implementation.
 - [ ] Revalidate baseline/workflows before implementation.
 - [ ] Implement protocol, portable validation, stage updater, controller activation, manifest/health, managed boundary.
@@ -79,7 +80,7 @@ Keep append-only. Checked implementation items require repository location plus 
 - Approval before deploy concurrency avoids blocking main.
 - Cancellation can release GitHub queue early; host busy status authoritative.
 - Bootstrap needs deployment runner before LKG; pending mode accepts bootstrap/status.
-- Bootstrap needs pre-LKG source/runtime fallback.
+- Bootstrap needs pre-LKG source/runtime/service fallback.
 - Managed direct update diverges accepted state; fail closed.
 - Controller upgrades require backward-compatible protocol.
 - Unknown recovery blocks primary/mutation, not status runner.
@@ -96,8 +97,10 @@ Keep append-only. Checked implementation items require repository location plus 
 - Concurrent submit helpers need atomic pending gate.
 - Full runtime tree digest catches accidental in-place modification.
 - Push is merge signal only under PR-only no-bypass main ruleset.
-- Merely checking primary stayed stopped after updater is too late: buggy updater could start service and a queued job could begin. Controller must runtime-mask primary before target execution and keep it masked through temporary restoration.
-- If primary ever starts before transaction completion, rollback must first stop listener and boundedly drain any newly assigned worker; unsafe checkout/runtime mutation is forbidden while worker remains.
+- Runtime mask prevents normal service start, but target could directly launch runner binary. Controller must monitor `Runner.Listener` and `Runner.Worker` for primary UID while updater runs and abort immediately on detection.
+- Allowing a direct updater during bootstrap-pending would invalidate recorded pre-bootstrap fallback. Once migration installs managed protocol, direct `update.sh` must always refuse; bootstrap is the only first mutation path.
+- Temporary target may contain controller changes that should be checked without becoming active. It should stage and self-test candidate compatibility but never switch controller.
+- Active runtime symlink could make deterministic digest or backup semantics ambiguous. Managed active runtime tree must contain only regular files/directories and no symlinks, devices, sockets or FIFOs.
 
 ## Decision Log
 
@@ -111,24 +114,24 @@ Keep append-only. Checked implementation items require repository location plus 
 - Mode-specific no-arg submit helpers, bounded canonical JSON stdin, read-only status.
 - Root-only request lock + exclusive pending file admits exactly one request.
 - Root systemd service owns transaction beyond workflow lifetime.
-- Host flock authoritative; exact `/etc/agent-relay/administrator` inode shared by manual prebootstrap/controller/recovery; managed updater does not reacquire.
+- Host flock authoritative; exact `/etc/agent-relay/administrator` inode shared by controller/recovery. Once new managed updater exists, ordinary direct updater never acquires this lock because it always refuses and directs operator to migration/bootstrap/deployment/admin recovery.
 - Stop/drain primary before checkout; drain timeout no kill/no mutation/prior-state restore.
-- After drain, apply `systemctl mask --runtime` or equivalent controller-owned runtime mask to exact primary service. Journal mask state. Target update/restoration runs with mask present. Only controller may remove mask immediately before final primary start.
-- Any unexpected mask removal or primary process/service start during target work is failure. Controller immediately stops primary, waits boundedly for any new worker, and does not mutate checkout/runtime until drain completes; timeout enters critical recovery.
+- After drain, runtime-mask exact primary service. Journal mask. Target/restoration run masked. Only controller removes mask immediately before final primary start.
+- During updater unit execution, controller polls process table for primary UID `Runner.Listener` and `Runner.Worker` in addition to service/mask checks. Detection terminates updater unit, stops/re-masks primary, drains any worker, and forbids further mutation until safe; drain failure => critical.
 - Git mutation as recorded administrator.
 - `controlPlaneSha == current origin/main` for all mutating modes. Main/bootstrap target also current; temporary pinned separately.
-- Main ruleset requires PR-only normal changes, no force/delete/bypass for deployment workflows; otherwise Milestone 0 blocks trigger design.
+- Main ruleset PR-only, no force/delete/bypass for deployment workflow changes; otherwise Milestone 0 blocks.
 - Backward-compatible deployment protocol; old branch rebase/merge; breaking migration separate.
-- Managed updater stage producer only; no active runtime, controller state/refs/journal or runner service control.
-- Controller records full active-runtime tree digest before/after updater and alone activates stage.
-- Existing host migrates before new updater; prebootstrap manual uses installed activator; missing helper refuses.
-- Updater runs transient systemd cgroup with timeout/TERM/KILL.
+- Managed updater is stage producer only; no active runtime, controller state/refs/journal or runner service/mask control.
+- Controller records full active-runtime tree digest before/after updater and alone activates stage. Active runtime and stage after finalization contain only directories and regular files; symlink/device/socket/FIFO causes validation failure.
+- Existing host must run migration before new updater. After migration begins, direct updater always refuses. Bootstrap workflow is only supported first mutation; administrator recovery/rebootstrap are separate local commands.
+- Updater runs transient systemd cgroup with timeout/TERM/KILL and concurrent primary-process monitor.
 - Local health as `github-runner` under env-i/temp HOME/no credentials/network/model.
 - Recovery refs authoritative; metadata journaled.
 - Automatic main latest-only; stale main superseded, stale temporary/bootstrap fail.
 - Before bootstrap only bootstrap/status.
-- After managed mode direct update fails closed.
-- Candidate validated/provisionally switched before refs; temporary never candidate.
+- After managed mode direct updater remains refused; no alternate manual stage mode.
+- Main may provisionally switch compatible controller candidate before refs. Temporary may stage and execute candidate self-test in isolated temporary path but must not change active controller symlink or state.
 - Deployment runner status available in critical recovery if valid.
 - Docker disabled.
 
@@ -138,7 +141,7 @@ Dates/authors: 2026-07-21 architecture/adversarial revisions under operator inst
 
 Plan remains active; no production behavior changed.
 
-Design resolves validation, smoke, bootstrap, cancellation, activation and admission circularities. Runtime mask closes accidental primary-start race. Same-VM privileged-target limitation remains explicit.
+Design resolves validation, smoke, bootstrap, cancellation, activation, admission and post-migration transition circularities. Runtime mask plus process monitoring closes accidental primary scheduling paths. Same-VM privileged-target limitation remains explicit.
 
 Milestone 0 blocks if GitHub controls unavailable. Update after milestones; complete only with real/disposable evidence.
 
@@ -204,7 +207,7 @@ Add `npm run check:portable` for hosted typecheck/tests/runtime build/shell/Node
 
 Define fixed compiled runtime health: no arbitrary command/network/model/source/persistent write; bounded diagnostics.
 
-Define stage protocol: controller creates build/stage paths; managed updater writes stage/build and declared host state, finalizes manifest, leaves active runtime/services/controller state unchanged.
+Define stage protocol: controller creates build/stage paths; managed updater writes stage/build and declared host state, finalizes manifest, leaves active runtime/services/controller state unchanged. Finalized stage and active runtime must contain only directories and regular files.
 
 ### Milestone 2: Human workflows
 
@@ -230,11 +233,13 @@ Fresh install + restartable migration:
 - install controller/helpers/units/recovery/stage/backup/state/log/narrow sudo;
 - deployer sudo only submit/status;
 - PAT/tokens memory-only;
-- migrate before new updater; missing helper safe refusal;
+- migration before new updater; missing helper safe refusal;
+- once migration starts/bootstrap-pending exists, direct updater refuses and cannot mutate fallback;
 - recovery initialized no invented LKG;
 - clean admin-owned exact current main; reject tracked/unexpected untracked;
 - import bootstrap-source, record primary state/runtime without provenance;
-- same-device/capacity;
+- validate current active runtime has no symlink/special-file entries before recording fallback; conflicting tree blocks migration;
+- same-device/free-space;
 - bootstrap pending, start deploy runner, disable main/temp;
 - bootstrap; markers after success.
 
@@ -242,13 +247,13 @@ Failed bootstrap restores source/runtime/service, remains pending, no LKG.
 
 ### Milestone 4: Submission and independent service
 
-Mode helper: no args, bounded canonical JSON, request lock, exclusive pending create+fsync, starts service. Derive mode; validate schema/limits/repo/SHA/source/run/audit/controlPlane; reject unknown/control chars/state conflict. No credentials.
+Mode helper no args, bounded canonical JSON, request lock, exclusive pending create+fsync, starts service. Derive mode; validate schema/limits/repo/SHA/source/run/audit/controlPlane; reject unknown/control chars/state conflict. No credentials.
 
 Service atomically claims pending into journal while host flock held. Start failure removes only own pending. Stale pending recovery deterministic.
 
 Selected workflow+locked deploy account is auth boundary. Root service owns transaction; status bounded/read-only; fixed systemd environment no workflow token inheritance.
 
-Boot recovery required before primary but independent of deployment runner. Unknown keeps primary/mutation stopped, status available when possible.
+Boot recovery required before primary but independent from deployment runner. Unknown keeps primary/mutation stopped, status available when possible.
 
 ### Milestone 5: Host transaction
 
@@ -265,28 +270,29 @@ Preflight:
 7. verify LKG/bootstrap fallback;
 8. same-device/free-space/path ownership/modes/no symlink;
 9. installed host compatibility;
-10. deterministic full active-runtime tree digest.
+10. deterministic full active-runtime tree digest; reject active symlink/special file.
 
 Drain/isolation:
 
 1. journal prior primary state;
 2. stop primary, bounded drain;
 3. timeout restores prior state/no mutation;
-4. apply controller-owned runtime mask to exact primary service and verify masked/inactive/no worker;
+4. runtime-mask exact primary service and verify masked/inactive/no listener/no worker;
 5. journal mask state and durable drained before checkout;
-6. if mask unexpectedly disappears or primary starts before final unmask, stop it and boundedly drain any worker before further mutation; inability to drain => critical recovery.
+6. start background controller monitor for mask state, service state, and primary UID listener/worker processes; it terminates updater unit immediately on violation;
+7. if primary process appears, stop/re-mask and boundedly drain before any further checkout/runtime mutation; inability => critical.
 
 Staging:
 
 1. reset/clean tracked checkout exact target as admin; verify owner/HEAD;
 2. create build/stage roots;
-3. run exact admin-owned regular non-symlink updater stage-only in transient service/cgroup, fixed timeout/no workflow credentials;
+3. run exact admin-owned regular non-symlink updater stage-only in transient systemd cgroup, fixed timeout/no workflow credentials;
 4. updater may build stage/declared host work but not active runtime/controller state/refs/journal/runner services/mask;
-5. wait cgroup inactive TERM/KILL;
-6. require primary still masked/inactive, no workers, deploy service unchanged, active-runtime tree digest unchanged, exact clean checkout, controller state unchanged;
-7. verify stage manifest/digests/owner/modes/provenance;
+5. wait cgroup inactive TERM/KILL and stop monitor only after final process/service invariant check;
+6. require primary masked/inactive, no listener/worker, deploy service unchanged, active-runtime tree digest unchanged, exact clean checkout, controller state unchanged;
+7. verify finalized stage has no symlink/special entry and manifest/digests/owner/modes/provenance valid;
 8. controller journals stage, renames active dist to backup, journals, renames stage active, journals;
-9. verify active manifest and health as github-runner env-i/temp HOME;
+9. verify active manifest/tree and health as github-runner env-i/temp HOME;
 10. retain backup.
 
 Main acceptance:
@@ -294,18 +300,20 @@ Main acceptance:
 - candidate stage/self-test, reject breaking, provisional switch/post-test before refs;
 - verify transaction object;
 - atomic previous/current/generation refs and journaled metadata;
-- remove primary runtime mask only after accepted target/controller/runtime complete;
-- start primary; verify stable listener/runner identity/labels/credential file metadata;
-- failure after unmask/start: stop and re-mask primary, boundedly drain any new worker, then revert refs/metadata/controller/checkout/runtime; if drain fails, critical without unsafe mutation;
-- health/restart prior, final consistency; bounded retention/cleanup.
+- remove mask only after accepted target/controller/runtime complete;
+- start primary; verify stable listener/runner identity/labels/credential metadata;
+- failure after unmask/start: stop/re-mask, bounded drain any worker, then revert; drain failure => critical without unsafe mutation;
+- final consistency and bounded retention.
 
 Temporary:
 
-- target health, no refs/candidate, primary remains masked;
+- target health, no refs/active candidate;
+- if target includes controller candidate, stage and run isolated self-test/compatibility check only; do not switch active controller or write candidate state;
+- primary remains masked;
 - restore current LKG checkout;
 - LKG updater stage-only cgroup; controller activation/manifest/health/controller;
-- unmask/start primary only after LKG complete;
-- startup failure uses same stop/re-mask/drain guard;
+- unmask/start primary after LKG complete;
+- startup failure uses stop/re-mask/drain guard;
 - separate outcomes; unproven critical.
 
 Bootstrap:
@@ -314,15 +322,16 @@ Bootstrap:
 - exact current main stage/activation/health; candidate before refs;
 - current+generation, previous absent;
 - unmask/start/readiness; markers last;
-- failure stop/re-mask/drain if needed, restore prebootstrap, unmask/start prior only when safe.
+- failure stop/re-mask/drain if needed, restore prebootstrap, safe prior unmask/start.
 
 ### Milestone 6: Updater, activation, recovery, upgrade
 
-Updater:
+New updater has no direct mutation mode:
 
-- prebootstrap manual requires installed activator; admin holds same lock, activator masks/stops/drains as needed, updater stages, activator verifies/renames/health/unmasks/starts. Missing helper refuses/migration instruction;
-- managed controller mode stage-only, primary already masked/drained, no active/service/controller state;
-- managed direct ordinary fails;
+- before migration, old baseline updater remains the only legacy path;
+- once repository contains managed updater, direct invocation always fails with instruction to run migration/bootstrap or use deployment/admin recovery;
+- migration/bootstrap does not invoke updater directly from operator shell; controller invokes managed stage-only mode;
+- managed mode requires protocol, primary masked/drained, stage-only, no active/service/controller state;
 - clean transaction build/stage, no source dependency cache;
 - manifest schema/source/protocol/updater/runtime+health paths/digests/timestamp/finalized;
 - Docker disabled.
@@ -331,11 +340,11 @@ Recovery refs current/previous/bootstrap-source/transactions/generations atomic;
 
 Offline recovery restores source, stable stage-only updater, controller activation/health/controller, then safe unmask/start. Emergency Git reconstruction allowed. Valid LKG backup may start only explicit degraded critical action if stable updater fails; journal remains.
 
-Candidates immutable/atomic symlink, validated before refs, active/previous compatible. Breaking migration separate.
+Candidates immutable/atomic symlink, validated before refs, active/previous compatible. Temporary only isolated self-test. Breaking migration separate.
 
 ### Milestone 7: Documentation and acceptance
 
-Document hosted validation, direct workflows, PR-only main, approvals, control-plane freshness, bootstrap, admission, queue/busy, drain/mask/cgroup, stage-only/controller activation, runtime digest/manifest/health limitation, latest-main, managed refusal, recovery refs/backups, critical recovery, upgrades, logs, Docker disabled, best effort.
+Document hosted validation, direct workflows, PR-only main, approvals, control-plane freshness, bootstrap, admission, queue/busy, drain/mask/process monitor/cgroup, stage-only/controller activation, runtime digest/no-symlink manifest/health limitation, latest-main, direct updater refusal, recovery refs/backups, critical recovery, upgrades, logs, Docker disabled, best effort.
 
 Run tests/CI/review/real/disposable demonstrations; active until evidence.
 
@@ -385,23 +394,23 @@ Complete:
     git diff --check
     git grep -n 'DOCKER_PROVISIONING_ENABLED=0' -- update.sh
 
-Real migration/bootstrap: labels/group/no Codex; pending normal reject; installed ownership/modes; no tokens; device/capacity; exact bootstrap stage/activation/manifest/health/safe unmask/readiness/current ref/previous absent/markers last.
+Real migration/bootstrap: labels/group/no Codex; pending normal reject; direct updater refusal; installed ownership/modes; no tokens; device/capacity; exact bootstrap stage/activation/manifest/health/safe unmask/readiness/current ref/previous absent/markers last.
 
 Production:
 
-1. temporary success, primary masked/stopped, restoration;
+1. temporary success, primary masked/stopped, controller candidate self-test only, restoration;
 2. target updater failure preserves runtime/LKG restore;
 3. drain timeout no mutation;
 4. stale target/control plane no mutation;
 5. main success LKG;
-6. direct updater rejected managed;
+6. direct updater rejected before and after bootstrap once managed updater is checked out;
 7. workflow cancel root service completes/restores;
 8. status active/terminal;
 9. unexpected untracked blocks;
 10. updater attempts active runtime/checkout/service/controller/mask mutation => detected;
 11. concurrent submit => one pending;
 12. direct main push blocked ruleset;
-13. target updater tries `systemctl start` primary and runtime mask prevents listener/job.
+13. target updater directly launches `Runner.Listener`; monitor aborts, stops/re-masks, drains, and no checkout/runtime rollback mutation occurs until safe.
 
 Disposable:
 
@@ -417,7 +426,8 @@ Disposable:
 10. disk/device fail before drain;
 11. in-place non-entrypoint runtime mutation caught tree digest;
 12. stale pending recovery;
-13. primary starts unexpectedly and receives worker; controller stops/re-masks/drains before any rollback mutation.
+13. active runtime or stage symlink/special file rejected;
+14. bootstrap-pending direct updater cannot invalidate fallback.
 
 ## Validation and Acceptance
 
@@ -439,23 +449,25 @@ Serialization: GitHub queue/busy/host flock no interleave; order irrelevant; ove
 
 Clean worktree: preexisting changes block; post-updater exact clean; restoration removes only post-journal debris; ignored state not silently purged.
 
-Drain/mask: listener stopped, workers drained, runtime mask applied and retained through temporary window; attempted start fails. Any unexpected start is stopped/re-masked and drained before rollback mutation.
+Drain/mask/monitor: listener stopped, workers drained, runtime mask retained. Normal and direct listener start attempts are detected; updater aborted; no rollback mutation until re-drain safe.
 
 Ownership: deployer no direct write; Git admin; stage builder; active/controller/recovery root; health primary user.
 
-Protocol: unsupported before drain; updater stage-only/no credentials/no active/service/controller/journal/mask mutation; prebootstrap helper works, managed direct fails.
+Protocol: unsupported before drain; updater stage-only/no credentials/no active/service/controller/journal/mask mutation; direct updater always refuses under new managed updater.
 
 Controller ownership: full active tree digest unchanged across updater; controller alone journals/renames. Violation restores.
+
+Runtime shape: active/stage consist only of regular files/directories, no symlink/special entries. Digest covers sorted relative paths, type, uid, gid, mode and file content.
 
 Staging: build failure active untouched; device/capacity before drain; rename interruption recovers; backup retained; clean dependencies.
 
 Cgroup: timeout TERM/KILL descendants; restoration after inactive.
 
-Temporary isolation: primary masked/stopped through target and LKG restoration.
+Temporary isolation: primary masked/stopped through target and LKG restoration; controller candidate self-tested but never activated.
 
-Bootstrap: no invented LKG; failure fallback; success current only, safe primary, markers last.
+Bootstrap: no invented LKG; direct updater cannot alter pending fallback; failure restores; success current only, primary, markers last.
 
-Main: current target/control plane, drain/mask, exact checkout, host checks, stage-only updater, controller activation, manifest/health, candidate-before-refs, atomic refs/metadata, safe unmask/start/final consistency; failure guarded re-drain/revert.
+Main: current target/control plane, drain/mask/monitor, exact checkout, host checks, stage-only updater, controller activation, manifest/health, candidate-before-refs, atomic refs/metadata, safe unmask/start/final consistency; failure guarded re-drain/revert.
 
 Runtime identity: checkout/manifest/full-tree+entrypoint digests/metadata/controller/current agree; invalid fails.
 
@@ -483,19 +495,19 @@ Completion: all Progress evidence, tests/CI/review, production/disposable demons
 
 Fresh install one-time. Setup/migration absent/exact/partial/conflict; attempt-owned compensation.
 
-Migration restartable; deploy runner may start pending, no accepted refs/managed markers; conflicts fail.
+Migration restartable; deploy runner may start pending, no accepted refs/managed markers; direct updater refuses; conflicts fail.
 
 Submission serialized by request lock/exclusive pending. Reused ID conflict rejected. Status read-only.
 
-Root journal strict/bounded/atomic records request, control-plane/target, transaction ref, primary prior state, mask state, drain, checkout, updater unit, active tree digests, stage, controller backup/activation, health, candidate, refs, unmask/start, restoration, terminal.
+Root journal strict/bounded/atomic records request, control-plane/target, transaction ref, primary prior state, mask state, monitor state, drain, checkout, updater unit, active tree digests, stage, controller backup/activation, health, candidate, refs, unmask/start, restoration, terminal.
 
 Target updater never writes journal. Controller observes independently before phase transitions.
 
-Same filesystem runtime states old-active/stage-only/backup-without-active/new-active+backup distinguishable.
+Same-filesystem runtime states old-active/stage-only/backup-without-active/new-active+backup distinguishable. Trees with symlink/special entries are invalid.
 
 Refs atomic; metadata journaled; bootstrap current only; refs protect objects.
 
-Recover never retries target; converges prebootstrap/LKG, ensures primary mask while mutating, restores source/runtime/controller/health, safely unmasks/starts, archives after success.
+Recover never retries target; converges prebootstrap/LKG, ensures primary mask and no primary processes while mutating, restores source/runtime/controller/health, safely unmasks/starts, archives after success.
 
 Unknown keeps primary/mutation stopped and masked when possible; status available; admin repair required.
 
@@ -508,9 +520,9 @@ Tests temporary roots/local Git/fake systemd/process/service/deterministic barri
 Append-only:
 
 - 2026-07-21 baseline/GitHub review, draft PR #47, living format.
-- 2026-07-21 first through seventh adversarial corrections as recorded in `Progress`.
+- 2026-07-21 first through eighth adversarial corrections as recorded in `Progress`.
 
-Future evidence: settings; hashes; tests/counts/coverage; group/workflows/environments/ruleset; ownership/device/capacity; admission; mask/drain; phases/cgroup/digests/controller/restoration/final; recovery refs/fsck; stage/backup; cancellation/boot; demonstrations; CI/final review.
+Future evidence: settings; hashes; tests/counts/coverage; group/workflows/environments/ruleset; ownership/device/capacity; admission; mask/monitor/drain; phases/cgroup/digests/controller/restoration/final; recovery refs/fsck; stage/backup; cancellation/boot; demonstrations; CI/final review.
 
 GitHub docs reviewed:
 
@@ -523,7 +535,7 @@ GitHub docs reviewed:
 - `https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/choose-the-runner-for-a-job`
 - `https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot`
 
-Non-goals: hostile isolation; guaranteed malicious-root/VM/disk/network/systemd/resource recovery; autoscaling/ephemeral/JIT; persistent PAT/App; forks/arbitrary repos; parallel mutation; pre-promotion GitHub job proof; VM snapshots; general data/package reversal; Docker re-enable; pre-protocol branches; automatic breaking migration.
+Non-goals: hostile isolation; guaranteed malicious-root/VM/disk/network/systemd/resource recovery; autoscaling/ephemeral/JIT; persistent PAT/App; forks/arbitrary repos; parallel mutation; pre-promotion GitHub job proof; VM snapshots; general data/package reversal; Docker re-enable; pre-protocol branches; automatic breaking migration; temporary activation of controller candidate.
 
 ## Interfaces and Dependencies
 
@@ -545,7 +557,7 @@ Services:
     agent-relay-deploy-recover.service
     agent-relay-update@<transaction-id>.service
 
-Recovery unit required before primary; deploy runner independent for status. Controller uses runtime mask on exact primary unit during mutation.
+Recovery unit required before primary; deploy runner independent for status. Controller uses runtime mask and process monitor for exact primary service/UID during mutation.
 
 Submit helpers no args/canonical JSON. Admin recovery unavailable to deployer sudo.
 
@@ -629,6 +641,7 @@ Journal:
         | "runtime_activated"
         | "target_health"
         | "controller_staging"
+        | "controller_candidate_test"
         | "controller_provisional"
         | "accepting_refs"
         | "starting_primary"
@@ -657,8 +670,8 @@ Journal:
 
 Exact serialization may differ but bounded/strict/credential-free/restart-sufficient.
 
-Bounded config: request, validation, approval, drain/fetch/host/updater/health/primary/transaction/busy deadlines; TERM/KILL; disk headroom; status; logs; retention.
+Bounded config: request, validation, approval, drain/fetch/host/updater/health/primary/transaction/busy deadlines; monitor interval; TERM/KILL; disk headroom; status; logs; retention.
 
 Use pinned existing host tools where possible. No third-party runtime dependency without recorded necessity.
 
-Revision note (2026-07-21): Seventh adversarial review added a controller-owned runtime mask for the primary service across every mutation/temporary-restoration window and a mandatory stop/re-mask/drain guard before rollback if primary ever starts unexpectedly. This closes the accidental scheduling race that post-factum service checks could not prevent. Plan only; implementation not complete.
+Revision note (2026-07-21): Eighth adversarial review removed all direct updater mutation after migration, making bootstrap the only initial managed mutation; added continuous direct listener/worker monitoring during target execution; required no symlinks or special files in active/staged runtime; and required temporary controller-candidate compatibility self-test without activation. Plan only; implementation not complete.

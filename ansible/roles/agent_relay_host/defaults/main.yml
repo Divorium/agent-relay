@@ -23,6 +23,14 @@ agent_relay_containerd_root: /srv/github-runner/storage/docker/containerd
 agent_relay_runner_user: github-runner
 agent_relay_builder_user: agent-relay-builder
 
+agent_relay_docker_conflicting_packages:
+  - containerd
+  - docker-compose
+  - docker-doc
+  - docker.io
+  - podman-docker
+  - runc
+
 agent_relay_required_apt_packages:
   - apt-transport-https
   - build-essential

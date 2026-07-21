@@ -56,7 +56,9 @@ test("installer protects checkout and does not recursively repair it", async () 
 test("Ansible bootstraps host state and creates the administrator", async () => {
   const playbook = await text("ansible/playbooks/host.yml");
   const defaults = await text("ansible/roles/agent_relay_host/defaults/main.yml");
-  const tasks = await text("ansible/roles/agent_relay_host/tasks/main.yml");
+  const tasks = (await Promise.all([
+    "packages.yml", "users.yml", "filesystem.yml", "containers.yml", "toolchains.yml",
+  ].map((name) => text(`ansible/roles/agent_relay_host/tasks/${name}`)))).join("\n");
   const handlers = await text("ansible/roles/agent_relay_host/handlers/main.yml");
   const config = await text("ansible/ansible.cfg");
 
@@ -75,9 +77,9 @@ test("Ansible bootstraps host state and creates the administrator", async () => 
   assert.match(tasks, /validate: \/usr\/sbin\/visudo -cf %s/);
   assert.match(tasks, /authorized_keys/);
   assert.match(tasks, /groups: sudo/);
-  assert.match(tasks, /Docker Engine, containerd and Compose/);
+  assert.match(tasks, /Install Docker packages without premature service start/);
   assert.match(tasks, /state: present/);
-  assert.match(tasks, /policy-rc\.d/);
+  assert.match(tasks, /policy_rc_d: 101/);
   assert.match(tasks, /agent_relay_extra_apt_packages/);
   assert.match(defaults, /liblttng-ust1t64/);
   assert.match(defaults, /libssl3t64/);

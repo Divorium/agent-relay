@@ -101,7 +101,12 @@ test("managed files publish through unique same-directory temporary files", asyn
 test("package transaction pins requested and resolver-selected packages", async () => {
   const adapter = await source("scripts/docker-host-debian.sh");
   assert.match(adapter, /selected_exact\+=\("\$\{selected_package\}=\$\{selected_version\}"\)/u);
-  assert.match(adapter, /apt-get --yes --no-install-recommends install "\$\{selected_exact\[@\]\}"/u);
+  assert.match(adapter, /DOCKER_DEBIAN_DPKG_CONFFILE_OPTIONS=\(--force-confdef --force-confold\)/u);
+  assert.match(adapter, /Dpkg::Options::=--force-confdef/u);
+  assert.match(adapter, /Dpkg::Options::=--force-confold/u);
+  assert.match(adapter, /docker_debian_install_exact_packages "\$\{selected_exact\[@\]\}"/u);
+  assert.match(adapter, /rerun \.\/update\.sh to resume the recorded transaction/u);
+  assert.doesNotMatch(adapter, /make dpkg clean/u);
   assert.match(adapter, /Installed version differs from resolved transaction/u);
   assert.match(adapter, /docker_debian_candidate_is_unambiguously_official/u);
   assert.doesNotMatch(adapter, /apt-cache depends --recurse/u);
@@ -114,6 +119,8 @@ test("transaction recovery starts only after the package-state boundary passes",
   const recovery = host.indexOf("docker_host_recover_transaction", boundary);
   assert.ok(main >= 0 && boundary > main && recovery > boundary);
   assert.match(host, /\[\[ "\$\{status:1:1\}" != c \]\] \|\| return 1/u);
+  assert.match(host, /docker_debian_configure_pending_packages/u);
+  assert.match(host, /docker_debian_install_exact_packages "\$\{exact\[@\]\}"/u);
 });
 
 test("effective roots, plugins, groups, socket and first-install registry check are validated", async () => {

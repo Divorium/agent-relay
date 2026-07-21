@@ -15,10 +15,12 @@ No workflow, public API, request contract, installation argument, routing, or Co
 - [x] (2026-07-21) Reproduced the reported failure with two local Debian packages that upgrade a modified conffile: plain dpkg exited 1 with `end of file on stdin at conffile prompt`.
 - [x] (2026-07-21) Verified that `--force-confdef --force-confold` completes the same upgrade with stdin closed and preserves the locally managed conffile.
 - [x] (2026-07-21) Audited Docker package mutation paths and found the same missing policy in initial apt installation, recovery `dpkg --configure -a`, and recovery apt installation.
-- [ ] Add repository regression tests that fail when initial installation or interrupted-transaction recovery omits the required dpkg conffile policy.
-- [ ] Apply one exact conffile policy to initial installation and both recovery configuration paths.
-- [ ] Run the focused Docker repository-safe suite and the complete repository validation.
-- [ ] Review the remaining Docker provisioning path for related noninteractive package failures and correct any found issues.
+- [x] (2026-07-21) Added shell and TypeScript regression assertions for the exact apt/dpkg conffile policy, initial installation, and both recovery commands.
+- [x] (2026-07-21) Added shared exact-install and pending-configuration helpers and routed initial installation plus interrupted-transaction recovery through them.
+- [x] (2026-07-21) Fixed the stale-socket repository-safe fixture so it does not count the real runner's Docker apt key as fixture state after a failed host installation.
+- [x] (2026-07-21) Audited the remaining package mutations: apt metadata refresh and resolver simulation do not configure packages, while residual cleanup uses `dpkg --purge` and cannot present a replacement-conffile decision.
+- [x] (2026-07-21) Passed local focused validation: shell syntax, 9 Docker contract tests, Docker repository-safe helpers, and all three system scripts under a non-root user.
+- [ ] Run the complete exact-head repository validation in CI.
 - [ ] Record validation evidence, review the plan point by point, and move this plan to `docs/exec-plans/completed/`.
 
 ## Surprises & Discoveries
@@ -26,6 +28,8 @@ No workflow, public API, request contract, installation argument, routing, or Co
 - Observation: `DEBIAN_FRONTEND=noninteractive` suppresses debconf questions but does not answer dpkg conffile conflicts.
 - Observation: keeping the existing conffile is required because the provisioner creates and validates the final Docker and containerd configuration before package activation.
 - Observation: the reported failure publishes the `transaction` marker before apt runs. A retry therefore enters `docker_host_recover_transaction`, whose `dpkg --configure -a` and exact apt reinstall can reproduce the same prompt unless both use the same conffile policy.
+- Observation: the repository-safe stale-socket fixture read the real `/etc/apt/keyrings/docker.asc`. Once the failed installation had created that key, the socket-only fixture counted two remnants and failed before Codex could run. The fixture now treats all unrelated paths as absent inside its isolated subshell.
+- Observation: the previous package error told operators to make dpkg clean manually even though the transaction marker contains the exact recovery boundary. The message now instructs a rerun of `./update.sh`, which performs bounded recovery itself.
 
 ## Decision Log
 
@@ -37,15 +41,19 @@ No workflow, public API, request contract, installation argument, routing, or Co
   Rationale: the required behavior belongs only to the bounded Docker transaction owned by this provisioner.
   Date/Author: 2026-07-21 / implementation review.
 
+- Decision: centralize package configuration in `docker_debian_install_exact_packages` and `docker_debian_configure_pending_packages`.
+  Rationale: initial installation and recovery cannot silently drift to different conffile semantics, while apt update, simulation, and residual purge remain untouched.
+  Date/Author: 2026-07-21 / implementation review.
+
 ## Outcomes & Retrospective
 
-Pending implementation and validation.
+Implementation and focused validation are complete. Exact-head CI remains pending before this plan can be archived.
 
 ## Context and Orientation
 
-`scripts/docker-host-debian.sh` owns Debian repository validation, resolver inspection, and initial package installation. `docker_debian_install_components` currently runs apt with `DEBIAN_FRONTEND=noninteractive` but no dpkg conffile policy.
+`scripts/docker-host-debian.sh` owns Debian repository validation, resolver inspection, shared package-configuration helpers, and initial package installation. `docker_debian_install_components` invokes the shared exact-install helper after publishing the transaction marker.
 
-`scripts/docker-host.sh` owns interrupted transaction recovery. `docker_host_recover_transaction` currently runs `dpkg --configure -a` and an exact apt install with the same missing conffile policy. `test-system/docker-host.repository-safe.sh` is the repository-safe shell suite for Docker provisioning helpers and transaction boundaries.
+`scripts/docker-host.sh` owns interrupted transaction recovery. `docker_host_recover_transaction` invokes the shared pending-dpkg configuration helper and the same exact-install helper before validating the recorded package versions. `test-system/docker-host.repository-safe.sh` is the repository-safe shell suite for Docker provisioning helpers and transaction boundaries.
 
 The provisioner publishes exact `/etc/docker/daemon.json` and `/etc/containerd/config.toml` content before package activation. Replacing those files with package-maintainer versions would invalidate the selected persistent storage roots.
 
@@ -86,8 +94,12 @@ The change does not alter markers or phase transitions. Re-running `./update.sh`
 
 Local reproduction evidence:
 
-- upgrade without dpkg conffile options: exit 1, prompt printed, `end of file on stdin at conffile prompt`;
-- upgrade with `--force-confdef --force-confold` and stdin closed: exit 0, locally managed content preserved.
+- local apt upgrade without dpkg conffile options: exit 100, two conffile-prompt markers, and an incomplete package transaction;
+- the same apt upgrade with `Dpkg::Options::=--force-confdef` plus `Dpkg::Options::=--force-confold` and stdin closed: exit 0, locally managed content preserved;
+- `node --test dist/test/docker-host-contract.test.js`: 9 passed;
+- `bash test-system/docker-host.repository-safe.sh`: passed;
+- install, update, and Docker system scripts under a non-root user: passed;
+- full local Node coverage is not acceptance evidence because the available container executes as root and intentionally fails runner-only permission tests; exact-head CI is authoritative.
 
 ## Interfaces and Dependencies
 

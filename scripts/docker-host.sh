@@ -1048,11 +1048,11 @@ docker_host_recover_transaction() {
   docker_debian_recovery_dpkg_state_allowed "${package_state}" "${marker_packages}" \
     || docker_host_fail package "Interrupted dpkg state includes unrelated non-trigger package work"
   docker_host_install_policy
-  DEBIAN_FRONTEND=noninteractive LC_ALL=C LANG=C /usr/bin/dpkg --configure -a \
+  docker_debian_configure_pending_packages \
     || docker_host_fail package "Could not resume configuration of the recorded Docker transaction"
   local -a exact=()
   while IFS='|' read -r package status; do exact+=("${package}=${status}"); done < "${marker_packages}"
-  DEBIAN_FRONTEND=noninteractive LC_ALL=C LANG=C /usr/bin/apt-get --yes --no-install-recommends install "${exact[@]}" \
+  docker_debian_install_exact_packages "${exact[@]}" \
     || docker_host_fail package "Could not resume the recorded Docker package transaction"
   docker_debian_assert_clean_dpkg
   while IFS='|' read -r package status; do

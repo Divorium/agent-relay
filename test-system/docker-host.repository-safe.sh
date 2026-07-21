@@ -24,6 +24,15 @@ DOCKER_DEBIAN_CODENAME=trixie
 DOCKER_HOST_OWNER_UID=$(/usr/bin/id -u)
 DOCKER_HOST_OWNER_GID=$(/usr/bin/id -g)
 
+declare -p DOCKER_DEBIAN_DPKG_CONFFILE_OPTIONS >/dev/null 2>&1 \
+  || fail "Docker dpkg conffile policy is missing"
+declare -p DOCKER_DEBIAN_APT_CONFFILE_OPTIONS >/dev/null 2>&1 \
+  || fail "Docker apt conffile policy is missing"
+[[ "${DOCKER_DEBIAN_DPKG_CONFFILE_OPTIONS[*]}" == '--force-confdef --force-confold' ]] \
+  || fail "Docker dpkg conffile policy is not exact"
+[[ "${DOCKER_DEBIAN_APT_CONFFILE_OPTIONS[*]}" == '-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold' ]] \
+  || fail "Docker apt conffile policy is not exact"
+
 [[ "$(docker_host_daemon_content)" == $'{\n  "data-root": "/srv/github-runner/storage/docker/engine"\n}' ]] \
   || fail "managed Docker configuration content is wrong"
 [[ "$(docker_host_containerd_content)" == $'version = 2\nroot = "/srv/github-runner/storage/docker/containerd"' ]] \
@@ -1333,6 +1342,7 @@ DOCKER_HOST_SOCKET=${stale_socket}
 DOCKER_HOST_RUNTIME_SOCKET=${stale_socket}
 DOCKER_HOST_REMNANT_COUNT=0
 (
+  docker_host_path_absent() { return 0; }
   docker_host_inventory_cleanup_configuration() { : > "${DOCKER_HOST_STATE_ROOT}/cleanup-configuration-directories"; }
   docker_debian_inventory_cleanup_repository_files() { : > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-files"; : > "${DOCKER_HOST_STATE_ROOT}/cleanup-repository-stages.bin"; }
   docker_host_inventory_cleanup_plugins() { : > "${DOCKER_HOST_STATE_ROOT}/cleanup-plugin-entries.bin"; }

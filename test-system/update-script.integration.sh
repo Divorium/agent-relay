@@ -13,6 +13,7 @@ FAKE_BIN="${ROOT}/bin"
 COMMAND_LOG="${ROOT}/commands.log"
 DOCKER_LOG="${ROOT}/docker.log"
 TRANSFORMED_UPDATE="${ROOT}/update-under-test.sh"
+TRANSFORMED_MANAGED_UPDATE="${ROOT}/update-managed-under-test.sh"
 FAKE_TSC="${ROOT}/fake-tsc"
 DOCKER_PROVISIONER="${SOURCE_ROOT}/scripts/docker-host.sh"
 DOCKER_ADAPTER="${SOURCE_ROOT}/scripts/docker-host-debian.sh"
@@ -202,7 +203,7 @@ chmod 0755 "${FAKE_BIN}"/*
 
 SOURCE_ROOT="${SOURCE_ROOT}" BUILD_ROOT="${BUILD_ROOT}" BUILD_HOME="${BUILD_HOME}" \
 ADMIN_FILE="${ADMIN_FILE}" FAKE_TSC="${FAKE_TSC}" FAKE_BIN="${FAKE_BIN}" STICKY_TMP="${STICKY_TMP}" \
-python3 - update.sh "${TRANSFORMED_UPDATE}" <<'PY'
+python3 - update.sh "${TRANSFORMED_UPDATE}" "${TRANSFORMED_MANAGED_UPDATE}" <<'PY'
 import json
 import os
 import pathlib
@@ -235,8 +236,10 @@ source = source.replace('PROVISIONER_DEADLINE_STEPS=7200', 'PROVISIONER_DEADLINE
 source = source.replace('PROVISIONER_DEADLINE_SECONDS=1', 'PROVISIONER_DEADLINE_SECONDS=0')
 source = source.replace('SUDO_REFRESH_STEPS=15', 'SUDO_REFRESH_STEPS=1')
 pathlib.Path(sys.argv[2]).write_text(source)
+managed_source = source.replace('DOCKER_PROVISIONING_ENABLED=0', 'DOCKER_PROVISIONING_ENABLED=1', 1)
+pathlib.Path(sys.argv[3]).write_text(managed_source)
 PY
-chmod 0755 "${TRANSFORMED_UPDATE}"
+chmod 0755 "${TRANSFORMED_UPDATE}" "${TRANSFORMED_MANAGED_UPDATE}"
 
 assert_control_clean() {
   local leaked
@@ -256,7 +259,7 @@ run_update() {
     cd "${SOURCE_ROOT}"
     TMPDIR="${STICKY_TMP}" PATH="${FAKE_BIN}:${PATH}" MOCK_DOCKER_STATUS="${1:-0}" \
       MOCK_DOCKER_MODE="${2:-exit}" MOCK_SUDO_EXPIRE="${3:-0}" \
-      MOCK_SIGNAL_FAIL="${4:-0}" MOCK_PROTECTED_REGULAR=1 bash "${TRANSFORMED_UPDATE}"
+      MOCK_SIGNAL_FAIL="${4:-0}" MOCK_PROTECTED_REGULAR=1 bash "${6:-${TRANSFORMED_UPDATE}}"
   )
 }
 
@@ -275,16 +278,19 @@ test -f "${SOURCE_ROOT}/dist/src/run-codex.js"
 grep -Fq "${BUILD_ROOT}" "${COMMAND_LOG}"
 grep -Fq "tsc -p ${SOURCE_ROOT}/tsconfig.runtime.json --outDir ${SOURCE_ROOT}/dist" "${COMMAND_LOG}"
 grep -Fq "sudo -n -u agent-relay-builder /usr/bin/test -f ${PRIVATE_DIST}/src/run-codex.js" "${COMMAND_LOG}"
-grep -Eq "^pgid-file ${STICKY_TMP}/agent-relay-provisioner\.[^/]+/pgid$" "${COMMAND_LOG}"
-grep -Fq 'docker provisioner' "${DOCKER_LOG}"
+if grep -Fq 'pgid-file ' "${COMMAND_LOG}"; then
+  echo 'disabled updater created Docker provisioner control state' >&2
+  exit 1
+fi
+[[ ! -s "${DOCKER_LOG}" ]] || { echo 'disabled updater invoked Docker provisioning' >&2; exit 1; }
 grep -Fq 'systemctl stop actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
 grep -Fq 'systemctl enable actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
 grep -Fq 'systemctl start actions.runner.Divorium.gh-runner.service' "${COMMAND_LOG}"
-grep -Fq 'Update completed. Runner is active with the finalized runtime and Docker access.' "${ROOT}/success.out"
-[[ "$(/usr/bin/stat -c '%a' -- "${DOCKER_PROVISIONER}")" == 755 ]] \
-  || { echo 'update.sh did not remove group-write permission from the Docker provisioner' >&2; exit 1; }
-[[ "$(/usr/bin/stat -c '%a' -- "${DOCKER_ADAPTER}")" == 755 ]] \
-  || { echo 'update.sh did not remove group-write permission from the Docker adapter' >&2; exit 1; }
+grep -Fq 'Update completed. Runner is active with the finalized runtime. Docker provisioning is disabled.' "${ROOT}/success.out"
+[[ "$(/usr/bin/stat -c '%a' -- "${DOCKER_PROVISIONER}")" == 775 ]] \
+  || { echo 'disabled updater changed Docker provisioner permissions' >&2; exit 1; }
+[[ "$(/usr/bin/stat -c '%a' -- "${DOCKER_ADAPTER}")" == 775 ]] \
+  || { echo 'disabled updater changed Docker adapter permissions' >&2; exit 1; }
 assert_control_clean
 
 set +e
@@ -315,7 +321,7 @@ fi
 assert_control_clean
 
 set +e
-run_update 42 > "${ROOT}/failure.out" 2> "${ROOT}/failure.err"
+run_update 42 exit 0 0 1 "${TRANSFORMED_MANAGED_UPDATE}" > "${ROOT}/failure.out" 2> "${ROOT}/failure.err"
 failure_status=$?
 set -e
 if (( failure_status != 42 )); then
@@ -330,7 +336,7 @@ assert_control_clean
 
 rm -f -- "${ROOT}/provisioning"
 set +e
-run_update 0 hang 0 > "${ROOT}/deadline.out" 2> "${ROOT}/deadline.err"
+run_update 0 hang 0 0 1 "${TRANSFORMED_MANAGED_UPDATE}" > "${ROOT}/deadline.out" 2> "${ROOT}/deadline.err"
 deadline_status=$?
 set -e
 (( deadline_status == 70 )) || fail_status=1
@@ -345,7 +351,7 @@ assert_control_clean
 
 rm -f -- "${ROOT}/provisioning"
 set +e
-run_update 0 hang 1 > "${ROOT}/expiry.out" 2> "${ROOT}/expiry.err"
+run_update 0 hang 1 0 1 "${TRANSFORMED_MANAGED_UPDATE}" > "${ROOT}/expiry.out" 2> "${ROOT}/expiry.err"
 expiry_status=$?
 set -e
 if (( expiry_status == 0 )); then
@@ -362,7 +368,7 @@ assert_control_clean
 
 rm -f -- "${ROOT}/provisioning"
 set +e
-run_update 0 linger 0 1 > "${ROOT}/signal-failure.out" 2> "${ROOT}/signal-failure.err"
+run_update 0 linger 0 1 1 "${TRANSFORMED_MANAGED_UPDATE}" > "${ROOT}/signal-failure.out" 2> "${ROOT}/signal-failure.err"
 signal_failure_status=$?
 set -e
 if (( signal_failure_status != 70 )); then

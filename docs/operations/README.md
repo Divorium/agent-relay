@@ -78,9 +78,10 @@ Rerun the playbook after changing desired host state. The role manages named pat
 
 ## Initial runner installation
 
-Connect as the administrator created by Ansible:
+Connect as the administrator created by Ansible. Set a restrictive umask before creating the checkout so files are not group- or other-writable:
 
 ```bash
+umask 0022
 git clone <repository-url> /srv/github-runner/storage/agent-relay
 sudo -u github-runner -H /usr/local/bin/codex login
 cd /srv/github-runner/storage/agent-relay
@@ -92,6 +93,21 @@ Codex login is manual. `install.sh` neither performs nor verifies authentication
 On the first run, provide a GitHub credential that may create an organization runner registration token. A fine-grained token needs the organization `Self-hosted runners: write` permission. A classic PAT needs `admin:org` and, for a private repository, `repo`. The credential is exchanged for a short-lived registration token and is not stored by the installer.
 
 The installer validates Python 3, passwordless sudo, users, directories, toolchains, Docker, checkout ownership and the current runtime before mutation. It installs runner binaries and registration only when absent. It never calls Ansible, `apt`, `dpkg`, `useradd`, Docker provisioning, `installdependencies.sh` or Codex login.
+
+### Repair checkout permissions
+
+Git records whether a file is executable, but it does not preserve the difference between modes such as `0644` and `0664`. A permissive process umask can therefore create a checkout that `install.sh` correctly rejects as group- or other-writable.
+
+Repair an existing checkout explicitly, then keep `umask 0022` for future Git operations:
+
+```bash
+cd /srv/github-runner/storage/agent-relay
+umask 0022
+./scripts/secure-checkout-permissions.sh
+./install.sh
+```
+
+The repair command removes only group and other write bits from regular files and directories. It preserves executable bits and does not follow symlinks or cross filesystem boundaries.
 
 ## Release update
 
@@ -109,6 +125,7 @@ When host desired state changed, run the current playbook from the operator chec
 
 ```bash
 cd /srv/github-runner/storage/agent-relay
+umask 0022
 git pull --ff-only
 ./install.sh
 ```

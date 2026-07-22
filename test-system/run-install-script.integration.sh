@@ -44,6 +44,7 @@ sudo_install = r'''if [[ "\${1:-}" == install ]]; then
   done
   exec /usr/bin/install "\${install_args[@]}"
 fi
+if [[ "\${1:-}" == find && "\$*" == *'-exec chown '* ]]; then exit 0; fi
 if [[ "\${1:-}" == chown ]]; then exit 0; fi'''
 if source.count(sudo_marker) != 1:
     raise SystemExit("installer sudo fixture no longer matches the expected shape")

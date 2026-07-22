@@ -1,0 +1,151 @@
+---
+- name: Validate administrator variables
+  ansible.builtin.assert:
+    that:
+      - agent_relay_admin_user is match('^[a-z_][a-z0-9_-]*$')
+      - agent_relay_admin_user | length <= 32
+      - agent_relay_admin_user not in ['root', agent_relay_runner_user, agent_relay_builder_user]
+      - agent_relay_admin_authorized_keys is sequence
+      - agent_relay_admin_authorized_keys is not string
+      - agent_relay_admin_authorized_keys | length > 0
+      - agent_relay_extra_apt_packages is sequence
+      - agent_relay_extra_apt_packages is not string
+      - agent_relay_extra_apt_packages | intersect(agent_relay_docker_conflicting_packages) | length == 0
+    fail_msg: Configure a valid non-reserved administrator, SSH public keys, and non-conflicting package list.
+
+- name: Validate administrator public keys
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item | trim | length > 0
+      - "'\n' not in item"
+      - "'\r' not in item"
+    fail_msg: Each administrator authorized key must be one nonempty physical line.
+  loop: "{{ agent_relay_admin_authorized_keys }}"
+  no_log: true
+
+- name: Install repository bootstrap packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - python3
+      - python3-apt
+      - sudo
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create APT keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install NodeSource signing key
+  ansible.builtin.get_url:
+    url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+    dest: /etc/apt/keyrings/nodesource.asc
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure NodeSource repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/nodesource.sources
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      Types: deb
+      URIs: https://deb.nodesource.com/node_{{ agent_relay_node_major }}.x
+      Suites: nodistro
+      Components: main
+      Architectures: amd64
+      Signed-By: /etc/apt/keyrings/nodesource.asc
+
+- name: Install Adoptium signing key
+  ansible.builtin.get_url:
+    url: https://packages.adoptium.net/artifactory/api/gpg/key/public
+    dest: /etc/apt/keyrings/adoptium.asc
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure Adoptium repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/adoptium.sources
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      Types: deb
+      URIs: https://packages.adoptium.net/artifactory/deb
+      Suites: trixie
+      Components: main
+      Architectures: amd64
+      Signed-By: /etc/apt/keyrings/adoptium.asc
+
+- name: Install Docker signing key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/debian/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure Docker repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/docker.sources
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      Types: deb
+      URIs: https://download.docker.com/linux/debian
+      Suites: trixie
+      Components: stable
+      Architectures: amd64
+      Signed-By: /etc/apt/keyrings/docker.asc
+
+- name: Install host packages and configured extensions
+  ansible.builtin.apt:
+    name: "{{ (agent_relay_required_apt_packages + agent_relay_extra_apt_packages + ['nodejs', 'temurin-' ~ agent_relay_java_major ~ '-jdk']) | unique }}"
+    state: present
+    update_cache: true
+
+- name: Remove packages conflicting with Docker Engine
+  ansible.builtin.apt:
+    name: "{{ agent_relay_docker_conflicting_packages }}"
+    state: absent
+
+- name: Install Docker packages without premature service start
+  ansible.builtin.apt:
+    name:
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-ce
+      - docker-ce-cli
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+    policy_rc_d: 101
+
+- name: Create needrestart policy directory
+  ansible.builtin.file:
+    path: /etc/needrestart/conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Protect GitHub runner units from automatic needrestart restarts
+  ansible.builtin.copy:
+    dest: /etc/needrestart/conf.d/actions_runner_services.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: "$nrconf{override_rc}{qr(^actions\\.runner\\..+\\.service$)} = 0;\n"

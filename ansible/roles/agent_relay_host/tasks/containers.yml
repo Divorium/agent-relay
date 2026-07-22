@@ -1,0 +1,47 @@
+---
+- name: Create container configuration directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/docker
+    - /etc/containerd
+
+- name: Configure Docker daemon
+  ansible.builtin.template:
+    src: daemon.json.j2
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+  register: agent_relay_docker_config
+
+- name: Configure containerd
+  ansible.builtin.template:
+    src: containerd-config.toml.j2
+    dest: /etc/containerd/config.toml
+    owner: root
+    group: root
+    mode: "0644"
+  register: agent_relay_containerd_config
+
+- name: Enable and start containerd
+  ansible.builtin.systemd_service:
+    name: containerd.service
+    enabled: true
+    state: "{{ 'restarted' if agent_relay_containerd_config.changed else 'started' }}"
+
+- name: Enable and start Docker socket
+  ansible.builtin.systemd_service:
+    name: docker.socket
+    enabled: true
+    state: started
+
+- name: Enable and start Docker
+  ansible.builtin.systemd_service:
+    name: docker.service
+    enabled: true
+    state: "{{ 'restarted' if (agent_relay_docker_config.changed or agent_relay_containerd_config.changed) else 'started' }}"

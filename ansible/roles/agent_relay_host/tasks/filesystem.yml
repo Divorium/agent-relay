@@ -1,0 +1,65 @@
+---
+- name: Create root-owned directory roots
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ agent_relay_host_contract.base_root }}", mode: "0755" }
+    - { path: "{{ agent_relay_storage_root }}", mode: "0755" }
+    - { path: "{{ agent_relay_storage_root }}/docker", mode: "0711" }
+    - { path: "{{ agent_relay_docker_root }}", mode: "0711" }
+    - { path: "{{ agent_relay_containerd_root }}", mode: "0711" }
+    - { path: /var/lib/agent-relay, mode: "0755" }
+
+- name: Create administrator-owned source root
+  ansible.builtin.file:
+    path: "{{ agent_relay_source_root }}"
+    state: directory
+    owner: "{{ agent_relay_admin_user }}"
+    group: "{{ agent_relay_admin_user }}"
+    mode: "0755"
+    recurse: false
+
+- name: Create runner-owned paths
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ agent_relay_runner_user }}"
+    group: "{{ agent_relay_runner_user }}"
+    mode: "0700"
+    recurse: false
+  loop:
+    - "{{ agent_relay_runner_root }}"
+    - "{{ agent_relay_work_root }}"
+    - "{{ agent_relay_runner_home }}"
+
+- name: Create builder home
+  ansible.builtin.file:
+    path: "{{ agent_relay_build_home }}"
+    state: directory
+    owner: "{{ agent_relay_builder_user }}"
+    group: "{{ agent_relay_builder_user }}"
+    mode: "0700"
+    recurse: false
+
+- name: Create builder temporary directory
+  ansible.builtin.file:
+    path: "{{ agent_relay_build_home }}/tmp"
+    state: directory
+    owner: "{{ agent_relay_builder_user }}"
+    group: "{{ agent_relay_builder_user }}"
+    mode: "0700"
+    recurse: false
+
+- name: Create installer lock
+  ansible.builtin.file:
+    path: /var/lib/agent-relay/install.lock
+    state: touch
+    owner: "{{ agent_relay_admin_user }}"
+    group: "{{ agent_relay_admin_user }}"
+    mode: "0600"
+    access_time: preserve
+    modification_time: preserve

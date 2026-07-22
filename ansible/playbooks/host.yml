@@ -1,0 +1,40 @@
+---
+- name: Bootstrap and initialize the Agent Relay host
+  hosts: agent_relay
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - name: Bootstrap Python and python3-apt when absent
+      ansible.builtin.raw: |
+        if test -x /usr/bin/python3 && dpkg-query -W -f='${Status}' python3-apt 2>/dev/null | grep -q 'install ok installed'; then
+          printf 'PYTHON_PRESENT\n'
+        else
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends python3 python3-apt
+          printf 'PYTHON_INSTALLED\n'
+        fi
+      register: agent_relay_python_bootstrap
+      changed_when: "'PYTHON_INSTALLED' in agent_relay_python_bootstrap.stdout"
+
+    - name: Gather target facts
+      ansible.builtin.setup:
+
+    - name: Read PID 1 command
+      ansible.builtin.slurp:
+        src: /proc/1/comm
+      register: agent_relay_pid1
+
+    - name: Validate the supported host
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == 'Debian'
+          - ansible_facts.distribution_major_version == '13'
+          - ansible_facts.distribution_release == 'trixie'
+          - ansible_facts.architecture == 'x86_64'
+          - agent_relay_pid1.content | b64decode | trim == 'systemd'
+        fail_msg: Agent Relay supports only Debian 13 (trixie) x86-64 with systemd as PID 1.
+
+  roles:
+    - role: agent_relay_host

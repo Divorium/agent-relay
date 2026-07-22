@@ -1,0 +1,4 @@
+---
+agent_relay_admin_user: agent-relay-admin
+agent_relay_admin_authorized_keys: []
+agent_relay_extra_apt_packages: []

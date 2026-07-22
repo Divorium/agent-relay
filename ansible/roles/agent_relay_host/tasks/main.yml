@@ -1,0 +1,15 @@
+---
+- name: Install repositories and host packages
+  ansible.builtin.import_tasks: packages.yml
+
+- name: Create administrator and service users
+  ansible.builtin.import_tasks: users.yml
+
+- name: Create Agent Relay filesystem roots
+  ansible.builtin.import_tasks: filesystem.yml
+
+- name: Configure container services
+  ansible.builtin.import_tasks: containers.yml
+
+- name: Install Agent Relay toolchains
+  ansible.builtin.import_tasks: toolchains.yml

@@ -1,54 +1,15 @@
 # Agent Relay
 
-Agent Relay is designed to run on a dedicated systemd-capable Linux runner host. The Linux distribution, virtualization platform, cloud provider, and bare-metal placement are deployment details rather than part of the repository architecture contract.
+Agent Relay runs on a dedicated Debian 13 (Trixie) x86-64 systemd host with one organization-level GitHub Actions runner.
 
-This README describes the currently implemented repository and host behavior. Active ExecPlans describe proposed work. Completed ExecPlans are historical records and are not current architecture specifications.
+The setup is split deliberately:
 
-## Filesystem layout
+- [`ansible/README.md`](ansible/README.md) describes host initialization: users, packages, toolchains, directories and Docker;
+- [`docs/operations/README.md`](docs/operations/README.md) describes runner installation, releases and recovery;
+- [`docs/native-github-runner-specification.md`](docs/native-github-runner-specification.md) defines the technical runtime and privilege contracts.
 
-All Agent Relay and GitHub Runner application data is grouped under `/srv/github-runner/storage`:
+`install.sh` validates the prepared host, installs or reuses the GitHub runner, builds Agent Relay and activates the runner service. It never installs or invokes Ansible, installs host packages, creates users or authenticates Codex.
 
-```text
-/srv/github-runner/storage/agent-relay  administrator-owned source and root-owned compiled runtime
-/srv/github-runner/storage/work         github-runner-owned workflow workspaces
-/srv/github-runner/storage/runner       official GitHub Actions runner
-/srv/github-runner/storage/home         github-runner home and Codex authentication
-/srv/github-runner/storage/build        disposable update leftovers
-/srv/github-runner/storage/build-home   builder home
-```
+Shared runner, toolchain and host constants are defined once in [`config/runner-host.json`](config/runner-host.json).
 
-The current ownership and runtime contracts are specified in `docs/native-github-runner-specification.md`. Operator procedures are in `docs/operations/README.md`.
-
-Codex execution progress is normalized from its internal JSONL protocol into Actions-safe physical lines, redacted once, and streamed through a bounded backpressure-aware queue while Relay writes the same accepted bytes to the later `agent-relay-output` artifact transcript. The artifact becomes available after upload; `GITHUB_OUTPUT` remains reserved for workflow values rather than logs.
-
-The source checkout is owned by the host administrator. The `github-runner` service account can read it but cannot modify it and has no sudo access. Runtime compilation runs as the separate no-sudo `agent-relay-builder` account. The activated `dist` tree is owned by root.
-
-## First installation
-
-```bash
-cd /srv/github-runner/storage/agent-relay
-./install.sh
-./update.sh
-```
-
-`install.sh` performs one-time host and runner setup: it installs system dependencies, creates the isolated service accounts, registers the organization runner, configures the root-owned systemd unit, and performs Codex login for `github-runner`.
-
-The architecture does not require a particular hypervisor or host operating system outside the supported Linux/systemd contract. The current installer implementation supports Debian x86-64 and retains a WSL compatibility path; only that WSL path may require `wsl --shutdown` after enabling systemd.
-
-## Updates
-
-For every later release, update the checkout explicitly and then rebuild the runtime:
-
-```bash
-cd /srv/github-runner/storage/agent-relay
-git pull --ff-only
-./update.sh
-```
-
-The repository pipeline performs dependency installation, type checking, tests, coverage, syntax checks, system tests, production-runtime compilation validation, and the host toolchain smoke test. `update.sh` does not repeat that validation and performs no Git commands. It stops the runner listener, waits for the current `Runner.Worker` to finish, deletes the previous `dist`, compiles a new production runtime directly into `dist`, applies root ownership, and starts the runner.
-
-There is no runtime rollback or recovery transaction. If an update fails, correct the cause and run `./update.sh` again; every invocation deletes `dist` and builds it again from zero.
-
-## Documentation authority
-
-Current behavior is defined by the checked-out source, this README, `docs/native-github-runner-specification.md`, and `docs/operations/README.md`. Only an explicitly selected file under `docs/exec-plans/active/` is an implementation instruction. Files under `docs/exec-plans/completed/` are historical records.
+Codex output is normalized into Actions-safe `[codex] ` lines, redacted, streamed live and written to the `agent-relay-output` artifact. `${GITHUB_OUTPUT}` remains reserved for workflow outputs.

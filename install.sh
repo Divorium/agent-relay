@@ -1,170 +1,268 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ORGANIZATION=Divorium
-ORGANIZATION_URL=https://github.com/Divorium
-RUNNER_NAME=gh-runner
-RUNNER_VERSION=2.335.1
-RUNNER_SHA256=4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf
-GO_VERSION=1.24.5
-GO_SHA256=10ad9e86233e74c0f6590fe5426895de6bf388964210eac34a6d83f38918ecdc
-TYPESCRIPT_VERSION=5.8.3
-CODEX_VERSION=0.144.4
-BASE_ROOT=/srv/github-runner
+SOURCE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+HOST_CONFIG_FILE=${SOURCE_ROOT}/config/runner-host.json
+HOST_CONFIG_LOADER=${SOURCE_ROOT}/scripts/host-config.sh
+TOOLCHAIN_PROFILE=${SOURCE_ROOT}/scripts/toolchain-environment.sh
+HOST_TOOLCHAIN_CHECK=${SOURCE_ROOT}/scripts/host-toolchain-check.sh
+SCRATCH_PREFIX=/tmp/agent-relay-install.$$
+
+fail() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "Required command is missing: $1"
+}
+
+require_regular_file() {
+  local path=$1
+  [[ -f "${path}" && ! -L "${path}" ]] || fail "Required regular non-symlink file is missing: ${path}"
+}
+
+require_command python3
+require_regular_file "${HOST_CONFIG_FILE}"
+require_regular_file "${HOST_CONFIG_LOADER}"
+source "${HOST_CONFIG_LOADER}"
+host_config_load "${HOST_CONFIG_FILE}" || fail "Could not load ${HOST_CONFIG_FILE}"
+
 STORAGE_ROOT=${BASE_ROOT}/storage
 EXPECTED_SOURCE_ROOT=${STORAGE_ROOT}/agent-relay
 WORK_ROOT=${STORAGE_ROOT}/work
 RUNNER_DIR=${STORAGE_ROOT}/runner
 RUNNER_HOME=${STORAGE_ROOT}/home
-BUILD_ROOT=${STORAGE_ROOT}/build
 BUILD_HOME=${STORAGE_ROOT}/build-home
-RUNNER_USER=github-runner
-BUILD_USER=agent-relay-builder
-SERVICE_NAME=actions.runner.Divorium.gh-runner.service
-CONFIG_ROOT=/etc/agent-relay
-SOURCE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-TOOLCHAIN_PROFILE=${SOURCE_ROOT}/scripts/toolchain-environment.sh
+DOCKER_STORAGE_ROOT=${STORAGE_ROOT}/docker
+DOCKER_ROOT=${DOCKER_STORAGE_ROOT}/engine
+CONTAINERD_ROOT=${DOCKER_STORAGE_ROOT}/containerd
+SERVICE_NAME=actions.runner.${ORGANIZATION}.${RUNNER_NAME}.service
+LOCK_ROOT=/var/lib/agent-relay
+LOCK_FILE=${LOCK_ROOT}/install.lock
 
-node_setup=""
-java_key=""
-go_archive=""
-rustup_script=""
 runner_archive=""
-wsl_config_temp=""
 service_temp=""
-config_temp=""
+stage_dir=""
+lock_fd=""
 
 cleanup() {
-  rm -f -- \
-    "${node_setup:-}" \
-    "${java_key:-}" \
-    "${go_archive:-}" \
-    "${rustup_script:-}" \
-    "${runner_archive:-}" \
-    "${wsl_config_temp:-}" \
-    "${service_temp:-}" \
-    "${config_temp:-}"
+  local status=$?
+  if [[ -n "${stage_dir}" && -d "${stage_dir}" && ! -L "${stage_dir}" ]]; then
+    sudo -n rm -rf --one-file-system -- "${stage_dir}" >/dev/null 2>&1 || true
+  fi
+  rm -f -- "${runner_archive:-}" "${service_temp:-}" "${SCRATCH_PREFIX}".*
+  sudo -k >/dev/null 2>&1 || true
+  exit "${status}"
 }
 trap cleanup EXIT
 
-configure_wsl_systemd() {
-  wsl_config_temp="$(mktemp)"
-  if [[ -f /etc/wsl.conf ]]; then
-    awk '
-      BEGIN { in_boot = 0; saw_boot = 0; wrote_systemd = 0 }
-      /^\[boot\][[:space:]]*$/ {
-        in_boot = 1
-        saw_boot = 1
-        print
-        next
-      }
-      /^\[/ {
-        if (in_boot && !wrote_systemd) {
-          print "systemd=true"
-          wrote_systemd = 1
-        }
-        in_boot = 0
-      }
-      in_boot && /^[[:space:]]*systemd[[:space:]]*=/ {
-        if (!wrote_systemd) {
-          print "systemd=true"
-          wrote_systemd = 1
-        }
-        next
-      }
-      { print }
-      END {
-        if (in_boot && !wrote_systemd) {
-          print "systemd=true"
-        } else if (!saw_boot) {
-          print ""
-          print "[boot]"
-          print "systemd=true"
-        }
-      }
-    ' /etc/wsl.conf > "${wsl_config_temp}"
-  else
-    printf '[boot]\nsystemd=true\n' > "${wsl_config_temp}"
-  fi
-  sudo install -o root -g root -m 0644 "${wsl_config_temp}" /etc/wsl.conf
-  rm -f -- "${wsl_config_temp}"
-  wsl_config_temp=""
+new_scratch_file() {
+  mktemp "${SCRATCH_PREFIX}.XXXXXXXX"
 }
 
-ensure_locked_user() {
-  local user="$1"
-  local home="$2"
-  local shell="$3"
-  if ! id -u "${user}" >/dev/null 2>&1; then
-    sudo useradd --system --create-home --home-dir "${home}" --shell "${shell}" "${user}"
+stat_uid() { stat -c '%u' -- "$1"; }
+stat_gid() { stat -c '%g' -- "$1"; }
+stat_mode() { stat -c '%a' -- "$1"; }
+sudo_stat_uid() { sudo -n stat -c '%u' -- "$1"; }
+sudo_stat_mode() { sudo -n stat -c '%a' -- "$1"; }
+
+require_directory() {
+  local path=$1 owner_uid=$2 owner_gid=$3 mode=$4
+  [[ -d "${path}" && ! -L "${path}" ]] || fail "Required regular directory is missing: ${path}"
+  [[ "$(stat_uid "${path}")" == "${owner_uid}" ]] || fail "Unexpected owner for ${path}"
+  [[ "$(stat_gid "${path}")" == "${owner_gid}" ]] || fail "Unexpected group for ${path}"
+  [[ "$(stat_mode "${path}")" == "${mode}" ]] || fail "Unexpected mode for ${path}; expected ${mode}"
+}
+
+require_locked_account() {
+  local user=$1 expected_home=$2 expected_shell=$3
+  local passwd_entry status groups
+  passwd_entry="$(getent passwd "${user}")" || fail "Required account is missing: ${user}"
+  [[ "$(cut -d: -f6 <<<"${passwd_entry}")" == "${expected_home}" ]] || fail "Unexpected home for ${user}"
+  [[ "$(cut -d: -f7 <<<"${passwd_entry}")" == "${expected_shell}" ]] || fail "Unexpected shell for ${user}"
+  status="$(sudo -n passwd -S "${user}")" || fail "Could not inspect password status for ${user}"
+  [[ "$(awk '{print $2}' <<<"${status}")" == "L" ]] || fail "Account password must be locked: ${user}"
+  groups="$(id -nG "${user}")" || fail "Could not inspect groups for ${user}"
+  if grep -Eq '(^|[[:space:]])sudo([[:space:]]|$)' <<<"${groups}"; then
+    fail "Service account must not belong to sudo: ${user}"
   fi
-  [[ "$(getent passwd "${user}" | cut -d: -f6)" == "${home}" ]] || {
-    echo "${user} has an unexpected home directory" >&2
-    exit 1
-  }
-  sudo passwd --lock "${user}" >/dev/null
-  if getent group sudo | awk -F: -v user="${user}" '$4 ~ "(^|,)" user "(,|$)" { found=1 } END { exit !found }'; then
-    sudo gpasswd --delete "${user}" sudo >/dev/null
-  fi
-  if sudo -u "${user}" -H sudo -n true >/dev/null 2>&1; then
-    echo "${user} must not have passwordless sudo access" >&2
-    exit 1
+  if sudo -n -u "${user}" sudo -n true >/dev/null 2>&1; then
+    fail "Service account must not have passwordless sudo: ${user}"
   fi
 }
 
-secure_source_checkout() {
-  local owner="$1"
-  local group="$2"
-  local path
-  for path in \
-    install.sh \
-    update.sh \
-    runner/finalize.sh \
-    runner/resolve-pr.mjs \
-    runner/resolve-plan.mjs \
-    runner/resolve-request.mjs \
-    runner/run-codex.mjs \
-    scripts/codex-run \
-    scripts/docker-host.sh \
-    scripts/docker-host-debian.sh \
-    scripts/toolchain-environment.sh \
-    scripts/toolchain-smoke.sh; do
-    if [[ ! -f "${SOURCE_ROOT}/${path}" || -L "${SOURCE_ROOT}/${path}" ]]; then
-      echo "Required source file must be a regular non-symlink file: ${path}" >&2
-      exit 1
+validate_checkout() {
+  local admin_uid=$1 entry uid mode listing
+  local -a trusted=(
+    config/runner-host.json
+    install.sh
+    package.json
+    tsconfig.runtime.json
+    runner/finalize.sh
+    runner/resolve-pr.mjs
+    runner/resolve-plan.mjs
+    runner/resolve-request.mjs
+    runner/run-codex.mjs
+    scripts/codex-run
+    scripts/host-config.sh
+    scripts/host-toolchain-check.sh
+    scripts/toolchain-environment.sh
+    scripts/toolchain-smoke.sh
+  )
+
+  for entry in "${trusted[@]}"; do
+    require_regular_file "${SOURCE_ROOT}/${entry}"
+  done
+
+  listing="$(new_scratch_file)"
+  if ! find -P "${SOURCE_ROOT}" -xdev \
+    \( -path "${SOURCE_ROOT}/dist" -o -path "${SOURCE_ROOT}/dist/*" \
+       -o -path "${SOURCE_ROOT}/dist.previous" -o -path "${SOURCE_ROOT}/dist.previous/*" \
+       -o -path "${SOURCE_ROOT}/.dist.stage.*" -o -path "${SOURCE_ROOT}/.dist.stage.*/*" \) -prune \
+    -o -print0 >"${listing}"; then
+    fail "Could not inspect the source checkout"
+  fi
+  while IFS= read -r -d '' entry; do
+    uid="$(stat_uid "${entry}")"
+    mode="$(stat_mode "${entry}")"
+    [[ "${uid}" == "${admin_uid}" ]] || fail "Checkout entry is not administrator-owned: ${entry}"
+    if (( (8#${mode} & 8#022) != 0 )); then
+      fail "Checkout entry is writable by group or others: ${entry}"
+    fi
+  done <"${listing}"
+
+  local remote_url
+  remote_url="$(git -C "${SOURCE_ROOT}" remote get-url origin 2>/dev/null || true)"
+  if [[ -n "${remote_url}" && "${remote_url}" =~ ^https?://[^/]*@ ]]; then
+    fail "The Git remote URL must not contain embedded credentials"
+  fi
+}
+
+validate_runtime_tree() {
+  local root=$1 entry mode uid gid listing
+  [[ -d "${root}" && ! -L "${root}" ]] || fail "Runtime must be a regular directory: ${root}"
+  mountpoint -q "${root}" && fail "Runtime must not be a mount point: ${root}"
+  listing="$(new_scratch_file)"
+  if ! find -P "${root}" -xdev -print0 >"${listing}"; then
+    fail "Could not inspect runtime tree: ${root}"
+  fi
+  while IFS= read -r -d '' entry; do
+    mountpoint -q "${entry}" && fail "Runtime contains a mount point: ${entry}"
+    uid="$(stat_uid "${entry}")"
+    gid="$(stat_gid "${entry}")"
+    [[ "${uid}" == "0" && "${gid}" == "0" ]] || fail "Runtime entry is not root:root-owned: ${entry}"
+    if [[ -d "${entry}" ]]; then
+      mode="$(stat_mode "${entry}")"
+      [[ "${mode}" == "755" ]] || fail "Runtime directory has an unsafe mode: ${entry}"
+    elif [[ -f "${entry}" && ! -L "${entry}" ]]; then
+      mode="$(stat_mode "${entry}")"
+      [[ "${mode}" == "644" ]] || fail "Runtime file has an unsafe mode: ${entry}"
+    else
+      fail "Runtime contains a symlink or special file: ${entry}"
+    fi
+  done <"${listing}"
+}
+
+validate_stage_tree() {
+  local root=$1 entry listing
+  sudo -n test -d "${root}" || fail "Build stage is not a regular directory"
+  sudo -n test ! -L "${root}" || fail "Build stage must not be a symlink"
+  sudo -n mountpoint -q "${root}" && fail "Build stage must not be a mount point"
+  listing="$(new_scratch_file)"
+  if ! sudo -n find -P "${root}" -xdev -print0 >"${listing}"; then
+    fail "Could not inspect the build stage"
+  fi
+  while IFS= read -r -d '' entry; do
+    sudo -n mountpoint -q "${entry}" && fail "Build stage contains a mount point: ${entry}"
+    if sudo -n test -L "${entry}"; then
+      fail "Build stage contains a symlink: ${entry}"
+    fi
+    if ! sudo -n test -d "${entry}" && ! sudo -n test -f "${entry}"; then
+      fail "Build stage contains a special file: ${entry}"
+    fi
+  done <"${listing}"
+  sudo -n test -f "${root}/src/run-codex.js" || fail "Compiled entrypoint is missing from the build stage"
+  sudo -n test ! -L "${root}/src/run-codex.js" || fail "Compiled entrypoint must not be a symlink"
+}
+
+runner_binary_state() {
+  local -a required=(bin/Runner.Listener bin/Runner.Worker bin/runsvc.sh config.sh)
+  local path present=0 complete=1 runner_uid mode listing
+  runner_uid="$(id -u "${RUNNER_USER}")"
+  for path in "${required[@]}"; do
+    if sudo -n test -e "${RUNNER_DIR}/${path}" || sudo -n test -L "${RUNNER_DIR}/${path}"; then
+      present=1
+    fi
+    if ! sudo -n test -f "${RUNNER_DIR}/${path}" \
+      || sudo -n test -L "${RUNNER_DIR}/${path}" \
+      || ! sudo -n test -x "${RUNNER_DIR}/${path}"; then
+      complete=0
+    elif [[ "$(sudo_stat_uid "${RUNNER_DIR}/${path}")" != "${runner_uid}" ]]; then
+      complete=0
+    else
+      mode="$(sudo_stat_mode "${RUNNER_DIR}/${path}")"
+      if (( (8#${mode} & 8#022) != 0 )); then
+        complete=0
+      fi
     fi
   done
-  sudo find -P "${SOURCE_ROOT}" -xdev -exec chown -h "${owner}:${group}" {} +
-  sudo find -P "${SOURCE_ROOT}" -xdev -type d -exec chmod u+rwx,go+rx,go-w {} +
-  sudo find -P "${SOURCE_ROOT}" -xdev -type f -exec chmod a+r,go-w {} +
-  sudo chmod 0755 \
-    "${SOURCE_ROOT}/install.sh" \
-    "${SOURCE_ROOT}/update.sh" \
-    "${SOURCE_ROOT}/runner/finalize.sh" \
-    "${SOURCE_ROOT}/runner/resolve-pr.mjs" \
-    "${SOURCE_ROOT}/runner/resolve-plan.mjs" \
-    "${SOURCE_ROOT}/runner/resolve-request.mjs" \
-    "${SOURCE_ROOT}/runner/run-codex.mjs" \
-    "${SOURCE_ROOT}/scripts/codex-run" \
-    "${SOURCE_ROOT}/scripts/docker-host.sh" \
-    "${SOURCE_ROOT}/scripts/docker-host-debian.sh" \
-    "${SOURCE_ROOT}/scripts/toolchain-smoke.sh"
+  if (( complete == 1 )); then
+    printf 'complete\n'
+  elif (( present == 0 )); then
+    listing="$(new_scratch_file)"
+    if ! sudo -n find -P "${RUNNER_DIR}" -mindepth 1 -maxdepth 1 -print0 >"${listing}"; then
+      fail "Could not inspect the runner directory"
+    fi
+    if [[ ! -s "${listing}" ]]; then
+      printf 'absent\n'
+    else
+      printf 'partial\n'
+    fi
+  else
+    printf 'partial\n'
+  fi
+}
+
+registration_state() {
+  local -a files=(.runner .credentials .credentials_rsaparams)
+  local path present=0 complete=1 runner_uid mode
+  runner_uid="$(id -u "${RUNNER_USER}")"
+  for path in "${files[@]}"; do
+    if sudo -n test -e "${RUNNER_DIR}/${path}" || sudo -n test -L "${RUNNER_DIR}/${path}"; then
+      present=$((present + 1))
+    fi
+    if ! sudo -n test -f "${RUNNER_DIR}/${path}" || sudo -n test -L "${RUNNER_DIR}/${path}"; then
+      complete=0
+      continue
+    fi
+    mode="$(sudo_stat_mode "${RUNNER_DIR}/${path}")"
+    if [[ "$(sudo_stat_uid "${RUNNER_DIR}/${path}")" != "${runner_uid}" ]] || [[ "${mode}" != "600" ]]; then
+      complete=0
+    fi
+  done
+  if (( complete == 1 )); then
+    printf 'complete\n'
+  elif (( present == 0 )); then
+    printf 'absent\n'
+  else
+    printf 'partial\n'
+  fi
 }
 
 install_runner_service() {
-  sudo -u "${RUNNER_USER}" cp "${RUNNER_DIR}/bin/runsvc.sh" "${RUNNER_DIR}/runsvc.sh"
-  sudo -u "${RUNNER_USER}" chmod 0755 "${RUNNER_DIR}/runsvc.sh"
+  sudo -n -u "${RUNNER_USER}" install -m 0755 "${RUNNER_DIR}/bin/runsvc.sh" "${RUNNER_DIR}/runsvc.sh"
   service_temp="$(mktemp)"
-  cat > "${service_temp}" <<EOF_SERVICE
+  cat >"${service_temp}" <<EOF_SERVICE
 [Unit]
 Description=GitHub Actions Runner (${ORGANIZATION}.${RUNNER_NAME})
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=${RUNNER_DIR}/runsvc.sh
 User=${RUNNER_USER}
 WorkingDirectory=${RUNNER_DIR}
+ExecStart=${RUNNER_DIR}/runsvc.sh
 KillMode=process
 KillSignal=SIGTERM
 TimeoutStopSec=5min
@@ -174,208 +272,268 @@ RestartSec=5s
 [Install]
 WantedBy=multi-user.target
 EOF_SERVICE
-  sudo install -o root -g root -m 0644 "${service_temp}" "/etc/systemd/system/${SERVICE_NAME}"
-  rm -f -- "${service_temp}"
-  service_temp=""
+  if ! sudo -n test -f "/etc/systemd/system/${SERVICE_NAME}" \
+    || ! sudo -n cmp -s "${service_temp}" "/etc/systemd/system/${SERVICE_NAME}"; then
+    sudo -n install -o root -g root -m 0644 "${service_temp}" "/etc/systemd/system/${SERVICE_NAME}"
+    sudo -n systemctl daemon-reload
+  fi
+}
+
+wait_for_workers() {
+  local runner_uid process_table
+  runner_uid="$(id -u "${RUNNER_USER}")"
+  while true; do
+    process_table="$(ps -e -o euid=,comm=)" || fail "Could not inspect the process table"
+    if ! awk -v uid="${runner_uid}" '$1 == uid && $2 == "Runner.Worker" { found=1 } END { exit !found }' <<<"${process_table}"; then
+      return 0
+    fi
+    sleep 2
+  done
+}
+
+listener_ready() {
+  local runner_uid process_table
+  runner_uid="$(id -u "${RUNNER_USER}")"
+  process_table="$(ps -e -o euid=,comm=)" || return 1
+  awk -v uid="${runner_uid}" '$1 == uid && $2 == "Runner.Listener" { found=1 } END { exit !found }' <<<"${process_table}"
 }
 
 if (( $# != 0 )); then
-  echo "install.sh does not accept arguments" >&2
-  exit 1
+  fail "install.sh does not accept arguments"
 fi
 if [[ "$(id -u)" == "0" ]]; then
-  echo "Run install.sh as the normal Debian administrator, not root" >&2
-  exit 1
+  fail "Run install.sh as the Ansible-created administrator, not root"
 fi
-if [[ "$(uname -m)" != "x86_64" ]]; then
-  echo "Only Linux x86_64 is supported" >&2
-  exit 1
-fi
-if [[ ! -r /etc/os-release ]]; then
-  echo "/etc/os-release is required" >&2
-  exit 1
-fi
-. /etc/os-release
-if [[ "${ID:-}" != "debian" ]]; then
-  echo "This installer requires Debian" >&2
-  exit 1
-fi
-if [[ "${SOURCE_ROOT}" != "${EXPECTED_SOURCE_ROOT}" ]]; then
-  echo "The repository must be checked out at ${EXPECTED_SOURCE_ROOT}" >&2
-  exit 1
-fi
-if [[ ! -f "${TOOLCHAIN_PROFILE}" || -L "${TOOLCHAIN_PROFILE}" ]]; then
-  echo "Toolchain environment must be a regular non-symlink file" >&2
-  exit 1
-fi
+[[ "${SOURCE_ROOT}" == "${EXPECTED_SOURCE_ROOT}" ]] || fail "The repository must be checked out at ${EXPECTED_SOURCE_ROOT}"
+[[ ! -L "${SOURCE_ROOT}" ]] || fail "The source root must not be a symlink"
+
+python3 -c 'raise SystemExit(0)'
+require_command sudo
+sudo -n true || fail "The administrator requires passwordless sudo"
+require_command flock
+require_command find
+require_command stat
+require_command mountpoint
+require_command ps
+require_command git
+require_command curl
+require_command jq
+require_command sha256sum
+require_command tar
+require_command docker
+require_regular_file "${TOOLCHAIN_PROFILE}"
+require_regular_file "${HOST_TOOLCHAIN_CHECK}"
+[[ -x "${HOST_TOOLCHAIN_CHECK}" ]] || fail "Host toolchain check must be executable"
 source "${TOOLCHAIN_PROFILE}"
-command -v sudo >/dev/null || { echo "sudo is required" >&2; exit 1; }
-[[ -d "${HOME:?HOME is required}" && -w "${HOME}" ]] || { echo "HOME must be writable" >&2; exit 1; }
-[[ -r "${SOURCE_ROOT}/package.json" && -w "${SOURCE_ROOT}" ]] || {
-  echo "The source checkout must be readable and writable by the administrator: ${SOURCE_ROOT}" >&2
-  exit 1
-}
 
-admin_user="$(id -un)"
-admin_group="$(id -gn)"
-sudo -v
+[[ "$(uname -m)" == "x86_64" ]] || fail "Only x86-64 is supported"
+[[ -r /etc/os-release ]] || fail "/etc/os-release is required"
+# shellcheck disable=SC1091
+. /etc/os-release
+[[ "${ID:-}" == "debian" && "${VERSION_ID:-}" == "13" && "${VERSION_CODENAME:-}" == "trixie" ]] \
+  || fail "Debian 13 (trixie) is required"
+[[ "$(ps -p 1 -o comm= | tr -d '[:space:]')" == "systemd" ]] || fail "systemd must run as PID 1"
 
-systemd_active=1
-if [[ "$(ps -p 1 -o comm= | tr -d '[:space:]')" != "systemd" ]]; then
-  systemd_active=0
-  if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
-    configure_wsl_systemd
-  else
-    echo "systemd must run as PID 1" >&2
-    exit 1
-  fi
+admin_uid="$(id -u)"
+admin_gid="$(id -g)"
+[[ "$(stat_uid "${SOURCE_ROOT}")" == "${admin_uid}" ]] || fail "The invoking administrator must own ${SOURCE_ROOT}"
+[[ "$(stat_gid "${SOURCE_ROOT}")" == "${admin_gid}" ]] || fail "The source root must use the administrator primary group"
+[[ "$(stat_mode "${SOURCE_ROOT}")" == "755" ]] || fail "The source root must have mode 0755"
+
+require_directory "${LOCK_ROOT}" 0 0 755
+[[ -f "${LOCK_FILE}" && ! -L "${LOCK_FILE}" ]] || fail "The install lock must be a regular non-symlink file"
+[[ "$(stat_uid "${LOCK_FILE}")" == "${admin_uid}" ]] || fail "The administrator must own ${LOCK_FILE}"
+[[ "$(stat_mode "${LOCK_FILE}")" == "600" ]] || fail "The install lock must have mode 0600"
+exec {lock_fd}<>"${LOCK_FILE}"
+flock -n "${lock_fd}" || fail "Another install.sh invocation is active"
+
+runner_uid="$(id -u "${RUNNER_USER}")" || fail "Missing ${RUNNER_USER}"
+runner_gid="$(id -g "${RUNNER_USER}")"
+builder_uid="$(id -u "${BUILD_USER}")" || fail "Missing ${BUILD_USER}"
+builder_gid="$(id -g "${BUILD_USER}")"
+require_locked_account "${RUNNER_USER}" "${RUNNER_HOME}" /bin/bash
+require_locked_account "${BUILD_USER}" "${BUILD_HOME}" /usr/sbin/nologin
+require_directory "${BASE_ROOT}" 0 0 755
+require_directory "${STORAGE_ROOT}" 0 0 755
+require_directory "${RUNNER_DIR}" "${runner_uid}" "${runner_gid}" 700
+require_directory "${WORK_ROOT}" "${runner_uid}" "${runner_gid}" 700
+require_directory "${RUNNER_HOME}" "${runner_uid}" "${runner_gid}" 700
+require_directory "${BUILD_HOME}" "${builder_uid}" "${builder_gid}" 700
+require_directory "${BUILD_HOME}/tmp" "${builder_uid}" "${builder_gid}" 700
+require_directory "${DOCKER_STORAGE_ROOT}" 0 0 711
+require_directory "${DOCKER_ROOT}" 0 0 711
+require_directory "${CONTAINERD_ROOT}" 0 0 711
+require_regular_file /etc/docker/daemon.json
+require_regular_file /etc/containerd/config.toml
+[[ "$(stat_uid /etc/docker/daemon.json)" == "0" && "$(stat_gid /etc/docker/daemon.json)" == "0" \
+  && "$(stat_mode /etc/docker/daemon.json)" == "644" ]] \
+  || fail "Docker daemon configuration has unexpected ownership or mode"
+[[ "$(stat_uid /etc/containerd/config.toml)" == "0" && "$(stat_gid /etc/containerd/config.toml)" == "0" \
+  && "$(stat_mode /etc/containerd/config.toml)" == "644" ]] \
+  || fail "containerd configuration has unexpected ownership or mode"
+
+PATH="${TOOLCHAIN_PATH}" \
+JAVA_HOME="${TOOLCHAIN_JAVA_HOME}" \
+RUSTUP_HOME="${TOOLCHAIN_RUSTUP_HOME}" \
+CARGO_HOME="${TOOLCHAIN_RUST_CARGO_HOME}" \
+TOOLCHAIN_JAVA_HOME="${TOOLCHAIN_JAVA_HOME}" \
+TOOLCHAIN_GO_ROOT="${TOOLCHAIN_GO_ROOT}" \
+TOOLCHAIN_RUST_BIN="${TOOLCHAIN_RUST_BIN}" \
+TOOLCHAIN_RUSTUP_HOME="${TOOLCHAIN_RUSTUP_HOME}" \
+TOOLCHAIN_RUST_CARGO_HOME="${TOOLCHAIN_RUST_CARGO_HOME}" \
+EXPECTED_NODE_MAJOR="${NODE_MAJOR}" \
+EXPECTED_JAVA_MAJOR="${JAVA_MAJOR}" \
+EXPECTED_GO_VERSION="${GO_VERSION}" \
+EXPECTED_RUST_TOOLCHAIN="${RUST_TOOLCHAIN}" \
+EXPECTED_TYPESCRIPT_VERSION="${TYPESCRIPT_VERSION}" \
+EXPECTED_CODEX_VERSION="${CODEX_VERSION}" \
+"${HOST_TOOLCHAIN_CHECK}"
+
+sudo -n -u "${RUNNER_USER}" -H docker info >/dev/null || fail "${RUNNER_USER} cannot access Docker"
+sudo -n -u "${RUNNER_USER}" -H docker compose version >/dev/null || fail "Docker Compose plugin is unavailable"
+[[ "$(sudo -n -u "${RUNNER_USER}" -H docker info --format '{{.DockerRootDir}}')" == "${DOCKER_ROOT}" ]] \
+  || fail "Docker uses an unexpected data root"
+grep -Eq '^[[:space:]]*root[[:space:]]*=[[:space:]]*"'"${CONTAINERD_ROOT}"'"[[:space:]]*$' /etc/containerd/config.toml \
+  || fail "containerd uses an unexpected root"
+
+validate_checkout "${admin_uid}"
+if [[ -e "${SOURCE_ROOT}/dist" || -L "${SOURCE_ROOT}/dist" ]]; then
+  validate_runtime_tree "${SOURCE_ROOT}/dist"
+fi
+if [[ -e "${SOURCE_ROOT}/dist.previous" || -L "${SOURCE_ROOT}/dist.previous" ]]; then
+  fail "dist.previous exists; follow the documented interrupted-swap recovery procedure"
 fi
 
-sudo apt-get update
-sudo apt-get install -y --no-install-recommends \
-  ca-certificates curl wget jq git git-lfs gnupg sudo \
-  python3 python3-pip python3-venv \
-  build-essential clang cmake pkg-config \
-  zip unzip xz-utils zstd file findutils diffutils
-curl -fsS --max-time 20 https://api.github.com/meta >/dev/null
+binary_state="$(runner_binary_state)"
+case "${binary_state}" in
+  absent)
+    runner_archive="$(mktemp)"
+    curl -fsSL --retry 3 \
+      "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
+      -o "${runner_archive}"
+    printf '%s  %s\n' "${RUNNER_SHA256}" "${runner_archive}" | sha256sum -c -
+    sudo -n -u "${RUNNER_USER}" tar -C "${RUNNER_DIR}" -xzf - < "${runner_archive}"
+    [[ "$(runner_binary_state)" == "complete" ]] || fail "Runner archive extraction did not produce a complete runner payload"
+    ;;
+  complete) ;;
+  *) fail "Runner binaries are partial or conflicting; rebuild the host or remove the state deliberately" ;;
+esac
 
-if [[ ! -x /usr/bin/node ]] || [[ "$(/usr/bin/node --version)" != v22.* ]]; then
-  node_setup="$(mktemp)"
-  curl -fsSL https://deb.nodesource.com/setup_22.x -o "${node_setup}"
-  sudo -E bash "${node_setup}"
-  sudo apt-get install -y nodejs
-fi
-[[ -x /usr/bin/npm ]] || { echo "System npm is required after Node.js installation" >&2; exit 1; }
-
-if [[ ! -x /usr/bin/java || ! -x /usr/bin/javac ]] \
-  || ! /usr/bin/java -version 2>&1 | /usr/bin/head -n 1 | grep -Eq 'version "21\.|openjdk 21'; then
-  java_key="$(mktemp)"
-  curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public -o "${java_key}"
-  sudo install -d -m 0755 /etc/apt/keyrings
-  gpg --dearmor < "${java_key}" | sudo tee /etc/apt/keyrings/adoptium.gpg >/dev/null
-  printf 'deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb %s main\n' "${VERSION_CODENAME}" \
-    | sudo tee /etc/apt/sources.list.d/adoptium.list >/dev/null
-  sudo apt-get update
-  sudo apt-get install -y temurin-21-jdk
-fi
-java_home="$(dirname "$(dirname "$(readlink -f /usr/bin/javac)")")"
-sudo install -d -m 0755 "$(dirname "${TOOLCHAIN_JAVA_HOME}")"
-sudo ln -sfn "${java_home}" "${TOOLCHAIN_JAVA_HOME}"
-
-if [[ ! -x "${TOOLCHAIN_GO_ROOT}/bin/go" ]] || [[ "$("${TOOLCHAIN_GO_ROOT}/bin/go" version)" != *"go${GO_VERSION}"* ]]; then
-  go_archive="$(mktemp)"
-  curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o "${go_archive}"
-  printf '%s  %s\n' "${GO_SHA256}" "${go_archive}" | sha256sum -c -
-  sudo rm -rf "${TOOLCHAIN_GO_ROOT}"
-  sudo tar -C "$(dirname "${TOOLCHAIN_GO_ROOT}")" -xzf "${go_archive}"
-fi
-
-if [[ ! -x "${TOOLCHAIN_RUST_BIN}/rustc" ]]; then
-  rustup_script="$(mktemp)"
-  curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o "${rustup_script}"
-  sudo install -d -m 0755 "${TOOLCHAIN_RUST_CARGO_HOME}" "${TOOLCHAIN_RUSTUP_HOME}"
-  sudo env CARGO_HOME="${TOOLCHAIN_RUST_CARGO_HOME}" RUSTUP_HOME="${TOOLCHAIN_RUSTUP_HOME}" \
-    sh "${rustup_script}" -y --default-toolchain stable --profile minimal --no-modify-path
-fi
-for tool in cargo rustc rustdoc rustup; do
-  sudo ln -sfn "${TOOLCHAIN_RUST_BIN}/${tool}" "/usr/local/bin/${tool}"
-done
-
-sudo /usr/bin/npm install --global --prefix /usr/local \
-  "typescript@${TYPESCRIPT_VERSION}" \
-  "@openai/codex@${CODEX_VERSION}"
-[[ -x /usr/local/bin/codex ]] || { echo "Codex was not installed at /usr/local/bin/codex" >&2; exit 1; }
-[[ -x /usr/local/bin/tsc ]] || { echo "TypeScript was not installed at /usr/local/bin/tsc" >&2; exit 1; }
-sudo git lfs install --system
-
-ensure_locked_user "${RUNNER_USER}" "${RUNNER_HOME}" /bin/bash
-ensure_locked_user "${BUILD_USER}" "${BUILD_HOME}" /usr/sbin/nologin
-
-sudo install -d -o root -g root -m 0755 "${BASE_ROOT}" "${STORAGE_ROOT}"
-sudo install -d -o "${RUNNER_USER}" -g "${RUNNER_USER}" -m 0700 "${RUNNER_HOME}" "${RUNNER_DIR}" "${WORK_ROOT}"
-sudo install -d -o "${BUILD_USER}" -g "${BUILD_USER}" -m 0700 "${BUILD_ROOT}" "${BUILD_HOME}"
-git -C "${SOURCE_ROOT}" config core.fileMode false
-secure_source_checkout "${admin_user}" "${admin_group}"
-
-if [[ -f "${RUNNER_DIR}/.runner" && ! -x "${RUNNER_DIR}/bin/Runner.Listener" ]]; then
-  echo "The existing runner registration is incomplete: ${RUNNER_DIR}" >&2
-  exit 1
-fi
-
-if [[ ! -x "${RUNNER_DIR}/bin/Runner.Listener" ]]; then
-  runner_archive="$(mktemp)"
-  curl -fsSL \
-    "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
-    -o "${runner_archive}"
-  printf '%s  %s\n' "${RUNNER_SHA256}" "${runner_archive}" | sha256sum -c -
-  sudo -u "${RUNNER_USER}" tar -C "${RUNNER_DIR}" -xzf - < "${runner_archive}"
-  sudo "${RUNNER_DIR}/bin/installdependencies.sh"
-fi
-if [[ -L "${RUNNER_DIR}/_work" ]]; then
-  [[ "$(readlink "${RUNNER_DIR}/_work")" == ../work ]] || {
-    echo "The runner work link points to an unexpected location" >&2
-    exit 1
-  }
-elif [[ -e "${RUNNER_DIR}/_work" ]]; then
-  echo "The runner work path must be the managed symlink: ${RUNNER_DIR}/_work" >&2
-  exit 1
+if sudo -n test -L "${RUNNER_DIR}/_work"; then
+  [[ "$(sudo -n readlink "${RUNNER_DIR}/_work")" == ../work ]] || fail "The runner work link points to an unexpected location"
+elif sudo -n test -e "${RUNNER_DIR}/_work"; then
+  fail "The runner work path must be the managed symlink"
 else
-  sudo -u "${RUNNER_USER}" ln -s ../work "${RUNNER_DIR}/_work"
+  sudo -n -u "${RUNNER_USER}" ln -s ../work "${RUNNER_DIR}/_work"
 fi
 
-if [[ ! -f "${RUNNER_DIR}/.runner" ]]; then
-  set +x
-  printf 'GitHub token for organization runner registration: ' >&2
-  IFS= read -r -s github_token
-  printf '\n' >&2
-  [[ -n "${github_token}" ]] || { echo "GitHub token is required" >&2; exit 1; }
-
-  if ! registration_response="$(
-    printf 'Authorization: Bearer %s\n' "${github_token}" \
-      | curl -fsSL -X POST \
-          -H 'Accept: application/vnd.github+json' \
-          -H @- \
-          -H 'X-GitHub-Api-Version: 2026-03-10' \
-          "https://api.github.com/orgs/${ORGANIZATION}/actions/runners/registration-token"
-  )"; then
+registration="$(registration_state)"
+case "${registration}" in
+  absent)
+    set +x
+    printf 'GitHub credential authorized to create organization runner registration tokens: ' >&2
+    IFS= read -r -s github_token
+    printf '\n' >&2
+    [[ -n "${github_token}" ]] || fail "GitHub credential is required"
+    if ! registration_response="$(
+      printf 'Authorization: Bearer %s\n' "${github_token}" \
+        | curl -fsSL --retry 3 -X POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H @- \
+            -H "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
+            "https://api.github.com/orgs/${ORGANIZATION}/actions/runners/registration-token"
+    )"; then
+      unset github_token
+      fail "Could not obtain a GitHub runner registration token"
+    fi
     unset github_token
-    echo "Could not obtain a GitHub runner registration token" >&2
-    exit 1
-  fi
-  unset github_token
-  registration_token="$(jq -er '.token' <<< "${registration_response}")"
-  unset registration_response
-  sudo -u "${RUNNER_USER}" -H bash -c '
-    set -euo pipefail
-    cd "$1"
-    ./config.sh --unattended --replace --url "$2" --token "$3" --name "$4" --work _work
-  ' -- "${RUNNER_DIR}" "${ORGANIZATION_URL}" "${registration_token}" "${RUNNER_NAME}"
-  unset registration_token
-fi
+    registration_token="$(jq -er '.token' <<<"${registration_response}")"
+    unset registration_response
+    sudo -n -u "${RUNNER_USER}" -H bash -c '
+      set -euo pipefail
+      umask 0077
+      cd "$1"
+      ./config.sh --unattended --replace --url "$2" --token "$3" --name "$4" --work _work
+    ' -- "${RUNNER_DIR}" "${ORGANIZATION_URL}" "${registration_token}" "${RUNNER_NAME}"
+    unset registration_token
+    sudo -n -u "${RUNNER_USER}" chmod 0600 \
+      "${RUNNER_DIR}/.runner" \
+      "${RUNNER_DIR}/.credentials" \
+      "${RUNNER_DIR}/.credentials_rsaparams"
+    [[ "$(registration_state)" == "complete" ]] || fail "Runner registration did not produce the complete protected state"
+    ;;
+  complete) ;;
+  *) fail "Runner registration is partial or conflicting; rebuild the host or remove the state deliberately" ;;
+esac
 
 install_runner_service
-sudo install -d -m 0755 /etc/needrestart/conf.d "${CONFIG_ROOT}"
-printf '%s\n' '$nrconf{override_rc}{qr(^actions\.runner\..+\.service$)} = 0;' \
-  | sudo tee /etc/needrestart/conf.d/actions_runner_services.conf >/dev/null
-config_temp="$(mktemp)"
-printf '%s\n' "${admin_user}" > "${config_temp}"
-sudo install -o root -g root -m 0644 "${config_temp}" "${CONFIG_ROOT}/administrator"
-rm -f -- "${config_temp}"
-config_temp=""
 
-if ! sudo -u "${RUNNER_USER}" -H /usr/local/bin/codex login status >/dev/null 2>&1; then
-  sudo -u "${RUNNER_USER}" -H /usr/local/bin/codex login
-fi
-sudo -u "${RUNNER_USER}" -H /usr/local/bin/codex login status >/dev/null
+for stale_stage in "${SOURCE_ROOT}"/.dist.stage.*; do
+  [[ -e "${stale_stage}" || -L "${stale_stage}" ]] || continue
+  [[ -d "${stale_stage}" && ! -L "${stale_stage}" ]] || fail "Unsafe stale build stage: ${stale_stage}"
+  mountpoint -q "${stale_stage}" && fail "Stale build stage is a mount point: ${stale_stage}"
+  stale_uid="$(stat_uid "${stale_stage}")"
+  [[ "${stale_uid}" == "${builder_uid}" || "${stale_uid}" == "0" ]] || fail "Unexpected stale stage owner: ${stale_stage}"
+  sudo -n rm -rf --one-file-system -- "${stale_stage}"
+done
 
-if (( systemd_active == 1 )); then
-  sudo systemctl daemon-reload
-  printf 'Installation completed. Run `./update.sh` to validate and activate the runner.\n'
-else
-  cat >&2 <<'MESSAGE'
-Installation completed and systemd was enabled in /etc/wsl.conf.
-Run `wsl --shutdown` from Windows, start Debian again, and then run `./update.sh`.
-MESSAGE
+stage_dir="$(mktemp -d "${SOURCE_ROOT}/.dist.stage.XXXXXXXX")"
+sudo -n chown "${BUILD_USER}:${BUILD_USER}" "${stage_dir}"
+sudo -n chmod 0700 "${stage_dir}"
+build_environment=(
+  "HOME=${BUILD_HOME}"
+  "USER=${BUILD_USER}"
+  "LOGNAME=${BUILD_USER}"
+  "SHELL=/usr/sbin/nologin"
+  "LANG=C.UTF-8"
+  "LC_ALL=C.UTF-8"
+  "TMPDIR=${BUILD_HOME}/tmp"
+  "TMP=${BUILD_HOME}/tmp"
+  "TEMP=${BUILD_HOME}/tmp"
+  "PATH=${TOOLCHAIN_PATH}"
+)
+sudo -n -u "${BUILD_USER}" /usr/bin/env -i "${build_environment[@]}" \
+  /usr/local/bin/tsc -p "${SOURCE_ROOT}/tsconfig.runtime.json" --outDir "${stage_dir}"
+validate_stage_tree "${stage_dir}"
+sudo -n -u "${BUILD_USER}" /usr/bin/env -i "${build_environment[@]}" \
+  STAGED_ENTRYPOINT="file://${stage_dir}/src/run-codex.js" \
+  /usr/bin/node --input-type=module -e 'await import(process.env.STAGED_ENTRYPOINT)'
+
+sudo -n find -P "${stage_dir}" -xdev -exec chown -h root:root {} +
+sudo -n find -P "${stage_dir}" -xdev -type d -exec chmod 0755 {} +
+sudo -n find -P "${stage_dir}" -xdev -type f -exec chmod 0644 {} +
+validate_runtime_tree "${stage_dir}"
+
+if sudo -n systemctl is-active --quiet "${SERVICE_NAME}"; then
+  sudo -n systemctl stop "${SERVICE_NAME}"
 fi
-sudo -k
-printf 'Native runner installation is prepared: %s (%s)\n' "${RUNNER_NAME}" "${ORGANIZATION_URL}"
+wait_for_workers
+
+if [[ -d "${SOURCE_ROOT}/dist" && ! -L "${SOURCE_ROOT}/dist" ]]; then
+  sudo -n mv -- "${SOURCE_ROOT}/dist" "${SOURCE_ROOT}/dist.previous"
+fi
+if ! sudo -n mv -- "${stage_dir}" "${SOURCE_ROOT}/dist"; then
+  if [[ ! -e "${SOURCE_ROOT}/dist" && -d "${SOURCE_ROOT}/dist.previous" && ! -L "${SOURCE_ROOT}/dist.previous" ]]; then
+    sudo -n mv -- "${SOURCE_ROOT}/dist.previous" "${SOURCE_ROOT}/dist"
+  fi
+  fail "Could not activate the staged runtime"
+fi
+stage_dir=""
+validate_runtime_tree "${SOURCE_ROOT}/dist"
+if [[ -d "${SOURCE_ROOT}/dist.previous" && ! -L "${SOURCE_ROOT}/dist.previous" ]]; then
+  sudo -n rm -rf --one-file-system -- "${SOURCE_ROOT}/dist.previous"
+fi
+
+sudo -n systemctl enable "${SERVICE_NAME}"
+sudo -n systemctl restart "${SERVICE_NAME}"
+ready=0
+for _ in $(seq 1 60); do
+  if sudo -n systemctl is-active --quiet "${SERVICE_NAME}" && listener_ready; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+(( ready == 1 )) || fail "Runner service did not become ready within 60 seconds"
+
+printf 'Agent Relay runner installation is active: %s (%s)\n' "${RUNNER_NAME}" "${ORGANIZATION_URL}"

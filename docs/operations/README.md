@@ -12,8 +12,44 @@ On the control machine:
 cd ansible
 cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml
 $EDITOR inventory/example.ini inventory/group_vars/all.yml
-ansible-playbook -i inventory/example.ini playbooks/host.yml
 ```
+
+For a checkout on a native Linux filesystem, run:
+
+```bash
+ansible-playbook \
+  --inventory "$PWD/inventory/example.ini" \
+  "$PWD/playbooks/host.yml"
+```
+
+### WSL checkout on a mounted Windows drive
+
+Directories such as `/mnt/f` may be reported as world-writable. In that case Ansible deliberately ignores automatic discovery of the repository `ansible.cfg`, so the role path must be supplied explicitly.
+
+From the repository `ansible` directory, run the variables and command as one invocation:
+
+```bash
+ANSIBLE_CONFIG="$PWD/ansible.cfg" \
+ANSIBLE_ROLES_PATH="$PWD/roles" \
+ansible-playbook \
+  --inventory "$PWD/inventory/runners.ini" \
+  "$PWD/playbooks/host.yml"
+```
+
+Replace `inventory/runners.ini` with the configured inventory filename when different.
+
+Alternatively, export both variables before running Ansible:
+
+```bash
+export ANSIBLE_CONFIG="$PWD/ansible.cfg"
+export ANSIBLE_ROLES_PATH="$PWD/roles"
+
+ansible-playbook \
+  --inventory "$PWD/inventory/runners.ini" \
+  "$PWD/playbooks/host.yml"
+```
+
+Assigning `ANSIBLE_CONFIG` or `ANSIBLE_ROLES_PATH` on separate lines without `export` does not pass them to the `ansible-playbook` process.
 
 Use `ansible-core >= 2.18`. SSH host-key checking remains enabled. Do not commit private keys, passwords, GitHub tokens or Codex credentials.
 

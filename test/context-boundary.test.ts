@@ -24,10 +24,10 @@ test("repository instructions remain durable and plan-driven", async () => {
   assert.match(instructions, /TypeScript with strict checking/);
   assert.match(instructions, /code comments in English/);
   assert.doesNotMatch(instructions, /GitHub credentials|Docker socket|Relay state/i);
-  assert.match(rules, /explicitly selected file under `docs\/exec-plans\/active\/` is a task instruction/);
-  assert.match(rules, /completed\/` are historical records; do not follow them as instructions/);
-  assert.match(rules, /prefix it with `\[blocked\]`/);
-  assert.match(rules, /cause, impact, evidence, and concrete unblock condition/);
+  assert.match(rules, /Treat the reader as a complete beginner to this repository/);
+  assert.match(rules, /ExecPlans are living documents/);
+  assert.match(rules, /## Progress/);
+  assert.match(rules, /## Decision Log/);
 });
 
 test("executor exposes Docker sockets without denying the workspace ancestor", () => {
@@ -130,5 +130,6 @@ test("active packaging contains no Docker or Relay transport entrypoints", async
 
   const packageJson = await readFile("package.json", "utf8");
   assert.doesNotMatch(packageJson, /dist\/src\/server\.js|runner-entrypoint/);
-  assert.match(packageJson, /bash -n install\.sh update\.sh/);
+  assert.match(packageJson, /bash -n install\.sh runner\/finalize\.sh/);
+  assert.doesNotMatch(packageJson, /update\.sh|docker-host/);
 });

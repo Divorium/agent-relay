@@ -19,19 +19,14 @@ source = source_path.read_text()
 write_marker = "path.write_text(source)\nPY"
 if source.count(write_marker) != 1:
     raise SystemExit("installer integration generator no longer matches the expected shape")
-fixture_patch = r'''old_lock_case = '    "${LOCK_FILE}") echo 1000 ;;'
-new_lock_case = '    "${LOCK_ROOT}"|"${LOCK_FILE}") echo 1000 ;;'
-if source.count(old_lock_case) != 2:
+fixture_patch = r'''lock_file_case = '    "${LOCK_FILE}") echo 1000 ;;'
+lock_root_case = '    "${LOCK_ROOT}") echo 0 ;;\n' + lock_file_case
+if source.count(lock_file_case) != 2:
     raise SystemExit("installer ownership fixture no longer matches the expected shape")
-source = source.replace(old_lock_case, new_lock_case)
+source = source.replace(lock_file_case, lock_root_case)
 path.write_text(source)
 PY'''
-source = source.replace(write_marker, fixture_patch)
-installer_call = 'bash "${source_root}/install.sh"'
-if source.count(installer_call) != 2:
-    raise SystemExit("installer invocation no longer matches the expected shape")
-source = source.replace(installer_call, 'bash -x "${source_root}/install.sh"')
-staged_path.write_text(source)
+staged_path.write_text(source.replace(write_marker, fixture_patch))
 PY
 
 chmod 0755 "${staged_test}"

@@ -2,7 +2,7 @@
 
 ## Scope and authority
 
-Agent Relay runs on a dedicated Debian 13 (Trixie) x86-64 systemd host. Host initialization is declarative Ansible state; runner installation and runtime activation are performed by one reusable `install.sh`.
+Agent Relay runs on a dedicated Debian 13 (Trixie) x86-64 systemd host. Host initialization and deployment orchestration are declarative Ansible state; runner installation and runtime activation are performed by one reusable `install.sh` invoked by Ansible.
 
 There is no Relay HTTP service, polling daemon, separate updater, WSL compatibility path, host migration framework, `.env`, Compose deployment of Agent Relay, or `/opt/agent-relay` copy.
 
@@ -15,11 +15,16 @@ The repository role:
 - bootstraps Python 3 over root SSH;
 - installs sudo, system packages, native runner libraries and toolchains;
 - creates the administrator, `github-runner` and `agent-relay-builder`;
-- creates named secure directories without recursively changing installed contents;
+- creates and reconciles named secure directories;
 - configures Docker Engine and containerd data roots and services;
+- clones or updates the configured Agent Relay revision as the administrator with `umask 0022`;
+- removes group and other write bits from managed checkout files and directories without changing executable bits;
+- previews deployment changes, stops the listener and drains active workers when deployment is required;
+- passes the first-registration GitHub credential from the control process to `install.sh` through standard input without persisting it;
+- invokes `install.sh` as the administrator;
 - provides `agent_relay_extra_apt_packages` for ordinary additional packages.
 
-The role does not clone or update the repository, install or register the GitHub runner, request GitHub credentials, authenticate Codex, build `dist`, or invoke `install.sh`.
+The role does not authenticate Codex, build `dist` itself, implement runner registration itself or duplicate installer runtime logic.
 
 ### Installer
 
@@ -62,13 +67,13 @@ The administrator is a trusted full-host account. The example inventory contains
 
 ## Accounts and privilege boundary
 
-- The Ansible-created administrator owns the checkout, runs releases and invokes `install.sh`.
+- The Ansible-created administrator owns the checkout; Ansible performs Git operations and invokes `install.sh` under this account.
 - `agent-relay-builder` has a locked password, `/usr/sbin/nologin`, no sudo, a private build home and temporary ownership of a staged runtime.
 - `github-runner` has a locked password and no sudo. It runs the official runner and Codex.
 - `github-runner` belongs to the Docker group. This is root-equivalent host trust and is intentional.
 - Activated runtime files are root-owned; directories are `0755` and regular files are `0644`.
 
-Neither Ansible nor the installer recursively changes checkout, runner, home, workspace, Docker data or runtime ownership.
+Ansible changes only declared host paths and the managed source checkout permission contract. It does not recursively rewrite checkout ownership, executable bits, runner payload contents, home, workspace, Docker data or activated runtime contents. The installer validates these boundaries before mutation.
 
 ## Host toolchains and packages
 
@@ -100,7 +105,7 @@ Runner binary and registration state are independent.
 
 Binary state is:
 
-- absent: no runner payload markers exist; download and SHA-256 verify runner 2.335.1, then extract as `github-runner`;
+- absent: no runner payload markers exist; download and SHA-256 verify runner 2.335.1, then extract as `github-runner` without overwriting the Ansible-managed destination directory mode;
 - complete: required executable payload exists and safe runner-generated/self-update state is tolerated;
 - partial or conflicting: fail without deletion.
 
@@ -110,7 +115,7 @@ Registration state is:
 - complete: all are safe runner-owned regular files;
 - partial or conflicting: fail without registration or deletion.
 
-Complete binaries without registration are resumable. Registration uses a short-lived organization registration token obtained from a credential entered interactively. Credential material is not printed or persisted.
+Complete binaries without registration are resumable. Registration uses a short-lived organization registration token obtained from a GitHub credential exported only on the Ansible control machine. Ansible passes the credential to the installer through standard input with task output suppressed; the credential is not persisted on the target.
 
 The runner is configured for `https://github.com/Divorium`, name `gh-runner`, work name `_work`, and default runner self-update behavior.
 
@@ -136,7 +141,7 @@ Build or import failure leaves the runtime and service untouched by the installe
 
 ## Release procedure
 
-The trusted checkout must not change while a workflow uses it. Operators stop the listener, drain `Runner.Worker`, optionally reconcile host state with Ansible, run `git pull --ff-only` as checkout owner and then run `./install.sh`.
+Operators rerun the current Ansible playbook. The role previews repository reconciliation, stops the listener and drains `Runner.Worker` when deployment is required, updates the managed checkout and invokes `install.sh`. Manual `git pull` and direct installer invocation are not supported release steps.
 
 ## GitHub request flow
 
@@ -191,4 +196,4 @@ The pipeline runs `npm ci` and `npm run check`, including:
 - shell and Node-script syntax checks;
 - host toolchain smoke;
 - installer static and simulated system tests;
-- no Ansible execution or linting.
+- static assertions covering the Ansible deployment contract; no live Ansible execution or linting.

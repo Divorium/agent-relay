@@ -1,0 +1,241 @@
+---
+- name: Preview Agent Relay checkout reconciliation
+  become: true
+  become_user: "{{ agent_relay_admin_user }}"
+  ansible.builtin.git:
+    repo: "{{ agent_relay_repository_url }}"
+    dest: "{{ agent_relay_source_root }}"
+    version: "{{ agent_relay_repository_version }}"
+    update: true
+    force: true
+    umask: "0022"
+  environment:
+    HOME: "/home/{{ agent_relay_admin_user }}"
+    GIT_TERMINAL_PROMPT: "0"
+  check_mode: true
+  register: agent_relay_checkout_preview
+
+- name: Inspect existing source checkout
+  ansible.builtin.stat:
+    path: "{{ agent_relay_source_root }}/.git"
+    follow: false
+  register: agent_relay_source_checkout
+
+- name: Detect writable source checkout entries
+  become: true
+  become_user: "{{ agent_relay_admin_user }}"
+  ansible.builtin.command:
+    argv:
+      - find
+      - -P
+      - "{{ agent_relay_source_root }}"
+      - -xdev
+      - "("
+      - -path
+      - "{{ agent_relay_source_root }}/dist"
+      - -o
+      - -path
+      - "{{ agent_relay_source_root }}/dist/*"
+      - -o
+      - -path
+      - "{{ agent_relay_source_root }}/dist.previous"
+      - -o
+      - -path
+      - "{{ agent_relay_source_root }}/dist.previous/*"
+      - -o
+      - -path
+      - "{{ agent_relay_source_root }}/.dist.stage.*"
+      - -o
+      - -path
+      - "{{ agent_relay_source_root }}/.dist.stage.*/*"
+      - ")"
+      - -prune
+      - -o
+      - "("
+      - -type
+      - f
+      - -o
+      - -type
+      - d
+      - ")"
+      - -perm
+      - /022
+      - -print
+      - -quit
+  register: agent_relay_writable_source_entry
+  changed_when: false
+  when:
+    - agent_relay_source_checkout.stat.exists | default(false)
+    - agent_relay_source_checkout.stat.isdir | default(false)
+    - not (agent_relay_source_checkout.stat.islnk | default(false))
+
+- name: Inspect runner registration files
+  ansible.builtin.stat:
+    path: "{{ agent_relay_runner_root }}/{{ item }}"
+    follow: false
+  loop:
+    - .runner
+    - .credentials
+    - .credentials_rsaparams
+  register: agent_relay_registration_files
+
+- name: Determine runner registration state
+  ansible.builtin.set_fact:
+    agent_relay_registration_complete: >-
+      {{
+        agent_relay_registration_files.results
+        | selectattr('stat.exists', 'equalto', true)
+        | list
+        | length == 3
+      }}
+
+- name: Inspect deployed runtime
+  ansible.builtin.stat:
+    path: "{{ agent_relay_source_root }}/dist/src/run-codex.js"
+    follow: false
+  register: agent_relay_runtime_entrypoint
+
+- name: Inspect runner service unit
+  ansible.builtin.stat:
+    path: "{{ agent_relay_service_unit }}"
+    follow: false
+  register: agent_relay_service_unit_state
+
+- name: Inspect runner service state
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - is-active
+      - --quiet
+      - "{{ agent_relay_service_name }}"
+  register: agent_relay_service_state
+  changed_when: false
+  failed_when: false
+
+- name: Determine whether deployment is required
+  ansible.builtin.set_fact:
+    agent_relay_deployment_required: >-
+      {{
+        agent_relay_checkout_preview.changed
+        or (agent_relay_writable_source_entry.stdout | default('') | length > 0)
+        or (agent_relay_runner_paths.changed | default(false))
+        or not agent_relay_registration_complete
+        or not agent_relay_runtime_entrypoint.stat.exists
+        or not agent_relay_service_unit_state.stat.exists
+        or agent_relay_service_state.rc != 0
+      }}
+
+- name: Require GitHub credential for first runner registration
+  ansible.builtin.assert:
+    that:
+      - agent_relay_github_credential | length > 0
+    fail_msg: >-
+      Export AGENT_RELAY_GITHUB_CREDENTIAL on the Ansible control machine with an organization credential
+      authorized for Self-hosted runners: write, then rerun the playbook.
+  when:
+    - agent_relay_deployment_required
+    - not agent_relay_registration_complete
+
+- name: Stop runner listener before deployment
+  ansible.builtin.systemd_service:
+    name: "{{ agent_relay_service_name }}"
+    state: stopped
+  when:
+    - agent_relay_deployment_required
+    - agent_relay_service_state.rc == 0
+
+- name: Wait for active runner jobs to finish
+  ansible.builtin.shell: |
+    set -o pipefail
+    runner_uid="$(id -u "${RUNNER_USER}")"
+    ! ps -e -o euid=,comm= | awk -v uid="${runner_uid}" '$1 == uid && $2 == "Runner.Worker" { found=1 } END { exit !found }'
+  args:
+    executable: /bin/bash
+  environment:
+    RUNNER_USER: "{{ agent_relay_runner_user }}"
+  register: agent_relay_worker_state
+  changed_when: false
+  until: agent_relay_worker_state.rc == 0
+  retries: 150
+  delay: 2
+  when: agent_relay_deployment_required
+
+- name: Checkout Agent Relay source
+  become: true
+  become_user: "{{ agent_relay_admin_user }}"
+  ansible.builtin.git:
+    repo: "{{ agent_relay_repository_url }}"
+    dest: "{{ agent_relay_source_root }}"
+    version: "{{ agent_relay_repository_version }}"
+    update: true
+    force: true
+    umask: "0022"
+  environment:
+    HOME: "/home/{{ agent_relay_admin_user }}"
+    GIT_TERMINAL_PROMPT: "0"
+  when: agent_relay_deployment_required
+
+- name: Reconcile source checkout write permissions
+  become: true
+  become_user: "{{ agent_relay_admin_user }}"
+  ansible.builtin.command:
+    argv:
+      - find
+      - -P
+      - "{{ agent_relay_source_root }}"
+      - -xdev
+      - "("
+      - -path
+      - "{{ agent_relay_source_root }}/dist"
+      - -o
+      - -path
+      - "{{ agent_relay_source_root }}/dist/*"
+      - -o
+      - -path
+      - "{{ agent_relay_source_root }}/dist.previous"
+      - -o
+      - -path
+      - "{{ agent_relay_source_root }}/dist.previous/*"
+      - -o
+      - -path
+      - "{{ agent_relay_source_root }}/.dist.stage.*"
+      - -o
+      - -path
+      - "{{ agent_relay_source_root }}/.dist.stage.*/*"
+      - ")"
+      - -prune
+      - -o
+      - "("
+      - -type
+      - f
+      - -o
+      - -type
+      - d
+      - ")"
+      - -perm
+      - /022
+      - -print
+      - -exec
+      - chmod
+      - go-w
+      - --
+      - "{}"
+      - +
+  register: agent_relay_checkout_permissions
+  changed_when: agent_relay_checkout_permissions.stdout | length > 0
+  when: agent_relay_deployment_required
+
+- name: Install or update Agent Relay
+  become: true
+  become_user: "{{ agent_relay_admin_user }}"
+  ansible.builtin.command:
+    argv:
+      - "{{ agent_relay_source_root }}/install.sh"
+    chdir: "{{ agent_relay_source_root }}"
+    stdin: "{{ agent_relay_github_credential if not agent_relay_registration_complete else '' }}"
+    stdin_add_newline: true
+  environment:
+    HOME: "/home/{{ agent_relay_admin_user }}"
+  no_log: "{{ not agent_relay_registration_complete }}"
+  changed_when: true
+  when: agent_relay_deployment_required

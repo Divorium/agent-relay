@@ -86,6 +86,7 @@ source = source.replace(
 stat_gid() { stat -c '%g' -- "$1"; }
 stat_mode() { stat -c '%a' -- "$1"; }
 sudo_stat_uid() { sudo -n stat -c '%u' -- "$1"; }
+sudo_stat_gid() { sudo -n stat -c '%g' -- "$1"; }
 sudo_stat_mode() { sudo -n stat -c '%a' -- "$1"; }''',
     '''stat_uid() {
   case "$1" in
@@ -109,6 +110,7 @@ stat_gid() {
 }
 stat_mode() { /usr/bin/stat -c '%a' -- "$1"; }
 sudo_stat_uid() { stat_uid "$1"; }
+sudo_stat_gid() { stat_gid "$1"; }
 sudo_stat_mode() { stat_mode "$1"; }'''
 )
 path.write_text(source)
@@ -137,6 +139,7 @@ EOF_CHECK
 
   local archive_root="${case_root}/runner-archive"
   mkdir -p "${archive_root}/bin"
+  chmod 0755 "${archive_root}"
   for file in Runner.Listener Runner.Worker runsvc.sh; do
     cat >"${archive_root}/bin/${file}" <<'EOF_RUNNER_BINARY'
 #!/usr/bin/env bash
@@ -154,9 +157,9 @@ printf '{}\n' > .credentials_rsaparams
 chmod 0600 .runner .credentials .credentials_rsaparams
 EOF_CONFIG
   chmod 0755 "${archive_root}/config.sh"
-  tar -C "${archive_root}" -czf "${state_root}/runner.tar.gz" bin config.sh
+  tar -C "${archive_root}" -czf "${state_root}/runner.tar.gz" .
   if (( preinstall_runner == 1 )); then
-    tar -C "${runner_root}" -xzf "${state_root}/runner.tar.gz"
+    tar -C "${runner_root}" --no-overwrite-dir -xzf "${state_root}/runner.tar.gz"
   fi
 
   cat >"${fake_bin}/id" <<EOF_ID
@@ -327,7 +330,9 @@ mapfile -t first < <(prepare_case first 0)
 source_root=${first[0]}
 state_root=${first[1]}
 fake_bin=${first[2]}
+runner_root="$(dirname "${source_root}")/runner"
 run_installer "${source_root}" "${state_root}" "${fake_bin}" first-token
+[[ "$(stat -c '%a' -- "${runner_root}")" == 700 ]]
 [[ -f "${source_root}/dist/src/run-codex.js" ]]
 [[ -f "${state_root}/service-active" ]]
 [[ "$(grep -c registration-token "${state_root}/curl.log")" == 1 ]]

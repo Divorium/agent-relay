@@ -168,10 +168,27 @@ jobs:
         run: exit 1
 
       - name: Commit and push
+        id: finalize
         if: ${{ steps.plan_diff.outputs.plan_found != 'false' && steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != '' && steps.codex.outcome == 'success' }}
+        continue-on-error: true
         shell: bash
         env:
           COMMIT_MESSAGE: ${{ steps.codex.outputs.commit_message }}
           TARGET_BRANCH: ${{ steps.pr.outputs.head_ref }}
           GITHUB_PUSH_TOKEN: ${{ github.token }}
-        run: /srv/github-runner/storage/agent-relay/runner/finalize.sh
+        run: |
+          set -o pipefail
+          bash runner/finalize.sh 2>&1 | tee "${RUNNER_TEMP}/agent-relay-finalize.log"
+
+      - name: Upload finalization output
+        if: ${{ always() && steps.finalize.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-relay-finalize-output
+          path: ${{ runner.temp }}/agent-relay-finalize.log
+          if-no-files-found: warn
+
+      - name: Fail when finalization failed
+        if: ${{ steps.finalize.outcome == 'failure' }}
+        shell: bash
+        run: exit 1

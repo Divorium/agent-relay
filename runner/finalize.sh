@@ -13,8 +13,8 @@ if [[ ! -d "${GITHUB_WORKSPACE}" || -L "${GITHUB_WORKSPACE}" ]]; then
   exit 1
 fi
 canonical_workspace="$(/usr/bin/readlink -f -- "${GITHUB_WORKSPACE}")"
-if [[ -z "${canonical_workspace}" || "${canonical_workspace}" != "${GITHUB_WORKSPACE}" ]]; then
-  echo "GITHUB_WORKSPACE must be an existing canonical path" >&2
+if [[ -z "${canonical_workspace}" || ! -d "${canonical_workspace}" ]]; then
+  echo "GITHUB_WORKSPACE must resolve to an existing directory" >&2
   exit 1
 fi
 runner_uid="$(/usr/bin/id -u)"

@@ -76,7 +76,9 @@ test("Ansible has no duplicated bootstrap packages or container handlers", async
   assert.match(filesystem, /Create builder temporary directory/);
   assert.doesNotMatch(filesystem, /- cargo|- go-cache|- gradle|- pip|- docker/);
   assert.equal((toolchains.match(/\/usr\/local\/libexec\/agent-relay\/rustup-init/g) ?? []).length, 2);
-  assert.doesNotMatch(toolchains, /agent-relay-rustup-init/);
+  assert.match(toolchains, /path: \/usr\/local\/sbin\/agent-relay-rustup-init\n    state: absent/);
+  assert.doesNotMatch(toolchains, /dest: \/usr\/local\/sbin\/agent-relay-rustup-init/);
+  assert.doesNotMatch(toolchains, /- \/usr\/local\/sbin\/agent-relay-rustup-init/);
   assert.doesNotMatch(config, /^inventory\s*=/mu);
 });
 

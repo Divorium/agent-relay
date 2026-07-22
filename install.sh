@@ -415,7 +415,8 @@ case "${binary_state}" in
       "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
       -o "${runner_archive}"
     printf '%s  %s\n' "${RUNNER_SHA256}" "${runner_archive}" | sha256sum -c -
-    sudo -n -u "${RUNNER_USER}" tar -C "${RUNNER_DIR}" -xzf - < "${runner_archive}"
+    sudo -n -u "${RUNNER_USER}" tar -C "${RUNNER_DIR}" --no-overwrite-dir -xzf - < "${runner_archive}"
+    require_directory "${RUNNER_DIR}" "${runner_uid}" "${runner_gid}" 700
     [[ "$(runner_binary_state)" == "complete" ]] || fail "Runner archive extraction did not produce a complete runner payload"
     ;;
   complete) ;;

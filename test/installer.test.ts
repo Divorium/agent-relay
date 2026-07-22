@@ -15,6 +15,21 @@ test("host toolchain check is executable", async () => {
   assert.notEqual(metadata.mode & 0o111, 0);
 });
 
+test("installer validates protected directories through sudo", async () => {
+  const install = await text("install.sh");
+  const start = install.indexOf("require_directory() {");
+  const end = install.indexOf("\n}\n\nrequire_locked_account()", start);
+  assert.ok(start >= 0 && end > start);
+  const implementation = install.slice(start, end);
+
+  assert.match(implementation, /sudo -n test -d "\$\{path\}"/);
+  assert.match(implementation, /sudo -n test -L "\$\{path\}"/);
+  assert.match(implementation, /sudo_stat_uid/);
+  assert.match(implementation, /sudo_stat_gid/);
+  assert.match(implementation, /sudo_stat_mode/);
+  assert.doesNotMatch(implementation, /\[\[ -d "\$\{path\}"/);
+});
+
 test("one host contract supplies installer, Ansible, and smoke versions", async () => {
   const contract = await json("config/runner-host.json");
   const install = await text("install.sh");

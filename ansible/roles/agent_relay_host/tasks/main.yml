@@ -13,3 +13,6 @@
 
 - name: Install Agent Relay toolchains
   ansible.builtin.import_tasks: toolchains.yml
+
+- name: Checkout and deploy Agent Relay
+  ansible.builtin.import_tasks: deploy.yml

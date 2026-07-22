@@ -17,6 +17,8 @@ agent_relay_runner_home: "{{ agent_relay_storage_root }}/home"
 agent_relay_build_home: "{{ agent_relay_storage_root }}/build-home"
 agent_relay_docker_root: "{{ agent_relay_storage_root }}/docker/engine"
 agent_relay_containerd_root: "{{ agent_relay_storage_root }}/docker/containerd"
+agent_relay_service_name: "actions.runner.{{ agent_relay_host_contract.organization }}.{{ agent_relay_host_contract.runner_name }}.service"
+agent_relay_service_unit: "/etc/systemd/system/{{ agent_relay_service_name }}"
 
 agent_relay_runner_user: "{{ agent_relay_host_contract.runner_user }}"
 agent_relay_builder_user: "{{ agent_relay_host_contract.builder_user }}"

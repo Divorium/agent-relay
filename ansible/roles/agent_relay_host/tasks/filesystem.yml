@@ -23,6 +23,62 @@
     mode: "0755"
     recurse: false
 
+- name: Inspect existing source checkout
+  ansible.builtin.stat:
+    path: "{{ agent_relay_source_root }}/.git"
+    follow: false
+  register: agent_relay_source_checkout
+
+- name: Detect writable existing source checkout entries
+  ansible.builtin.command:
+    argv:
+      - find
+      - -P
+      - "{{ agent_relay_source_root }}"
+      - -xdev
+      - "("
+      - -type
+      - f
+      - -o
+      - -type
+      - d
+      - ")"
+      - -perm
+      - /022
+      - -print
+      - -quit
+  register: agent_relay_writable_source_entry
+  changed_when: false
+  when:
+    - agent_relay_source_checkout.stat.exists
+    - agent_relay_source_checkout.stat.isdir
+    - not agent_relay_source_checkout.stat.islnk
+
+- name: Remove group and other write permissions from existing source checkout
+  ansible.builtin.command:
+    argv:
+      - find
+      - -P
+      - "{{ agent_relay_source_root }}"
+      - -xdev
+      - "("
+      - -type
+      - f
+      - -o
+      - -type
+      - d
+      - ")"
+      - -perm
+      - /022
+      - -exec
+      - chmod
+      - go-w
+      - --
+      - "{}"
+      - +
+  when:
+    - agent_relay_writable_source_entry.stdout | default('') | length > 0
+
 - name: Create runner-owned paths
   ansible.builtin.file:
     path: "{{ item }}"

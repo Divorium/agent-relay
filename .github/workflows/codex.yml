@@ -161,7 +161,7 @@ jobs:
 
       - name: Commit and push
         id: finalize
-        if: ${{ steps.plan_diff.outputs.plan_found != 'false' && steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan.outputs.plan_path != '' && steps.codex.outcome == 'success' }}
+        if: ${{ steps.plan_diff.outputs.plan_found != 'false' && steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != '' && steps.codex.outcome == 'success' }}
         continue-on-error: true
         shell: bash
         env:

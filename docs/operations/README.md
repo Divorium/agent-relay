@@ -14,7 +14,7 @@ cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml
 $EDITOR inventory/example.ini inventory/group_vars/all.yml
 ```
 
-For a checkout on a native Linux filesystem, run:
+Run the playbook from the repository `ansible` directory:
 
 ```bash
 ansible-playbook \
@@ -22,11 +22,23 @@ ansible-playbook \
   "$PWD/playbooks/host.yml"
 ```
 
-### WSL checkout on a mounted Windows drive
+### If Ansible cannot find `agent_relay_host`
 
-Directories such as `/mnt/f` may be reported as world-writable. In that case Ansible deliberately ignores automatic discovery of the repository `ansible.cfg`, so the role path must be supplied explicitly.
+An error such as `the role 'agent_relay_host' was not found` means that Ansible did not load the repository role path. This can happen when `ansible.cfg` is not discovered, is ignored, or the command is run from a different directory. A world-writable checkout, including some mounted filesystems, is one possible cause but not the only one.
 
-From the repository `ansible` directory, run the variables and command as one invocation:
+From the repository `ansible` directory, verify that the role exists:
+
+```bash
+test -f "$PWD/roles/agent_relay_host/tasks/main.yml" && echo "role exists"
+```
+
+Check whether Ansible loaded the configured role path:
+
+```bash
+ansible-config dump --only-changed | grep DEFAULT_ROLES_PATH
+```
+
+If the role path is missing or incorrect, pass the configuration and role path explicitly in the same command:
 
 ```bash
 ANSIBLE_CONFIG="$PWD/ansible.cfg" \

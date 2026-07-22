@@ -41,6 +41,11 @@ test("Ansible owns checkout and installation lifecycle", async () => {
   const pkg = await text("package.json");
 
   assert.doesNotMatch(users, /\.profile|umask/);
+  assert.match(users, /name: Create administrator Ansible temporary directory/);
+  assert.match(users, /path: "\/home\/\{\{ agent_relay_admin_user \}\}\/\.ansible\/tmp"/);
+  assert.match(users, /owner: "\{\{ agent_relay_admin_user \}\}"/);
+  assert.match(users, /group: "\{\{ agent_relay_admin_user \}\}"/);
+  assert.match(users, /mode: "0700"/);
   assert.match(main, /import_tasks: deploy\.yml/);
   assert.match(defaults, /agent_relay_repository_url:/);
   assert.match(defaults, /agent_relay_repository_version: main/);

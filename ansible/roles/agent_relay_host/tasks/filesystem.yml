@@ -50,9 +50,9 @@
   register: agent_relay_writable_source_entry
   changed_when: false
   when:
-    - agent_relay_source_checkout.stat.exists
-    - agent_relay_source_checkout.stat.isdir
-    - not agent_relay_source_checkout.stat.islnk
+    - agent_relay_source_checkout.stat.exists | default(false)
+    - agent_relay_source_checkout.stat.isdir | default(false)
+    - not (agent_relay_source_checkout.stat.islnk | default(false))
 
 - name: Remove group and other write permissions from existing source checkout
   ansible.builtin.command:

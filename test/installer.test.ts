@@ -30,6 +30,22 @@ test("installer validates protected directories through sudo", async () => {
   assert.doesNotMatch(implementation, /\[\[ -d "\$\{path\}"/);
 });
 
+test("Ansible configures a restrictive administrator login umask", async () => {
+  const users = await text("ansible/roles/agent_relay_host/tasks/users.yml");
+  const operations = await text("docs/operations/README.md");
+  const pkg = await text("package.json");
+
+  assert.match(users, /name: Configure administrator login umask/);
+  assert.match(users, /ansible\.builtin\.blockinfile:/);
+  assert.match(users, /path: "\/home\/\{\{ agent_relay_admin_user \}\}\/\.profile"/);
+  assert.match(users, /owner: "\{\{ agent_relay_admin_user \}\}"/);
+  assert.match(users, /group: "\{\{ agent_relay_admin_user \}\}"/);
+  assert.match(users, /mode: "0644"/);
+  assert.match(users, /umask 0022/);
+  assert.doesNotMatch(operations, /secure-checkout-permissions\.sh/);
+  assert.doesNotMatch(pkg, /secure-checkout-permissions/);
+});
+
 test("one host contract supplies installer, Ansible, and smoke versions", async () => {
   const contract = await json("config/runner-host.json");
   const install = await text("install.sh");

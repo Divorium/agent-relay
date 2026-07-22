@@ -30,8 +30,9 @@ test("installer validates protected directories through sudo", async () => {
   assert.doesNotMatch(implementation, /\[\[ -d "\$\{path\}"/);
 });
 
-test("Ansible configures a restrictive administrator login umask", async () => {
+test("Ansible configures and reconciles secure checkout permissions", async () => {
   const users = await text("ansible/roles/agent_relay_host/tasks/users.yml");
+  const filesystem = await text("ansible/roles/agent_relay_host/tasks/filesystem.yml");
   const operations = await text("docs/operations/README.md");
   const pkg = await text("package.json");
 
@@ -42,8 +43,31 @@ test("Ansible configures a restrictive administrator login umask", async () => {
   assert.match(users, /group: "\{\{ agent_relay_admin_user \}\}"/);
   assert.match(users, /mode: "0644"/);
   assert.match(users, /umask 0022/);
+
+  assert.match(filesystem, /name: Inspect existing source checkout/);
+  assert.match(filesystem, /path: "\{\{ agent_relay_source_root \}\}\/\.git"/);
+  assert.match(filesystem, /name: Detect writable existing source checkout entries/);
+  assert.match(filesystem, /name: Remove group and other write permissions from existing source checkout/);
+  assert.match(filesystem, /- -perm\n\s+- \/022/);
+  assert.match(filesystem, /- chmod\n\s+- go-w/);
+  assert.match(filesystem, /- -xdev/);
+  assert.match(filesystem, /- -P/);
+
+  assert.doesNotMatch(operations, /Existing checkout created with a permissive umask/);
   assert.doesNotMatch(operations, /secure-checkout-permissions\.sh/);
   assert.doesNotMatch(pkg, /secure-checkout-permissions/);
+});
+
+test("runner extraction preserves the Ansible-managed directory mode", async () => {
+  const install = await text("install.sh");
+  const systemTest = await text("test-system/install-script.integration.sh");
+  const extraction = install.indexOf('tar -C "${RUNNER_DIR}" --no-overwrite-dir -xzf -');
+  const postcondition = install.indexOf('require_directory "${RUNNER_DIR}" "${runner_uid}" "${runner_gid}" 700', extraction);
+
+  assert.ok(extraction >= 0 && postcondition > extraction);
+  assert.match(systemTest, /tar -C "\$\{archive_root\}" -czf "\$\{state_root\}\/runner\.tar\.gz" \./);
+  assert.match(systemTest, /stat -c '%a' -- "\$\{runner_root\}"\)" == 700/);
+  assert.match(systemTest, /sudo_stat_gid\(\) \{ stat_gid "\$1"; \}/);
 });
 
 test("one host contract supplies installer, Ansible, and smoke versions", async () => {

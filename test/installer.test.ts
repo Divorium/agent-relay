@@ -57,7 +57,7 @@ test("Ansible owns checkout and installation lifecycle", async () => {
   assert.match(deploy, /- -perm\n\s+- \/022/);
   assert.match(deploy, /- chmod\n\s+- go-w/);
   assert.match(deploy, /name: Install or update Agent Relay/);
-  assert.match(deploy, /agent_relay_source_root \}\/install\.sh/);
+  assert.match(deploy, /agent_relay_source_root \}\}\/install\.sh/);
   assert.match(deploy, /stdin:.*agent_relay_github_credential/);
   assert.match(deploy, /no_log:.*agent_relay_registration_complete/);
 

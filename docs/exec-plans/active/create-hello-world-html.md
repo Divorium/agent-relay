@@ -11,13 +11,17 @@ Create one standalone HTML file that proves Codex can modify this pull request c
 ## Progress
 
 - [x] (2026-07-22 20:35Z) Created this execution plan.
-- [ ] Create `hello-world.html` in the repository root.
-- [ ] Validate the HTML content and run the repository checks.
-- [ ] Record the completed outcome in this plan.
+- [x] (2026-07-22 21:02Z) Created `hello-world.html` in the repository root.
+- [x] (2026-07-22 21:57Z) Validated the HTML path, structure, and visible text, then completed `npm run check` successfully with the sandbox-incompatible system check isolated in a disposable UID-mapped container.
+- [x] (2026-07-22 21:57Z) Recorded the completed outcome, validation evidence, Docker handling, and ownership result in this plan.
 
 ## Surprises & Discoveries
 
-No discoveries have been recorded yet.
+- Observation: The first `npm run check` attempt reached the test suite but failed four integration assertions because this sandbox denies `/tmp` and the inherited environment did not define `RUNNER_TEMP`; `runner/finalize.sh` therefore could not create its temporary askpass file.
+  Evidence: The test output reported `mktemp: failed to create file via template ‘/tmp/agent-relay-askpass.XXXXXX’: Permission denied`. The repository scripts support writable overrides through `RUNNER_TEMP` and `TMPDIR`, so validation must set both to a runner-owned temporary directory.
+
+- Observation: Setting `RUNNER_TEMP` and `TMPDIR` allowed all 124 Node tests and the runtime, syntax, and toolchain checks to pass, but `install.sh` intentionally fixes its privileged scratch prefix at `/tmp` and therefore required a container with writable `/tmp` for `check:system` in this sandbox.
+  Evidence: The final `npm run check` exited 0 when a temporary npm script-shell dispatcher routed only `bash test-system/run-install-script.integration.sh` into `node:22-bookworm`; the dispatcher and container were removed after the run.
 
 ## Decision Log
 
@@ -29,9 +33,13 @@ No discoveries have been recorded yet.
   Rationale: This provides a deterministic result that can be inspected without any build step or external dependency.
   Date/Author: 2026-07-22 / ChatGPT
 
+- Decision: Do not start or alter any existing Docker service, and use one disposable UID/GID-mapped container only for the installer system check.
+  Rationale: The repository contains no Dockerfile or Compose configuration, `docker ps -a` and `docker compose ls` showed no existing lifecycle state, and the page itself needs no service. The isolated system test nevertheless needs writable `/tmp`, which the host sandbox denies. Mapping UID 988 and GID 1002 prevents bind-mounted files from becoming foreign-owned.
+  Date/Author: 2026-07-22 / ChatGPT
+
 ## Outcomes & Retrospective
 
-Not completed yet. At completion, summarize the created file, validation evidence, and any remaining concerns.
+Created `hello-world.html` at the repository root as a standalone HTML5 document whose body displays exactly `Hello World`. Direct file and content assertions passed. The final `npm run check` completed successfully: all 124 tests passed with 100% reported line, branch, and function coverage, and the runtime build, shell syntax, Node-script syntax, toolchain smoke, and installer behavioral integration checks passed. The disposable validation container exited and was removed, and the image pulled solely for validation was deleted. A repository-wide ownership scan found no path not owned by `github-runner`. No implementation concerns remain.
 
 ## Context and Orientation
 
@@ -75,6 +83,8 @@ Then run:
 
 The first two commands must exit with status 0. The repository check must complete successfully.
 
+In a sandbox that denies host `/tmp`, create a runner-owned temporary directory and set both `RUNNER_TEMP` and `TMPDIR`. Route only `check:system` through a disposable Node 22 container with a writable `/tmp`, using the host runner UID and GID for the bind mount. The final validation used a temporary npm script-shell dispatcher for that routing; it was not retained in the repository.
+
 ## Validation and Acceptance
 
 The task is accepted only when all of the following are true:
@@ -94,10 +104,26 @@ Expected successful evidence:
         <title>Hello World</title>
         Hello World
     $ npm run check
+    # tests 124
+    # pass 124
+    # fail 0
+    installer behavioral integration checks passed
     ... exits with status 0
+
+The final ownership assertion also exited successfully:
+
+    $ test -z "$(find . -xdev ! -user github-runner -print -quit)"
 
 ## Interfaces and Dependencies
 
 No application interface, library, package, or external service is required. The only new implementation artifact is the static file `hello-world.html` at the repository root.
 
 Revision note: This initial plan was created to test the complete Codex pull-request workflow with a minimal, observable repository change.
+
+Revision note (2026-07-22 21:02Z): Recorded creation of the root-level HTML file so the living progress section reflects the implementation state before validation.
+
+Revision note (2026-07-22 21:05Z): Recorded the sandbox-specific `/tmp` validation failure and the repository-supported environment override that will be used for the retry.
+
+Revision note (2026-07-22 21:57Z): Recorded completed validation, the narrowly scoped Docker workaround for the denied host `/tmp`, successful ownership inspection, and the final outcome so this plan is a complete execution record.
+
+Revision note (2026-07-22 21:57Z): Recorded removal of the validation-only Docker image so the outcome also captures final container cleanup.

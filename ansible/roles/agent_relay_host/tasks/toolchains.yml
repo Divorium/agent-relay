@@ -107,6 +107,11 @@
     - /opt/rust/rustup
     - /usr/local/libexec/agent-relay
 
+- name: Remove obsolete renamed rustup installer
+  ansible.builtin.file:
+    path: /usr/local/sbin/agent-relay-rustup-init
+    state: absent
+
 - name: Download verified rustup-init
   ansible.builtin.get_url:
     url: https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init

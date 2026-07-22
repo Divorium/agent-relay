@@ -65,14 +65,17 @@ stat_uid() { stat -c '%u' -- "$1"; }
 stat_gid() { stat -c '%g' -- "$1"; }
 stat_mode() { stat -c '%a' -- "$1"; }
 sudo_stat_uid() { sudo -n stat -c '%u' -- "$1"; }
+sudo_stat_gid() { sudo -n stat -c '%g' -- "$1"; }
 sudo_stat_mode() { sudo -n stat -c '%a' -- "$1"; }
 
 require_directory() {
   local path=$1 owner_uid=$2 owner_gid=$3 mode=$4
-  [[ -d "${path}" && ! -L "${path}" ]] || fail "Required regular directory is missing: ${path}"
-  [[ "$(stat_uid "${path}")" == "${owner_uid}" ]] || fail "Unexpected owner for ${path}"
-  [[ "$(stat_gid "${path}")" == "${owner_gid}" ]] || fail "Unexpected group for ${path}"
-  [[ "$(stat_mode "${path}")" == "${mode}" ]] || fail "Unexpected mode for ${path}; expected ${mode}"
+  if ! sudo -n test -d "${path}" || sudo -n test -L "${path}"; then
+    fail "Required regular directory is missing: ${path}"
+  fi
+  [[ "$(sudo_stat_uid "${path}")" == "${owner_uid}" ]] || fail "Unexpected owner for ${path}"
+  [[ "$(sudo_stat_gid "${path}")" == "${owner_gid}" ]] || fail "Unexpected group for ${path}"
+  [[ "$(sudo_stat_mode "${path}")" == "${mode}" ]] || fail "Unexpected mode for ${path}; expected ${mode}"
 }
 
 require_locked_account() {

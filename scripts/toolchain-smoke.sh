@@ -9,6 +9,9 @@ if [[ ! -f "${toolchain_profile}" || -L "${toolchain_profile}" ]]; then
 fi
 source "${toolchain_profile}"
 
+: "${EXPECTED_NODE_MAJOR:=22}"
+: "${EXPECTED_JAVA_MAJOR:=21}"
+: "${EXPECTED_RUST_TOOLCHAIN:=stable}"
 : "${EXPECTED_TOOLCHAIN_STATE_ROOT:?EXPECTED_TOOLCHAIN_STATE_ROOT is required}"
 toolchain_validate_absolute_path 'expected toolchain state root' "${EXPECTED_TOOLCHAIN_STATE_ROOT}"
 

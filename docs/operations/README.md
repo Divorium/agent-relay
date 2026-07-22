@@ -65,7 +65,7 @@ Assigning `ANSIBLE_CONFIG` or `ANSIBLE_ROLES_PATH` on separate lines without `ex
 
 Use `ansible-core >= 2.18`. SSH host-key checking remains enabled. Do not commit private keys, passwords, GitHub tokens or Codex credentials.
 
-The created administrator receives configured public keys and passwordless sudo. `github-runner` is deliberately added to the Docker group, which is root-equivalent host access.
+The created administrator receives configured public keys and passwordless sudo. Its login profile is managed with `umask 0022`, so newly cloned or updated checkout files are not group- or other-writable. Reconnect after Ansible changes the profile. `github-runner` is deliberately added to the Docker group, which is root-equivalent host access.
 
 Add ordinary packages by extending:
 
@@ -78,10 +78,9 @@ Rerun the playbook after changing desired host state. The role manages named pat
 
 ## Initial runner installation
 
-Connect as the administrator created by Ansible. Set a restrictive umask before creating the checkout so files are not group- or other-writable:
+Connect as the administrator created by Ansible:
 
 ```bash
-umask 0022
 git clone <repository-url> /srv/github-runner/storage/agent-relay
 sudo -u github-runner -H /usr/local/bin/codex login
 cd /srv/github-runner/storage/agent-relay
@@ -94,20 +93,20 @@ On the first run, provide a GitHub credential that may create an organization ru
 
 The installer validates Python 3, passwordless sudo, users, directories, toolchains, Docker, checkout ownership and the current runtime before mutation. It installs runner binaries and registration only when absent. It never calls Ansible, `apt`, `dpkg`, `useradd`, Docker provisioning, `installdependencies.sh` or Codex login.
 
-### Repair checkout permissions
+### Existing checkout created with a permissive umask
 
-Git records whether a file is executable, but it does not preserve the difference between modes such as `0644` and `0664`. A permissive process umask can therefore create a checkout that `install.sh` correctly rejects as group- or other-writable.
-
-Repair an existing checkout explicitly, then keep `umask 0022` for future Git operations:
+Ansible prevents the issue for future login sessions but does not recursively modify an existing checkout. After rerunning Ansible, reconnect as the administrator and repair the existing checkout once:
 
 ```bash
 cd /srv/github-runner/storage/agent-relay
-umask 0022
-./scripts/secure-checkout-permissions.sh
+find -P . -xdev \
+  \( -type f -o -type d \) \
+  -perm /022 \
+  -exec chmod go-w -- {} +
 ./install.sh
 ```
 
-The repair command removes only group and other write bits from regular files and directories. It preserves executable bits and does not follow symlinks or cross filesystem boundaries.
+The command removes only group and other write bits from regular files and directories. It does not follow symlinks or cross filesystem boundaries.
 
 ## Release update
 
@@ -125,7 +124,6 @@ When host desired state changed, run the current playbook from the operator chec
 
 ```bash
 cd /srv/github-runner/storage/agent-relay
-umask 0022
 git pull --ff-only
 ./install.sh
 ```
@@ -141,12 +139,10 @@ If an interrupted run leaves `dist.previous`:
 1. keep the runner stopped;
 2. inspect `dist` and `dist.previous` as root-owned regular directory trees;
 3. when `dist` is absent, restore the validated previous tree:
-
    ```bash
    sudo mv /srv/github-runner/storage/agent-relay/dist.previous \
      /srv/github-runner/storage/agent-relay/dist
    ```
-
 4. when a valid `dist` exists, deliberately remove the stale previous tree;
 5. rebuild the host when the state cannot be established safely.
 

@@ -31,7 +31,24 @@ if source.count(lock_file_case) != 2:
 source = source.replace(lock_file_case, root_owned_case)
 path.write_text(source)
 PY'''
-staged_path.write_text(source.replace(write_marker, fixture_patch))
+source = source.replace(write_marker, fixture_patch)
+sudo_marker = 'if [[ "\\${1:-}" == chown ]]; then exit 0; fi'
+sudo_install = r'''if [[ "\${1:-}" == install ]]; then
+  shift
+  install_args=()
+  while (( \$# > 0 )); do
+    case "\$1" in
+      -o|-g) shift 2 ;;
+      *) install_args+=("\$1"); shift ;;
+    esac
+  done
+  exec /usr/bin/install "\${install_args[@]}"
+fi
+if [[ "\${1:-}" == chown ]]; then exit 0; fi'''
+if source.count(sudo_marker) != 1:
+    raise SystemExit("installer sudo fixture no longer matches the expected shape")
+source = source.replace(sudo_marker, sudo_install)
+staged_path.write_text(source)
 PY
 
 chmod 0755 "${staged_test}"

@@ -61,6 +61,7 @@ test("Ansible has no duplicated bootstrap packages or container handlers", async
   const packages = await text("ansible/roles/agent_relay_host/tasks/packages.yml");
   const containers = await text("ansible/roles/agent_relay_host/tasks/containers.yml");
   const filesystem = await text("ansible/roles/agent_relay_host/tasks/filesystem.yml");
+  const toolchains = await text("ansible/roles/agent_relay_host/tasks/toolchains.yml");
   const config = await text("ansible/ansible.cfg");
 
   assert.match(defaults, /agent_relay_extra_apt_packages: \[\]/);
@@ -74,6 +75,8 @@ test("Ansible has no duplicated bootstrap packages or container handlers", async
   assert.doesNotMatch(containers, /flush_handlers|notify:/);
   assert.match(filesystem, /Create builder temporary directory/);
   assert.doesNotMatch(filesystem, /- cargo|- go-cache|- gradle|- pip|- docker/);
+  assert.equal((toolchains.match(/\/usr\/local\/libexec\/agent-relay\/rustup-init/g) ?? []).length, 2);
+  assert.doesNotMatch(toolchains, /agent-relay-rustup-init/);
   assert.doesNotMatch(config, /^inventory\s*=/mu);
 });
 

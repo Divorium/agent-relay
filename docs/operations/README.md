@@ -74,7 +74,7 @@ agent_relay_extra_apt_packages:
   - ripgrep
 ```
 
-Rerun the playbook after changing desired host state. The role manages named paths only and must not recursively alter an installed checkout, runner payload, workspace, home or Docker data tree.
+Rerun the playbook after changing desired host state. The role reconciles the permission contract of an existing source checkout but does not alter its contents, executable bits, runner payload, workspace, home or Docker data tree.
 
 ## Initial runner installation
 
@@ -92,21 +92,6 @@ Codex login is manual. `install.sh` neither performs nor verifies authentication
 On the first run, provide a GitHub credential that may create an organization runner registration token. A fine-grained token needs the organization `Self-hosted runners: write` permission. A classic PAT needs `admin:org` and, for a private repository, `repo`. The credential is exchanged for a short-lived registration token and is not stored by the installer.
 
 The installer validates Python 3, passwordless sudo, users, directories, toolchains, Docker, checkout ownership and the current runtime before mutation. It installs runner binaries and registration only when absent. It never calls Ansible, `apt`, `dpkg`, `useradd`, Docker provisioning, `installdependencies.sh` or Codex login.
-
-### Existing checkout created with a permissive umask
-
-Ansible prevents the issue for future login sessions but does not recursively modify an existing checkout. After rerunning Ansible, reconnect as the administrator and repair the existing checkout once:
-
-```bash
-cd /srv/github-runner/storage/agent-relay
-find -P . -xdev \
-  \( -type f -o -type d \) \
-  -perm /022 \
-  -exec chmod go-w -- {} +
-./install.sh
-```
-
-The command removes only group and other write bits from regular files and directories. It does not follow symlinks or cross filesystem boundaries.
 
 ## Release update
 
@@ -139,10 +124,12 @@ If an interrupted run leaves `dist.previous`:
 1. keep the runner stopped;
 2. inspect `dist` and `dist.previous` as root-owned regular directory trees;
 3. when `dist` is absent, restore the validated previous tree:
+
    ```bash
    sudo mv /srv/github-runner/storage/agent-relay/dist.previous \
      /srv/github-runner/storage/agent-relay/dist
    ```
+
 4. when a valid `dist` exists, deliberately remove the stale previous tree;
 5. rebuild the host when the state cannot be established safely.
 

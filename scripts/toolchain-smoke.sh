@@ -48,6 +48,10 @@ for command in \
   }
 done
 
+for command in npm gcc g++ clang make cmake pkg-config bash curl wget jq zip unzip tar gzip xz zstd file find diff; do
+  "${command}" --version >/dev/null 2>&1 || true
+done
+
 [[ "$(command -v java)" == "${TOOLCHAIN_JAVA_HOME}/bin/java" ]] || {
   echo 'Managed Java must be first on PATH' >&2
   exit 1

@@ -12,8 +12,56 @@ On the control machine:
 cd ansible
 cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml
 $EDITOR inventory/example.ini inventory/group_vars/all.yml
-ansible-playbook -i inventory/example.ini playbooks/host.yml
 ```
+
+Run the playbook from the repository `ansible` directory:
+
+```bash
+ansible-playbook \
+  --inventory "$PWD/inventory/example.ini" \
+  "$PWD/playbooks/host.yml"
+```
+
+### If Ansible cannot find `agent_relay_host`
+
+An error such as `the role 'agent_relay_host' was not found` means that Ansible did not load the repository role path. This can happen when `ansible.cfg` is not discovered, is ignored, or the command is run from a different directory. A world-writable checkout, including some mounted filesystems, is one possible cause but not the only one.
+
+From the repository `ansible` directory, verify that the role exists:
+
+```bash
+test -f "$PWD/roles/agent_relay_host/tasks/main.yml" && echo "role exists"
+```
+
+Check whether Ansible loaded the configured role path:
+
+```bash
+ansible-config dump --only-changed | grep DEFAULT_ROLES_PATH
+```
+
+If the role path is missing or incorrect, pass the configuration and role path explicitly in the same command:
+
+```bash
+ANSIBLE_CONFIG="$PWD/ansible.cfg" \
+ANSIBLE_ROLES_PATH="$PWD/roles" \
+ansible-playbook \
+  --inventory "$PWD/inventory/runners.ini" \
+  "$PWD/playbooks/host.yml"
+```
+
+Replace `inventory/runners.ini` with the configured inventory filename when different.
+
+Alternatively, export both variables before running Ansible:
+
+```bash
+export ANSIBLE_CONFIG="$PWD/ansible.cfg"
+export ANSIBLE_ROLES_PATH="$PWD/roles"
+
+ansible-playbook \
+  --inventory "$PWD/inventory/runners.ini" \
+  "$PWD/playbooks/host.yml"
+```
+
+Assigning `ANSIBLE_CONFIG` or `ANSIBLE_ROLES_PATH` on separate lines without `export` does not pass them to the `ansible-playbook` process.
 
 Use `ansible-core >= 2.18`. SSH host-key checking remains enabled. Do not commit private keys, passwords, GitHub tokens or Codex credentials.
 

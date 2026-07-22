@@ -20,10 +20,15 @@ write_marker = "path.write_text(source)\nPY"
 if source.count(write_marker) != 1:
     raise SystemExit("installer integration generator no longer matches the expected shape")
 fixture_patch = r'''lock_file_case = '    "${LOCK_FILE}") echo 1000 ;;'
-lock_root_case = '    "${LOCK_ROOT}") echo 0 ;;\n' + lock_file_case
+root_owned_case = (
+    '    "${LOCK_ROOT}"|"${BASE_ROOT}"|"${STORAGE_ROOT}"|'
+    '"${DOCKER_STORAGE_ROOT}"|"${DOCKER_ROOT}"|"${CONTAINERD_ROOT}"|'
+    '*"/etc/docker/daemon.json"|*"/etc/containerd/config.toml") echo 0 ;;\n'
+    + lock_file_case
+)
 if source.count(lock_file_case) != 2:
     raise SystemExit("installer ownership fixture no longer matches the expected shape")
-source = source.replace(lock_file_case, lock_root_case)
+source = source.replace(lock_file_case, root_owned_case)
 path.write_text(source)
 PY'''
 staged_path.write_text(source.replace(write_marker, fixture_patch))

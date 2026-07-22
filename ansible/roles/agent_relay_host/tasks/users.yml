@@ -15,6 +15,17 @@
     password_lock: true
     state: present
 
+- name: Configure administrator login umask
+  ansible.builtin.blockinfile:
+    path: "/home/{{ agent_relay_admin_user }}/.profile"
+    create: true
+    owner: "{{ agent_relay_admin_user }}"
+    group: "{{ agent_relay_admin_user }}"
+    mode: "0644"
+    marker: "# {mark} ANSIBLE MANAGED AGENT RELAY UMASK"
+    block: |
+      umask 0022
+
 - name: Create administrator SSH directory
   ansible.builtin.file:
     path: "/home/{{ agent_relay_admin_user }}/.ssh"

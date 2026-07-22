@@ -30,7 +30,7 @@ test("repository instructions remain durable and plan-driven", async () => {
   assert.match(rules, /## Decision Log/);
 });
 
-test("executor exposes Docker sockets without denying the workspace ancestor", () => {
+test("executor exposes Docker through the run directory without mounting socket paths as projects", () => {
   assert.deepEqual(createCodexEnvironment("/home/user", "/home/user/.cache/runtime"), {
     HOME: "/home/user",
     CODEX_RUNTIME_ROOT: "/home/user/.cache/runtime",
@@ -49,8 +49,8 @@ test("executor exposes Docker sockets without denying the workspace ancestor", (
   assert.match(filesystem, /"\/home\/user"="deny"/);
   assert.match(filesystem, /"\/srv\/github-runner\/storage\/agent-relay"="deny"/);
   assert.match(filesystem, /"\/opt\/rust"="read"/);
-  assert.match(filesystem, /"\/var\/run\/docker\.sock"="write"/);
-  assert.match(filesystem, /"\/run\/docker\.sock"="write"/);
+  assert.match(filesystem, /"\/run"="read"/);
+  assert.doesNotMatch(filesystem, /docker\.sock/);
   assert.doesNotMatch(filesystem, /"\/runner\/_work"="deny"/);
   assert.match(filesystem, /"\/runner\/_work\/repository\/repository"="write"/);
   assert.match(filesystem, /"\/runner\/_work\/repository\/repository\/\.git"="read"/);

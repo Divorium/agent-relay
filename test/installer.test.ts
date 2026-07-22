@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 
 async function text(path: string): Promise<string> {
   return readFile(path, "utf8");
@@ -9,6 +9,11 @@ async function text(path: string): Promise<string> {
 async function json(path: string): Promise<Record<string, unknown>> {
   return JSON.parse(await text(path)) as Record<string, unknown>;
 }
+
+test("host toolchain check is executable", async () => {
+  const metadata = await stat("scripts/host-toolchain-check.sh");
+  assert.notEqual(metadata.mode & 0o111, 0);
+});
 
 test("one host contract supplies installer, Ansible, and smoke versions", async () => {
   const contract = await json("config/runner-host.json");

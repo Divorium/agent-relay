@@ -59,7 +59,7 @@ test("executor exposes Docker sockets without denying the workspace ancestor", (
   assert.ok(!args.includes("danger-full-access"));
 });
 
-test("workflows use installed direct execution, transcript output, and strict token scoping", async () => {
+test("workflows validate and execute the pull request runtime with strict token scoping", async () => {
   for (const path of workflowPaths) {
     const workflow = await readFile(path, "utf8");
     assert.match(workflow, /runs-on: \[self-hosted\]/);
@@ -67,8 +67,12 @@ test("workflows use installed direct execution, transcript output, and strict to
     assert.match(workflow, /node \/srv\/github-runner\/storage\/agent-relay\/runner\/resolve-request\.mjs/);
     assert.match(workflow, /node \/srv\/github-runner\/storage\/agent-relay\/runner\/resolve-pr\.mjs/);
     assert.match(workflow, /node \/srv\/github-runner\/storage\/agent-relay\/runner\/resolve-plan\.mjs/);
-    assert.match(workflow, /node \/srv\/github-runner\/storage\/agent-relay\/runner\/run-codex\.mjs/);
-    assert.match(workflow, /run: \/srv\/github-runner\/storage\/agent-relay\/runner\/finalize\.sh/);
+    assert.match(workflow, /- name: Install pull-request runtime dependencies[\s\S]*run: npm ci/);
+    assert.match(workflow, /- name: Build pull-request runtime[\s\S]*run: npm run build/);
+    assert.match(workflow, /run: node runner\/run-codex\.mjs/);
+    assert.doesNotMatch(workflow, /node \/srv\/github-runner\/storage\/agent-relay\/runner\/run-codex\.mjs/);
+    assert.match(workflow, /run: bash runner\/finalize\.sh/);
+    assert.doesNotMatch(workflow, /run: \/srv\/github-runner\/storage\/agent-relay\/runner\/finalize\.sh/);
     assert.match(workflow, /CODEX_WORKSPACE_ROOT: \$\{\{ runner\.workspace \}\}/);
     assert.match(workflow, /CODEX_TRANSCRIPT_PATH: \$\{\{ runner\.temp \}\}\/agent-relay-console\.log/);
     assert.doesNotMatch(workflow, /\btee\b/);

@@ -19,7 +19,8 @@ test("Codex validates and rechecks the exact pull request revision before execut
     assert.match(workflow, /ref: \$\{\{ steps\.pr\.outputs\.head_sha \}\}/u);
     assert.match(workflow, /HEAD_SHA: \$\{\{ steps\.pr\.outputs\.head_sha \}\}/u);
     assert.match(workflow, /TARGET_BRANCH: \$\{\{ steps\.pr\.outputs\.head_ref \}\}/u);
-    assert.match(workflow, /CODEX_TRANSCRIPT_PATH: \$\{\{ runner\.temp \}\}\/agent-relay-console\.log[\s\S]*run: node \/srv\/github-runner\/storage\/agent-relay\/runner\/run-codex\.mjs/u);
+    assert.match(workflow, /Install pull-request runtime dependencies[\s\S]*run: npm ci[\s\S]*Build pull-request runtime[\s\S]*run: npm run build/u);
+    assert.match(workflow, /CODEX_TRANSCRIPT_PATH: \$\{\{ runner\.temp \}\}\/agent-relay-console\.log[\s\S]*run: node runner\/run-codex\.mjs/u);
     assert.doesNotMatch(workflow, /2>&1|\btee\b/u);
   }
 

@@ -100,6 +100,12 @@ jobs:
               ;;
           esac
 
+      - name: Install pull-request runtime dependencies
+        run: npm ci
+
+      - name: Build pull-request runtime
+        run: npm run build
+
       - name: Detect missing pull-request ExecPlan
         id: plan_diff
         if: github.event_name == 'pull_request'
@@ -146,15 +152,7 @@ jobs:
           CODEX_PLAN_PATH: ${{ steps.plan.outputs.plan_path }}
           CODEX_WORKSPACE_ROOT: ${{ runner.workspace }}
           CODEX_TRANSCRIPT_PATH: ${{ runner.temp }}/agent-relay-console.log
-        run: node /srv/github-runner/storage/agent-relay/runner/run-codex.mjs
-
-      - name: Upload Agent Relay output
-        if: ${{ always() && steps.plan_diff.outputs.plan_found != 'false' && steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: agent-relay-output
-          path: ${{ runner.temp }}/agent-relay-console.log
-          if-no-files-found: warn
+        run: node runner/run-codex.mjs
 
       - name: Fail when Codex failed
         if: ${{ steps.plan_diff.outputs.plan_found != 'false' && steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != '' && steps.codex.outcome == 'failure' }}
@@ -162,10 +160,28 @@ jobs:
         run: exit 1
 
       - name: Commit and push
+        id: finalize
         if: ${{ steps.plan_diff.outputs.plan_found != 'false' && steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != '' && steps.codex.outcome == 'success' }}
+        continue-on-error: true
         shell: bash
         env:
           COMMIT_MESSAGE: ${{ steps.codex.outputs.commit_message }}
           TARGET_BRANCH: ${{ steps.pr.outputs.head_ref }}
           GITHUB_PUSH_TOKEN: ${{ github.token }}
-        run: /srv/github-runner/storage/agent-relay/runner/finalize.sh
+          FINALIZE_LOG: ${{ runner.temp }}/agent-relay-finalize.log
+        run: bash runner/finalize.sh
+
+      - name: Upload Agent Relay output
+        if: ${{ always() && steps.plan_diff.outputs.plan_found != 'false' && steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-relay-output
+          path: |
+            ${{ runner.temp }}/agent-relay-console.log
+            ${{ runner.temp }}/agent-relay-finalize.log
+          if-no-files-found: warn
+
+      - name: Fail when finalization failed
+        if: ${{ steps.finalize.outcome == 'failure' }}
+        shell: bash
+        run: exit 1

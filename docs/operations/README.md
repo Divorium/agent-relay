@@ -65,7 +65,7 @@ Assigning `ANSIBLE_CONFIG` or `ANSIBLE_ROLES_PATH` on separate lines without `ex
 
 Use `ansible-core >= 2.18`. SSH host-key checking remains enabled. Do not commit private keys, passwords, GitHub tokens or Codex credentials.
 
-The created administrator receives configured public keys and passwordless sudo. Its login profile is managed with `umask 0022`, so newly cloned or updated checkout files are not group- or other-writable. Reconnect after Ansible changes the profile. `github-runner` is deliberately added to the Docker group, which is root-equivalent host access.
+The created administrator receives configured public keys and passwordless sudo. Ansible configures its login shell with `umask 0022`; `install.sh` does not source this profile. The setting applies before installation, when the administrator runs `git clone` or `git pull`, so those commands do not create group- or other-writable checkout entries that the installer must reject. Reconnect after Ansible changes the profile. `github-runner` is deliberately added to the Docker group, which is root-equivalent host access.
 
 Add ordinary packages by extending:
 

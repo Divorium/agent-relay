@@ -15,6 +15,14 @@
     password_lock: true
     state: present
 
+- name: Create administrator Ansible temporary directory
+  ansible.builtin.file:
+    path: "/home/{{ agent_relay_admin_user }}/.ansible/tmp"
+    state: directory
+    owner: "{{ agent_relay_admin_user }}"
+    group: "{{ agent_relay_admin_user }}"
+    mode: "0700"
+
 - name: Create administrator SSH directory
   ansible.builtin.file:
     path: "/home/{{ agent_relay_admin_user }}/.ssh"

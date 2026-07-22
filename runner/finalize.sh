@@ -4,6 +4,10 @@ set -euo pipefail
 : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
 : "${TARGET_BRANCH:?TARGET_BRANCH is required}"
 
+if [[ -n "${FINALIZE_LOG:-}" ]]; then
+  exec >"${FINALIZE_LOG}" 2>&1
+fi
+
 if [[ ! -d "${GITHUB_WORKSPACE}" || -L "${GITHUB_WORKSPACE}" ]]; then
   echo "GITHUB_WORKSPACE must be a non-symlink directory" >&2
   exit 1
@@ -61,7 +65,7 @@ git diff --cached --check
 original_head="$(git rev-parse HEAD)"
 git commit -m "$COMMIT_MESSAGE"
 
-askpass="$(mktemp)"
+askpass="$(mktemp "${RUNNER_TEMP:-/tmp}/agent-relay-askpass.XXXXXX")"
 cleanup() {
   rm -f "$askpass"
 }

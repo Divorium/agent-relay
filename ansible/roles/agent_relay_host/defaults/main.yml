@@ -2,3 +2,6 @@
 agent_relay_admin_user: agent-relay-admin
 agent_relay_admin_authorized_keys: []
 agent_relay_extra_apt_packages: []
+agent_relay_repository_url: https://github.com/Divorium/agent-relay.git
+agent_relay_repository_version: main
+agent_relay_github_credential: "{{ lookup('ansible.builtin.env', 'AGENT_RELAY_GITHUB_CREDENTIAL') }}"

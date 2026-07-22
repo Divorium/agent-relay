@@ -26,7 +26,12 @@ if source.count(old_lock_case) != 2:
 source = source.replace(old_lock_case, new_lock_case)
 path.write_text(source)
 PY'''
-staged_path.write_text(source.replace(write_marker, fixture_patch))
+source = source.replace(write_marker, fixture_patch)
+installer_call = 'bash "${source_root}/install.sh"'
+if source.count(installer_call) != 2:
+    raise SystemExit("installer invocation no longer matches the expected shape")
+source = source.replace(installer_call, 'bash -x "${source_root}/install.sh"')
+staged_path.write_text(source)
 PY
 
 chmod 0755 "${staged_test}"

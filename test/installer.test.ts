@@ -30,30 +30,40 @@ test("installer validates protected directories through sudo", async () => {
   assert.doesNotMatch(implementation, /\[\[ -d "\$\{path\}"/);
 });
 
-test("Ansible configures and reconciles secure checkout permissions", async () => {
+test("Ansible owns checkout and installation lifecycle", async () => {
   const users = await text("ansible/roles/agent_relay_host/tasks/users.yml");
   const filesystem = await text("ansible/roles/agent_relay_host/tasks/filesystem.yml");
+  const deploy = await text("ansible/roles/agent_relay_host/tasks/deploy.yml");
+  const main = await text("ansible/roles/agent_relay_host/tasks/main.yml");
+  const defaults = await text("ansible/roles/agent_relay_host/defaults/main.yml");
+  const ansibleReadme = await text("ansible/README.md");
   const operations = await text("docs/operations/README.md");
   const pkg = await text("package.json");
 
-  assert.match(users, /name: Configure administrator login umask/);
-  assert.match(users, /ansible\.builtin\.blockinfile:/);
-  assert.match(users, /path: "\/home\/\{\{ agent_relay_admin_user \}\}\/\.profile"/);
-  assert.match(users, /owner: "\{\{ agent_relay_admin_user \}\}"/);
-  assert.match(users, /group: "\{\{ agent_relay_admin_user \}\}"/);
-  assert.match(users, /mode: "0644"/);
-  assert.match(users, /umask 0022/);
+  assert.doesNotMatch(users, /\.profile|umask/);
+  assert.match(main, /import_tasks: deploy\.yml/);
+  assert.match(defaults, /agent_relay_repository_url:/);
+  assert.match(defaults, /agent_relay_repository_version: main/);
+  assert.match(defaults, /AGENT_RELAY_GITHUB_CREDENTIAL/);
 
-  assert.match(filesystem, /name: Inspect existing source checkout/);
-  assert.match(filesystem, /path: "\{\{ agent_relay_source_root \}\}\/\.git"/);
-  assert.match(filesystem, /name: Detect writable existing source checkout entries/);
-  assert.match(filesystem, /name: Remove group and other write permissions from existing source checkout/);
-  assert.match(filesystem, /- -perm\n\s+- \/022/);
-  assert.match(filesystem, /- chmod\n\s+- go-w/);
-  assert.match(filesystem, /- -xdev/);
-  assert.match(filesystem, /- -P/);
+  assert.match(deploy, /name: Preview Agent Relay checkout reconciliation/);
+  assert.match(deploy, /ansible\.builtin\.git:/);
+  assert.match(deploy, /check_mode: true/);
+  assert.match(deploy, /force: true/);
+  assert.match(deploy, /umask: "0022"/);
+  assert.match(deploy, /name: Stop runner listener before deployment/);
+  assert.match(deploy, /Runner\.Worker/);
+  assert.match(deploy, /name: Checkout Agent Relay source/);
+  assert.match(deploy, /- -perm\n\s+- \/022/);
+  assert.match(deploy, /- chmod\n\s+- go-w/);
+  assert.match(deploy, /name: Install or update Agent Relay/);
+  assert.match(deploy, /agent_relay_source_root \}\/install\.sh/);
+  assert.match(deploy, /stdin:.*agent_relay_github_credential/);
+  assert.match(deploy, /no_log:.*agent_relay_registration_complete/);
 
-  assert.doesNotMatch(operations, /Existing checkout created with a permissive umask/);
+  assert.match(filesystem, /register: agent_relay_runner_paths/);
+  assert.doesNotMatch(operations, /^\s*(git clone|git pull|\.\/install\.sh)/mu);
+  assert.doesNotMatch(ansibleReadme, /^\s*(git clone|git pull|\.\/install\.sh)/mu);
   assert.doesNotMatch(operations, /secure-checkout-permissions\.sh/);
   assert.doesNotMatch(pkg, /secure-checkout-permissions/);
 });
@@ -84,6 +94,7 @@ test("one host contract supplies installer, Ansible, and smoke versions", async 
   assert.match(install, /host_config_load "\$\{HOST_CONFIG_FILE\}"/);
   assert.match(ciSmoke, /host_config_load "\$\{repository_root\}\/config\/runner-host\.json"/);
   assert.match(roleVars, /config\/runner-host\.json.*from_json/);
+  assert.match(roleVars, /agent_relay_service_name:/);
   assert.doesNotMatch(defaults, /runner_version|go_version|typescript_version|codex_version|storage_root/);
   assert.doesNotMatch(install, /^RUNNER_VERSION=|^TYPESCRIPT_VERSION=|^CODEX_VERSION=/mu);
   assert.doesNotMatch(ciSmoke, /EXPECTED_GO_VERSION=1\.24\.5|EXPECTED_CODEX_VERSION=0\.144\.4/);
@@ -156,6 +167,5 @@ test("system test executes installer behavior instead of only matching source", 
   assert.match(pkg, /scripts\/host-config\.sh scripts\/host-toolchain-check\.sh/);
   assert.match(readme, /ansible\/README\.md/);
   assert.match(readme, /docs\/operations\/README\.md/);
-  assert.doesNotMatch(readme, /ansible-playbook|git pull --ff-only/);
-  assert.doesNotMatch(ansibleReadme, /sudo -u github-runner|\.\/install\.sh/);
+  assert.match(ansibleReadme, /Ansible performs clone, checkout, pull-equivalent reconciliation and installation/);
 });

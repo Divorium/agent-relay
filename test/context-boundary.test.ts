@@ -71,7 +71,8 @@ test("workflows validate and execute the pull request runtime with strict token 
     assert.match(workflow, /- name: Build pull-request runtime[\s\S]*run: npm run build/);
     assert.match(workflow, /run: node runner\/run-codex\.mjs/);
     assert.doesNotMatch(workflow, /node \/srv\/github-runner\/storage\/agent-relay\/runner\/run-codex\.mjs/);
-    assert.match(workflow, /run: \/srv\/github-runner\/storage\/agent-relay\/runner\/finalize\.sh/);
+    assert.match(workflow, /run: bash runner\/finalize\.sh/);
+    assert.doesNotMatch(workflow, /run: \/srv\/github-runner\/storage\/agent-relay\/runner\/finalize\.sh/);
     assert.match(workflow, /CODEX_WORKSPACE_ROOT: \$\{\{ runner\.workspace \}\}/);
     assert.match(workflow, /CODEX_TRANSCRIPT_PATH: \$\{\{ runner\.temp \}\}\/agent-relay-console\.log/);
     assert.doesNotMatch(workflow, /\btee\b/);

@@ -33,15 +33,21 @@
 - name: Reject unsafe stale runtime stage
   ansible.builtin.assert:
     that:
+      - agent_relay_runtime_stage_state.stat.isdir | default(false)
       - not (agent_relay_runtime_stage_state.stat.islnk | default(false))
       - (agent_relay_runtime_stage_mount.rc | default(1)) != 0
-    fail_msg: Runtime stage is a symlink or mount point and requires deliberate recovery.
+    fail_msg: Runtime stage is not a regular non-mounted directory and requires deliberate recovery.
   when: agent_relay_runtime_stage_state.stat.exists
 
-- name: Remove safe stale runtime stage
-  ansible.builtin.file:
-    path: "{{ agent_relay_runtime_stage_root }}"
-    state: absent
+- name: Remove safe stale runtime stage without crossing filesystems
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/rm
+      - -rf
+      - --one-file-system
+      - --
+      - "{{ agent_relay_runtime_stage_root }}"
+  changed_when: true
   when: agent_relay_runtime_stage_state.stat.exists
 
 - name: Create private runtime stage
@@ -241,7 +247,13 @@
       ansible.builtin.fail:
         msg: Agent Relay runtime activation failed; the previous runtime was restored when possible.
 
-- name: Remove preserved runtime after successful activation
-  ansible.builtin.file:
-    path: "{{ agent_relay_runtime_previous_root }}"
-    state: absent
+- name: Remove preserved runtime after successful activation without crossing filesystems
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/rm
+      - -rf
+      - --one-file-system
+      - --
+      - "{{ agent_relay_runtime_previous_root }}"
+  changed_when: true
+  when: agent_relay_active_runtime_state.stat.exists

@@ -12,6 +12,7 @@
   become_user: "{{ agent_relay_admin_user }}"
   ansible.builtin.command:
     argv:
+      - bash
       - "{{ agent_relay_source_root }}/scripts/github-connect"
     chdir: "{{ agent_relay_source_root }}"
     stdin: "{{ agent_relay_github_credential }}"

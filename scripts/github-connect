@@ -30,7 +30,7 @@ cleanup() {
   local status=$?
   rm -f -- "${SCRATCH_PREFIX}".*
   if (( lock_acquired == 1 )); then
-    rmdir -- "${LIFECYCLE_LOCK}" >/dev/null 2>&1 || true
+    sudo -n rmdir -- "${LIFECYCLE_LOCK}" >/dev/null 2>&1 || true
   fi
   sudo -k >/dev/null 2>&1 || true
   exit "${status}"
@@ -126,11 +126,11 @@ require_command stat
 require_command mkdir
 require_command rmdir
 
-admin_uid="$(id -u)"
-[[ -d "${LIFECYCLE_ROOT}" && ! -L "${LIFECYCLE_ROOT}" ]] || fail "Lifecycle lock root is missing; run ansible/playbooks/host.yml first"
-[[ "$(stat -c '%u' -- "${LIFECYCLE_ROOT}")" == "${admin_uid}" ]] || fail "The administrator must own ${LIFECYCLE_ROOT}"
-[[ "$(stat -c '%a' -- "${LIFECYCLE_ROOT}")" == "700" ]] || fail "Lifecycle lock root must have mode 0700"
-if ! mkdir -- "${LIFECYCLE_LOCK}"; then
+sudo -n test -d "${LIFECYCLE_ROOT}" || fail "Lifecycle lock root is missing; run ansible/playbooks/host.yml first"
+sudo -n test ! -L "${LIFECYCLE_ROOT}" || fail "Lifecycle lock root must not be a symlink"
+[[ "$(sudo_stat_uid "${LIFECYCLE_ROOT}")" == "0" ]] || fail "Lifecycle lock root must be root-owned"
+[[ "$(sudo_stat_mode "${LIFECYCLE_ROOT}")" == "755" ]] || fail "Lifecycle lock root must have mode 0755"
+if ! sudo -n mkdir -- "${LIFECYCLE_LOCK}"; then
   fail "Another Agent Relay host or connection operation is active"
 fi
 lock_acquired=1

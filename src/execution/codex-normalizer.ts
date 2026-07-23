@@ -133,7 +133,6 @@ export class CodexEventNormalizer {
     if (this.completedItems.has(id)) throw unsafe(`item ${id} received ${stage} after completion`);
     if (!existing && stage === "updated") throw unsafe(`item ${id} was updated before start`);
     if (!existing && this.items.size >= MAX_ACTIVE_ITEMS) throw unsafe(`active item limit of ${MAX_ACTIVE_ITEMS} exceeded`);
-    if (!existing && (type === "command_execution" || type === "file_change")) this.executionActivities += 1;
     const state = existing ?? { type, commandOutput: cumulative(""), text: cumulative(""), changes: new Map<string, CumulativeState>() };
     this.items.set(itemKey, state);
     switch (type) {
@@ -162,6 +161,7 @@ export class CodexEventNormalizer {
     if (stage === "completed") {
       const status = string(item.status, "command.status");
       const exitCode = item.exit_code === null || item.exit_code === undefined ? "none" : String(this.number(item.exit_code, "command.exit_code"));
+      this.executionActivities += 1;
       yield line("command completed:", `status=${status} exit=${exitCode}`);
     }
   }
@@ -184,7 +184,11 @@ export class CodexEventNormalizer {
       if (delta) yield line("patch:", delta);
       state.changes.set(key, cumulative(patch));
     }
-    if (stage === "completed") yield line("file changes completed:", string(item.status, "file_change.status"));
+    if (stage === "completed") {
+      const status = string(item.status, "file_change.status");
+      if (state.changes.size > 0) this.executionActivities += 1;
+      yield line("file changes completed:", status);
+    }
   }
 
   private *textItem(stage: "started" | "updated" | "completed", item: JsonRecord, state: ItemState, label: string, finalOnly: boolean): Generator<string> {

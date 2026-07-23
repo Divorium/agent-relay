@@ -53,6 +53,7 @@ test("host lifecycle uses one credential-free mutual exclusion boundary", async 
   assert.match(main, /name: Create Agent Relay lifecycle lock root/u);
   assert.match(main, /name: Acquire Agent Relay lifecycle lock/u);
   assert.match(main, /name: Release Agent Relay lifecycle lock/u);
+  assert.match(filesystem, /name: Reject unsafe obsolete installer lock/u);
   assert.match(filesystem, /name: Remove obsolete installer lock/u);
   assert.match(connection, /LIFECYCLE_ROOT=\/var\/lib\/agent-relay\/lifecycle/u);
   assert.match(connection, /mkdir -- "\$\{LIFECYCLE_LOCK\}"/u);

@@ -1,6 +1,6 @@
 import { appendFile, chmod, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { CodexExecutor, validateExecutionOutcome } from "./execution/codex-executor.js";
+import { CodexExecutor } from "./execution/codex-executor.js";
 import { CodexExecutionError } from "./execution/errors.js";
 import { createTranscriptSink } from "./execution/transcript.js";
 import { deriveJsonlRecordBytes, MAX_JSONL_RECORD_BYTES_HARD_LIMIT, MIN_JSONL_RECORD_BYTES } from "./execution/jsonl-parser.js";
@@ -22,5 +22,5 @@ export async function main(command = CODEX_RUN_COMMAND): Promise<void> {
   const maxJsonlRecordBytes = configuredJsonlBytes ?? deriveJsonlRecordBytes(maxOutputBytes);
   const workspace = await resolveWorkspace(workspaceRoot, workspaceInput); const planFile = await assertActivePlanFile(workspace, planPath); const commitMessage = deriveCommitMessage(await readFile(planFile, "utf8"));
   const runtimeRoot = join(home, ".cache", "agent-relay-runtime"); await mkdir(runtimeRoot, { recursive: true, mode: 0o700 }); await chmod(runtimeRoot, 0o700);
-  const transcript = await createTranscriptSink(runnerTemp, transcriptPath); const executor = new CodexExecutor(command, timeoutMs, maxOutputBytes, home, runtimeRoot, TRUSTED_RUNTIME_ROOT, 5_000, maxJsonlRecordBytes); const outcome = await executor.run(planPath, workspace, transcript); validateExecutionOutcome(outcome.exitCode, outcome.executionActivityCount); await appendFile(githubOutput, `commit_message=${commitMessage}\n`, "utf8");
+  const transcript = await createTranscriptSink(runnerTemp, transcriptPath); const executor = new CodexExecutor(command, timeoutMs, maxOutputBytes, home, runtimeRoot, TRUSTED_RUNTIME_ROOT, 5_000, maxJsonlRecordBytes); await executor.run(planPath, workspace, transcript); await appendFile(githubOutput, `commit_message=${commitMessage}\n`, "utf8");
 }

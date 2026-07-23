@@ -33,6 +33,7 @@
   environment:
     HOME: "/home/{{ agent_relay_admin_user }}"
     GIT_TERMINAL_PROMPT: "0"
+  register: agent_relay_checkout_result
 
 - name: Reconcile source checkout write permissions
   become: true

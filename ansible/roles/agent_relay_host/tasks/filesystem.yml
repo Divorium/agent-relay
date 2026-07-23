@@ -62,6 +62,14 @@
     follow: false
   register: agent_relay_obsolete_installer_lock
 
+- name: Reject unsafe obsolete installer lock
+  ansible.builtin.assert:
+    that:
+      - agent_relay_obsolete_installer_lock.stat.isreg
+      - not agent_relay_obsolete_installer_lock.stat.islnk
+    fail_msg: Obsolete installer lock is not a regular non-symlink file.
+  when: agent_relay_obsolete_installer_lock.stat.exists
+
 - name: Require obsolete installer lock to be idle
   ansible.builtin.command:
     argv:

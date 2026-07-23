@@ -30,7 +30,8 @@ mkdir -p \
   "${service_root}" \
   "${fake_bin}" \
   "${state_root}"
-chmod 0700 "${runner_root}" "${runner_home}" "${lifecycle_root}"
+chmod 0700 "${runner_root}" "${runner_home}"
+chmod 0755 "${lifecycle_root}"
 
 cp "${repository_root}/config/runner-host.json" "${source_root}/config/runner-host.json"
 cp "${repository_root}/scripts/host-config.sh" "${source_root}/scripts/host-config.sh"
@@ -65,10 +66,6 @@ sudo_stat_mode() { sudo -n stat -c '%a' -- "$1"; }''',
   esac
 }
 sudo_stat_mode() { stat -c '%a' -- "$1"; }'''
-)
-source = source.replace(
-    "[[ \"$(stat -c '%u' -- \"${LIFECYCLE_ROOT}\")\" == \"${admin_uid}\" ]] || fail \"The administrator must own ${LIFECYCLE_ROOT}\"",
-    "[[ \"${admin_uid}\" == \"1000\" ]] || fail \"The administrator must own ${LIFECYCLE_ROOT}\"",
 )
 path.write_text(source)
 PY

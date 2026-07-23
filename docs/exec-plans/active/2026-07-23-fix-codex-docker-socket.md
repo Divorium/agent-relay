@@ -23,6 +23,9 @@ The behavior is complete only when the merged revision is deployed through Ansib
 - [x] (2026-07-23 20:22Z) Observed successful complete CI run 30041653005 on SHA `10956c4adb837838e478db3246d0df5d4779d368` after the runner-label change.
 - [x] (2026-07-23 20:42Z) Confirmed complete CI run 30042975561 on final reviewed SHA `ad15b6aca2fdb9da9605ad3046b203ecdb5c0aed`; typecheck, tests with 100 percent coverage, runtime build, shell, Node, toolchain, and system tests all passed.
 - [x] (2026-07-23 20:42Z) Finished complete branch diff review. Two P1 findings were corrected: Docker is stopped before socket listener reconfiguration, and semantic success is enforced inside `CodexExecutor` rather than only by the CLI entrypoint. No unresolved P0 or P1 finding remains.
+- [x] (2026-07-23 20:56Z) Revalidated the checked-out implementation locally: all 129 Node tests passed with 100 percent line, branch, and function coverage; runtime build, shell and Node syntax checks, focused socket and runner-label tests, Ansible playbook syntax, and toolchain smoke passed; and the installer behavioral system test passed in an ephemeral container with the runner UID and GID mapped onto the repository bind mount.
+- [x] (2026-07-23 20:56Z) Inspected the current host and Docker state. Docker 29.6.2 and Compose 5.3.1 are healthy through `/run/docker.sock`; no Compose projects or containers exist, so no service reuse, restart, rebuild, or removal is appropriate.
+- [ ] (2026-07-23 20:56Z) Host deployment is blocked in this execution environment (completed: verified `docker.socket` and `docker.service` are active and enabled; remaining: deploy the dedicated socket and runner label). The session has no root capability, no non-example Ansible inventory, no `AGENT_RELAY_GITHUB_CREDENTIAL`, and the connected GitHub app requires reauthentication.
 - [ ] User merges PR 58 after the pre-merge gate is reported ready.
 - [ ] Deploy the merged revision through Ansible with `AGENT_RELAY_GITHUB_CREDENTIAL` available and record the deployed commit.
 - [ ] Verify the `agent-relay` label, both Docker sockets, the dedicated Docker endpoint, and current finalizer revision on the host.
@@ -61,6 +64,15 @@ The behavior is complete only when the merged revision is deployed through Ansib
 - Observation: reverting source alone does not remove an already installed systemd drop-in.
   Evidence: Ansible creates `/etc/systemd/system/docker.socket.d/agent-relay.conf`; an older revision that does not know this file cannot delete it. Rollback must explicitly remove the managed file and restart both Docker units, or deploy a cleanup revision before returning to an older source revision.
 
+- Observation: the current execution sandbox denies `/tmp`, and its writable repository/cache paths are too long for generated Unix socket fixture names.
+  Evidence: the unadjusted test run failed `mktemp` under `/tmp`; a run using the long writable cache path passed ordinary tests but the Unix socket fixture was truncated by the kernel path limit. With a short `/dev/shm` temporary root, all 129 Node tests passed with 100 percent coverage. The remaining installer system test passed inside `node:22-bookworm` with `/tmp` available.
+
+- Observation: the checked-out host has not received the planned Ansible socket deployment.
+  Evidence: `/run/docker.sock` is a working Unix socket and both Docker units are active and enabled, but `/srv/github-runner/storage/docker-socket` does not exist and Docker reports `no such file or directory` for the dedicated endpoint.
+
+- Observation: deployment and external PR acceptance cannot be performed from the current session.
+  Evidence: only `ansible/inventory/example.ini` exists, `AGENT_RELAY_GITHUB_CREDENTIAL` is absent, non-interactive sudo is unavailable, no authenticated `gh` CLI exists, and the connected GitHub app returned `reauthentication_required`.
+
 ## Decision Log
 
 - Decision: Add a second systemd-activated Docker socket at `/srv/github-runner/storage/docker-socket/docker.sock`.
@@ -95,9 +107,13 @@ The behavior is complete only when the merged revision is deployed through Ansib
   Rationale: static tests cannot prove systemd descriptor handoff, bubblewrap compatibility, Docker CLI access, GitHub label visibility, or the deployed finalizer revision.
   Date/Author: 2026-07-23 / ChatGPT
 
+- Decision: Preserve the current Docker service and avoid creating a proxy or container-managed substitute for the missing dedicated socket.
+  Rationale: Docker and Compose are healthy, there are no existing containers or Compose projects to manage, and the accepted architecture requires a real second systemd-activated socket inherited by the existing daemon. A temporary proxy or second daemon would not satisfy the plan and would create unmanaged lifecycle state.
+  Date/Author: 2026-07-23 / Codex
+
 ## Outcomes & Retrospective
 
-The branch now has a coherent socket boundary, semantic success gate, deterministic runner-routing contract, and safe Docker listener lifecycle. Complete CI run 30042975561 passed on reviewed SHA `ad15b6aca2fdb9da9605ad3046b203ecdb5c0aed` after all P1 corrections. The remaining uncertainty is environmental by definition: the code has not yet been merged and deployed, so the real systemd socket, GitHub runner label, Codex sandbox, Token Minify helpers, and finalizer must still be exercised together.
+The branch now has a coherent socket boundary, semantic success gate, deterministic runner-routing contract, and safe Docker listener lifecycle. Complete CI run 30042975561 passed on reviewed SHA `ad15b6aca2fdb9da9605ad3046b203ecdb5c0aed` after all P1 corrections. A fresh local validation on 2026-07-23 also passed all 129 Node tests with 100 percent coverage and passed the installer system test in an ephemeral, ownership-preserving container. The current host remains on the old socket layout, however, and this session lacks the root access, real inventory, GitHub credential, and authenticated GitHub connection needed to deploy or run external PR acceptance. The real systemd socket, GitHub runner label, Codex sandbox, Token Minify helpers, and finalizer therefore still must be exercised together before this plan can move to completed.
 
 The main lesson is that orchestration success is not execution success. The first consumer run reached the correct workflow but revealed both a sandbox type mismatch and a false semantic success. Subsequent review also showed that fail-closed identity validation does not replace deterministic scheduling. The final gate therefore remains a production-path consumer run, not static configuration alone.
 
@@ -259,3 +275,5 @@ The plan-only status commit must receive the same complete green CI before the P
 2026-07-23 / ChatGPT: Created the plan from the real Monify consumer failure and the dedicated systemd socket plus semantic activity-gate design.
 
 2026-07-23 / ChatGPT: Updated the plan after complete CI exposed a missing `node:net` declaration and review exposed nondeterministic generic self-hosted scheduling. Added the managed `agent-relay` label, control credential requirement, consumer label routing, current CI evidence, and an explicit rollback caveat for persistent systemd host state.
+
+2026-07-23 / Codex: Reconciled the plan with the checked-out source and current host. Recorded fresh local validation, the healthy but undeployed Docker state, the decision not to create unmanaged container lifecycle state, and the concrete authorization and connectivity blockers that prevent Ansible deployment and Monify acceptance from this session.

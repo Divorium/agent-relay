@@ -125,13 +125,14 @@
         or agent_relay_service_state.rc != 0
       }}
 
-- name: Require GitHub credential for first runner registration
+- name: Require installation playbook for first runner registration
   ansible.builtin.assert:
     that:
+      - agent_relay_manage_runner_lifecycle | bool
       - agent_relay_github_credential | length > 0
     fail_msg: >-
-      Export AGENT_RELAY_GITHUB_CREDENTIAL on the Ansible control machine with an organization credential
-      authorized for Self-hosted runners: write, then rerun the playbook.
+      First runner registration requires playbooks/install.yml and AGENT_RELAY_GITHUB_CREDENTIAL
+      with organization Self-hosted runners: write permission.
   when:
     - agent_relay_deployment_required
     - not agent_relay_registration_complete
@@ -232,7 +233,12 @@
     argv:
       - "{{ agent_relay_source_root }}/install.sh"
     chdir: "{{ agent_relay_source_root }}"
-    stdin: "{{ agent_relay_github_credential if not agent_relay_registration_complete else '' }}"
+    stdin: >-
+      {{
+        agent_relay_github_credential
+        if (agent_relay_manage_runner_lifecycle | bool and not agent_relay_registration_complete)
+        else ''
+      }}
     stdin_add_newline: true
   environment:
     HOME: "/home/{{ agent_relay_admin_user }}"

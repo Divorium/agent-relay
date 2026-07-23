@@ -146,6 +146,8 @@ The installer validates host state, installs runner binaries when absent, instal
 
 The Docker role keeps `/run/docker.sock` and adds `/srv/github-runner/storage/docker-socket/docker.sock`. When listener configuration changes, it stops `docker.service`, restarts `docker.socket`, and then starts Docker so `dockerd -H fd://` receives both descriptors.
 
+For each Codex execution, `scripts/codex-run` routes `worker-run` command logs into that execution's private writable runtime through `TOKEN_MINIFY_RUN_LOG_DIR`. The runtime is removed when the launcher exits; `/var/lib/codex-token-minify` does not need to be writable inside the Codex sandbox.
+
 ## Interrupted runtime swap
 
 Normally `dist.previous` exists only between two rename operations and is deleted after successful activation.

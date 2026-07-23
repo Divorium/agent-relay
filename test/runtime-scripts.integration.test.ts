@@ -150,6 +150,7 @@ set -euo pipefail
   printf 'TEMP=%s\n' "\${TEMP:-}"
   printf 'DOCKER_CONFIG=%s\n' "\${DOCKER_CONFIG:-}"
   printf 'DOCKER_HOST=%s\n' "\${DOCKER_HOST:-}"
+  printf 'TOKEN_MINIFY_RUN_LOG_DIR=%s\n' "\${TOKEN_MINIFY_RUN_LOG_DIR:-}"
   printf 'PATH=%s\n' "\${PATH:-}"
   printf 'GIT_OPTIONAL_LOCKS=%s\n' "\${GIT_OPTIONAL_LOCKS:-}"
   printf 'LEAK=%s\n' "\${LEAK_ME:-}"
@@ -205,6 +206,7 @@ set -euo pipefail
     assert.match(invocation, /TEMP=.*\/tmp/);
     assert.match(invocation, /DOCKER_CONFIG=.*\/docker/);
     assert.match(invocation, new RegExp(`DOCKER_HOST=unix://${escapeRegExp(runtime.socketPath)}`));
+    assert.match(invocation, /TOKEN_MINIFY_RUN_LOG_DIR=.*\/worker-run/);
     assert.match(invocation, /PATH=\/opt\/java\/openjdk\/bin:\/usr\/local\/go\/bin:\/opt\/rust\/cargo\/bin:\/usr\/local\/bin:\/usr\/bin:\/bin/);
     assert.match(invocation, /GIT_OPTIONAL_LOCKS=0/);
     assert.match(invocation, /LEAK=\n/);

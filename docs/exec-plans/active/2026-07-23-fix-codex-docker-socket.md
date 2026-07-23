@@ -32,11 +32,14 @@ Neither playbook imports, includes, or reruns the other.
 - [x] (2026-07-23 21:22Z) Moved runner-label reconciliation out of `agent_relay_host` into the separate `agent_relay_github_connection` role.
 - [x] (2026-07-23 21:28Z) Added behavioral integration coverage proving: connection before host installation fails; host installation uses no PAT and performs no registration; connection registers and starts the listener; repeated connection does not duplicate registration; later host updates preserve registration and use no PAT.
 - [x] (2026-07-23 21:29Z) Observed complete successful CI run 30046295586 on SHA `2ca79371a30a872d3318278573ad2f930cfdce18` after the lifecycle split. Typecheck, Node tests with 100 percent coverage, runtime build, shell checks, Node script checks, toolchain smoke, and behavioral system tests passed.
-- [ ] Confirm the final plan-only SHA receives the same complete green CI.
+- [x] (2026-07-23 21:39Z) Inspected the real runner host: Docker 29.6.2, Compose 5.3.1, and the runner listener were active, no containers or Compose projects existed, and the dedicated Docker socket was not yet deployed.
+- [x] (2026-07-23 21:41Z) Routed `worker-run` logs into the per-execution private runtime with `TOKEN_MINIFY_RUN_LOG_DIR` after the real sandbox proved its default log directory was read-only.
+- [x] (2026-07-23 21:42Z) Revalidated typecheck, runtime build, shell syntax, Node script syntax, toolchain smoke, all 129 Node tests with 100 percent line, branch, and function coverage, the lifecycle system test, real Token Minify helper execution, Docker 29.6.2, and Compose 5.3.1.
+- [ ] Confirm the final implementation SHA, including the private `worker-run` log path, receives the same complete green CI.
 - [ ] User merges PR 58.
-- [ ] Run `host.yml` on the target to deploy the dedicated Docker socket and current runtime.
+- [ ] Run `host.yml` on the target to deploy the dedicated Docker socket and current runtime. The 2026-07-23 Codex execution confirmed this remains necessary but could not perform it because its sandbox has `no_new_privileges`, no root-capable `sudo`, and a repository-wide prohibition on Codex Git commands while the role owns Git checkout.
 - [ ] Run `github-connect.yml` once with `AGENT_RELAY_GITHUB_CREDENTIAL` to reconcile registration and `agent-relay` label state.
-- [ ] Verify both Docker sockets, GitHub label state, runner listener, dedicated Docker access, and deployed finalizer revision.
+- [ ] Verify both Docker sockets, GitHub label state, runner listener, dedicated Docker access, and deployed finalizer revision. The connected GitHub app required reauthentication during the 2026-07-23 attempt.
 - [ ] Rerun Monify PR 48 and inspect command execution, Token Minify helpers, Docker access, transcript, and finalization.
 - [ ] Prove a later release through PAT-free `host.yml` only.
 - [ ] Move this plan to `completed/` after consumer acceptance.
@@ -73,6 +76,18 @@ Neither playbook imports, includes, or reruns the other.
 - Observation: reverting Git source does not remove an already deployed systemd drop-in.
   Evidence: rollback of the dedicated socket requires an explicit cleanup revision or documented emergency removal.
 
+- Observation: Token Minify helper presence does not guarantee `worker-run` can execute inside the sandbox.
+  Evidence: the installed helper failed with `Read-only file system: '/var/lib/codex-token-minify/command-output/...'` until `TOKEN_MINIFY_RUN_LOG_DIR` pointed into the private writable runtime.
+
+- Observation: `command` is a shell builtin and cannot be passed directly as the executable to `worker-run`.
+  Evidence: `worker-run -- command -v ...` exited 127 with `[COMMAND_NOT_FOUND]`; `worker-run -- bash -lc 'command -v ...'` succeeded and listed all four helpers.
+
+- Observation: this runner still has only the operator Docker endpoint.
+  Evidence: `systemctl status docker.socket` listed only `/run/docker.sock`, and `/srv/github-runner/storage/docker-socket/docker.sock` did not exist.
+
+- Observation: the managed Codex sandbox is intentionally not a host-deployment context.
+  Evidence: `sudo` reported `no new privileges`, `/tmp` was denied, and Ansible could not write system state; UID-mapped disposable containers provided a normal private `/tmp` for sandbox-sensitive tests without changing repository ownership.
+
 ## Decision Log
 
 - Decision: Use `/srv/github-runner/storage/docker-socket/docker.sock` as a second systemd-activated Docker endpoint.
@@ -103,6 +118,14 @@ Neither playbook imports, includes, or reruns the other.
   Rationale: host runtime mutation and runner registration must never execute concurrently against the same runner directory and service.
   Date/Author: 2026-07-23 / ChatGPT
 
+- Decision: Set `TOKEN_MINIFY_RUN_LOG_DIR` to a `worker-run` child of each launcher-created private runtime.
+  Rationale: the helper requires a writable log directory, while runner home and `/var/lib` must remain outside the Codex write boundary; launcher cleanup already provides the correct lifetime.
+  Date/Author: 2026-07-23 / Codex
+
+- Decision: Reuse the running Docker daemon and avoid any container or Compose lifecycle mutation.
+  Rationale: Docker was healthy and no persistent containers or Compose projects existed; only privileged systemd socket reconfiguration is required, and this sandbox cannot safely perform it.
+  Date/Author: 2026-07-23 / Codex
+
 ## Outcomes & Retrospective
 
 The branch now has four explicit boundaries:
@@ -115,6 +138,8 @@ The branch now has four explicit boundaries:
 `host.yml` can run on a completely fresh machine without a PAT and leaves an unregistered listener disabled. `github-connect.yml` then performs only external GitHub connection. Every later release runs `host.yml` alone and preserves complete registration state.
 
 CI run 30046295586 proved both static boundaries and the behavioral sequence. Environmental acceptance remains after merge because static and simulated tests cannot prove the real systemd descriptor handoff, GitHub organization label state, Codex bubblewrap behavior, installed Token Minify helpers, and real finalizer execution together.
+
+The 2026-07-23 real Codex execution additionally found and corrected the Token Minify log-path boundary. With `TOKEN_MINIFY_RUN_LOG_DIR` set to private runtime state, actual `worker-run` calls completed and invoked Docker and Compose successfully. The current host is still pre-deployment for the dedicated socket, and GitHub state could not be refreshed because the connected app required reauthentication, so the plan remains active.
 
 ## Context and Orientation
 
@@ -138,7 +163,7 @@ The external consumer remains Monify PR 48. Its workflow targets `[self-hosted, 
 
 ## Plan of Work
 
-The implementation is complete pending final CI on this plan update.
+The checked-out implementation now includes both the dedicated Docker socket boundary and the private Token Minify command-log boundary. It is pending final CI, merge, privileged host deployment, GitHub connection verification, and consumer acceptance.
 
 After merge, deploy in this order:
 
@@ -207,7 +232,7 @@ Verify in GitHub that `gh-runner` has `self-hosted`, `linux`, `x64`, and `agent-
 Then rerun Monify PR 48. Its active plan must execute:
 
     worker-run -- pwd
-    worker-run -- command -v worker-read worker-run worker-write worker-extract-chat
+    worker-run -- bash -lc 'command -v worker-read worker-run worker-write worker-extract-chat'
     worker-run -- docker version
     worker-run -- docker compose version
 
@@ -235,6 +260,7 @@ For later releases, run only:
 10. A zero-exit Codex process without command or file-change activity fails.
 11. Monify runs the required helper and Docker commands through the deployed production path.
 12. Finalization commits and pushes only through the trusted runner script.
+13. `worker-run` writes command logs beneath the launcher-created private runtime and never requires a writable runner home or `/var/lib`.
 
 ## Idempotence and Recovery
 
@@ -274,6 +300,20 @@ Latest successful implementation evidence before this plan-only commit:
 
 The plan-only commit must receive the same complete green CI before PR 58 is reported ready.
 
+Local acceptance evidence from 2026-07-23:
+
+    Docker Engine: 29.6.2
+    Docker Compose: 5.3.1
+    persistent containers: none
+    Compose projects: none
+    dedicated socket: not deployed
+    repository ownership mismatches: none
+    host static/runtime/shell/toolchain checks: passed
+    UID-mapped Node tests: 129 passed with 100 percent line, branch, and function coverage
+    UID-mapped lifecycle system test: passed
+    worker-run with private log directory: passed
+    validation containers and pulled Node image: removed
+
 ## Interfaces and Dependencies
 
 `config/runner-host.json` defines the shared host contract, including:
@@ -304,3 +344,5 @@ The plan-only commit must receive the same complete green CI before PR 58 is rep
 2026-07-23 / ChatGPT: Corrected Docker service ordering and moved semantic success into the executor boundary.
 
 2026-07-23 / ChatGPT: Rejected the overlapping playbook design and implemented fully disjoint `host.yml` and `github-connect.yml` lifecycles with separate roles, scripts, behavioral tests, documentation, and PAT boundaries.
+
+2026-07-23 / Codex: Re-executed the plan on the real runner, documented the remaining privileged deployment boundary, corrected the invalid shell-builtin helper probe, and routed Token Minify command logs into the launcher-created private runtime after real sandbox acceptance exposed the read-only default.

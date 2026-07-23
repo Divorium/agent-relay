@@ -47,11 +47,15 @@ runtime_dir="$(mktemp -d "${CODEX_RUNTIME_ROOT}/run.XXXXXX")"
 for state_directory in "${TOOLCHAIN_STATE_SUBDIRECTORIES[@]}"; do
   mkdir -m 0700 "${runtime_dir}/${state_directory}"
 done
+mkdir -m 0700 "${runtime_dir}/worker-run"
 
 current_user="$(id -un)"
 declare -a toolchain_env
 toolchain_environment_build "${current_user}" "${HOME}" "${runtime_dir}" toolchain_env
-toolchain_env+=("DOCKER_HOST=unix://${DOCKER_SOCKET_PATH}")
+toolchain_env+=(
+  "DOCKER_HOST=unix://${DOCKER_SOCKET_PATH}"
+  "TOKEN_MINIFY_RUN_LOG_DIR=${runtime_dir}/worker-run"
+)
 
 child_pid=""
 forward_signal() {

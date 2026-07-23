@@ -120,6 +120,8 @@ The dedicated directory is `github-runner`-owned mode `0700`. The socket is `roo
 DOCKER_HOST=unix:///srv/github-runner/storage/docker-socket/docker.sock
 ```
 
+The launcher also sets `TOKEN_MINIFY_RUN_LOG_DIR` to a `worker-run` directory inside the per-execution private runtime. This keeps Token Minify command logs writable without exposing the runner home or `/var/lib` to Codex, and the launcher removes the directory with the rest of the private runtime after execution.
+
 Neither `/run` nor either socket file is a writable Codex root.
 
 ## Host toolchains

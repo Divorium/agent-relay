@@ -47,7 +47,7 @@ test("host provisioning, launcher, and sandbox share one directory-based Docker 
   assert.match(launcher, /host_config_load "\$\{host_config_path\}"/u);
   assert.match(launcher, /Docker socket root must be a regular directory/u);
   assert.match(launcher, /Docker socket must be a non-symlink Unix socket/u);
-  assert.match(launcher, /toolchain_env\+=\("DOCKER_HOST=unix:\/\/\$\{DOCKER_SOCKET_PATH\}"\)/u);
+  assert.match(launcher, /toolchain_env\+=\([\s\S]*"DOCKER_HOST=unix:\/\/\$\{DOCKER_SOCKET_PATH\}"[\s\S]*"TOKEN_MINIFY_RUN_LOG_DIR=\$\{runtime_dir\}\/worker-run"[\s\S]*\)/u);
 
   const args = createCodexArgs(
     "/runner/_work/repository/repository",

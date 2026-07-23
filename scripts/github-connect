@@ -4,9 +4,10 @@ set -euo pipefail
 SOURCE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 HOST_CONFIG_FILE=${SOURCE_ROOT}/config/runner-host.json
 HOST_CONFIG_LOADER=${SOURCE_ROOT}/scripts/host-config.sh
-LOCK_ROOT=/var/lib/agent-relay
-LOCK_FILE=${LOCK_ROOT}/install.lock
+LIFECYCLE_ROOT=/var/lib/agent-relay/lifecycle
+LIFECYCLE_LOCK=${LIFECYCLE_ROOT}/active
 SCRATCH_PREFIX=/tmp/agent-relay-github-connect.$$
+lock_acquired=0
 
 fail() {
   printf '%s\n' "$*" >&2
@@ -28,6 +29,9 @@ sudo_stat_mode() { sudo -n stat -c '%a' -- "$1"; }
 cleanup() {
   local status=$?
   rm -f -- "${SCRATCH_PREFIX}".*
+  if (( lock_acquired == 1 )); then
+    rmdir -- "${LIFECYCLE_LOCK}" >/dev/null 2>&1 || true
+  fi
   sudo -k >/dev/null 2>&1 || true
   exit "${status}"
 }
@@ -115,18 +119,21 @@ SERVICE_UNIT=/etc/systemd/system/${SERVICE_NAME}
 
 require_command sudo
 sudo -n true || fail "The administrator requires passwordless sudo"
-require_command flock
 require_command curl
 require_command jq
 require_command ps
 require_command stat
+require_command mkdir
+require_command rmdir
 
-[[ -f "${LOCK_FILE}" && ! -L "${LOCK_FILE}" ]] || fail "The install lock must be a regular non-symlink file"
 admin_uid="$(id -u)"
-[[ "$(stat -c '%u' -- "${LOCK_FILE}")" == "${admin_uid}" ]] || fail "The administrator must own ${LOCK_FILE}"
-[[ "$(stat -c '%a' -- "${LOCK_FILE}")" == "600" ]] || fail "The install lock must have mode 0600"
-exec {lock_fd}<>"${LOCK_FILE}"
-flock -n "${lock_fd}" || fail "Another Agent Relay installation or connection operation is active"
+[[ -d "${LIFECYCLE_ROOT}" && ! -L "${LIFECYCLE_ROOT}" ]] || fail "Lifecycle lock root is missing; run ansible/playbooks/host.yml first"
+[[ "$(stat -c '%u' -- "${LIFECYCLE_ROOT}")" == "${admin_uid}" ]] || fail "The administrator must own ${LIFECYCLE_ROOT}"
+[[ "$(stat -c '%a' -- "${LIFECYCLE_ROOT}")" == "700" ]] || fail "Lifecycle lock root must have mode 0700"
+if ! mkdir -- "${LIFECYCLE_LOCK}"; then
+  fail "Another Agent Relay host or connection operation is active"
+fi
+lock_acquired=1
 
 [[ "$(runner_binary_state)" == "complete" ]] || fail "Run ansible/playbooks/host.yml before connecting the runner to GitHub"
 require_regular_file "${SOURCE_ROOT}/dist/src/run-codex.js"

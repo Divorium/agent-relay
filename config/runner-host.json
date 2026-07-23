@@ -13,6 +13,7 @@
   "typescript_version": "5.8.3",
   "codex_version": "0.144.4",
   "base_root": "/srv/github-runner",
+  "docker_socket_path": "/srv/github-runner/storage/docker-socket/docker.sock",
   "runner_user": "github-runner",
   "builder_user": "agent-relay-builder"
 }

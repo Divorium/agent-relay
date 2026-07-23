@@ -2,7 +2,7 @@
 
 ## Supported host
 
-Agent Relay supports a fresh Debian 13 (Trixie) x86-64 systemd host. Before Ansible, the host needs network access and root SSH only.
+Agent Relay supports Debian 13 (Trixie) x86-64 with systemd as PID 1. A fresh target needs network access and root SSH only.
 
 ## Configure the control machine
 
@@ -12,33 +12,11 @@ cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml
 $EDITOR inventory/example.ini inventory/group_vars/all.yml
 ```
 
-Replace `inventory/runners.ini` in the commands below with the configured inventory filename when different.
+Replace `inventory/runners.ini` below with the configured inventory filename when different. Use `ansible-core >= 2.18`; SSH host-key checking remains enabled.
 
-## First installation
+## Host lifecycle
 
-Before first runner registration, export a GitHub organization credential on the control machine:
-
-```bash
-export AGENT_RELAY_GITHUB_CREDENTIAL='github_pat_...'
-```
-
-A fine-grained token needs `Self-hosted runners: Read and write`. A classic PAT needs `admin:org`. The credential is passed to `install.sh` through standard input only when registration is absent. Ansible also uses it to add and verify the managed `agent-relay` organization-runner label. The credential is not stored on the target.
-
-Run the installation playbook from the repository `ansible` directory:
-
-```bash
-ANSIBLE_CONFIG="$PWD/ansible.cfg" \
-ANSIBLE_ROLES_PATH="$PWD/roles" \
-ansible-playbook \
-  --inventory "$PWD/inventory/runners.ini" \
-  "$PWD/playbooks/install.yml"
-```
-
-The installation playbook imports the complete host playbook with runner lifecycle management enabled. It may be rerun, but every run requires the PAT because GitHub runner identity and labels are reconciled through the organization API.
-
-## Update an installed host
-
-After `.runner`, `.credentials`, and `.credentials_rsaparams` exist and the runner has the `agent-relay` label, use the PAT-free host playbook for releases and host configuration changes:
+`playbooks/host.yml` is the complete host installation and update entrypoint. Run it first on a fresh machine and for every later release:
 
 ```bash
 ANSIBLE_CONFIG="$PWD/ansible.cfg" \
@@ -48,56 +26,129 @@ ansible-playbook \
   "$PWD/playbooks/host.yml"
 ```
 
-`playbooks/host.yml` reconciles all recurring host state. It updates the repository and invokes `install.sh` only when deployment is required. The installer detects the complete registration and does not request or consume a PAT. If registration is absent or partial, the host playbook fails and directs the operator to `playbooks/install.yml`; it never creates an unlabeled runner.
+The host playbook does not require or read `AGENT_RELAY_GITHUB_CREDENTIAL`. It owns:
 
-Ansible owns the deployment lifecycle. It provisions the host, clones or updates the configured repository revision with `umask 0022`, reconciles checkout permissions, restores managed directory modes, configures both Docker sockets, drains active jobs when deployment is required, and runs `install.sh`. Do not manually clone, pull, edit Docker systemd drop-ins, or invoke the installer on the target.
+- Python bootstrap;
+- system packages and repositories;
+- administrator, runner, and builder accounts;
+- secure filesystem roots;
+- Docker and containerd configuration;
+- both Docker socket listeners;
+- language toolchains and Codex CLI;
+- official GitHub Runner binaries;
+- the runner systemd unit;
+- managed source checkout;
+- staged Agent Relay runtime build and activation.
 
-The checkout is managed state. Local target changes are discarded when Ansible reconciles the configured revision.
+On an unconnected host, the runner unit remains disabled and stopped. On an already connected host, runtime updates restart the existing listener after active jobs drain.
 
-### If Ansible cannot find `agent_relay_host`
+Ansible owns the checkout and deployment lifecycle. Do not manually clone, pull, edit Docker systemd drop-ins, register the runner, or invoke installation scripts on the target.
 
-An error such as `the role 'agent_relay_host' was not found` means that Ansible did not load the repository role path. This can happen when `ansible.cfg` is not discovered, is ignored, or the command is run from a different directory.
+## One-time GitHub connection
 
-From the repository `ansible` directory, verify that the role exists:
+After `host.yml` succeeds, export an organization credential:
 
 ```bash
-test -f "$PWD/roles/agent_relay_host/tasks/main.yml" && echo "role exists"
+export AGENT_RELAY_GITHUB_CREDENTIAL='github_pat_...'
 ```
 
-Check whether Ansible loaded the configured role path:
+A fine-grained PAT needs `Self-hosted runners: Read and write`. A classic PAT needs `admin:org`.
+
+Run the separate connection playbook:
+
+```bash
+ANSIBLE_CONFIG="$PWD/ansible.cfg" \
+ANSIBLE_ROLES_PATH="$PWD/roles" \
+ansible-playbook \
+  --inventory "$PWD/inventory/runners.ini" \
+  "$PWD/playbooks/github-connect.yml"
+```
+
+This playbook does not rerun host provisioning and does not import `host.yml`. It only:
+
+1. verifies that runner binaries, the runtime, and the service unit already exist;
+2. creates runner registration when absent;
+3. enables and starts the listener;
+4. finds the organization runner named `gh-runner`;
+5. adds `agent-relay` through the additive labels endpoint;
+6. verifies the final label set.
+
+The PAT is passed through standard input to `scripts/github-connect` and through authenticated GitHub API calls. It is hidden from Ansible output and is not stored on the target.
+
+Rerun `github-connect.yml` only to repair registration service state or the managed label. Ordinary releases use only `host.yml` without a PAT.
+
+## Expected first deployment sequence
+
+```bash
+cd ansible
+
+ANSIBLE_CONFIG="$PWD/ansible.cfg" \
+ANSIBLE_ROLES_PATH="$PWD/roles" \
+ansible-playbook \
+  --inventory "$PWD/inventory/runners.ini" \
+  "$PWD/playbooks/host.yml"
+
+export AGENT_RELAY_GITHUB_CREDENTIAL='github_pat_...'
+ANSIBLE_CONFIG="$PWD/ansible.cfg" \
+ANSIBLE_ROLES_PATH="$PWD/roles" \
+ansible-playbook \
+  --inventory "$PWD/inventory/runners.ini" \
+  "$PWD/playbooks/github-connect.yml"
+unset AGENT_RELAY_GITHUB_CREDENTIAL
+```
+
+## Later release sequence
+
+```bash
+cd ansible
+ANSIBLE_CONFIG="$PWD/ansible.cfg" \
+ANSIBLE_ROLES_PATH="$PWD/roles" \
+ansible-playbook \
+  --inventory "$PWD/inventory/runners.ini" \
+  "$PWD/playbooks/host.yml"
+```
+
+## If Ansible cannot find a role
+
+From the repository `ansible` directory, verify both roles:
+
+```bash
+test -f "$PWD/roles/agent_relay_host/tasks/main.yml"
+test -f "$PWD/roles/agent_relay_github_connection/tasks/main.yml"
+```
+
+Check the active role path:
 
 ```bash
 ansible-config dump --only-changed | grep DEFAULT_ROLES_PATH
 ```
 
-If required, pass the configuration and role path explicitly as shown in the playbook commands above. Assigning `ANSIBLE_CONFIG` or `ANSIBLE_ROLES_PATH` on separate lines without `export` does not pass them to `ansible-playbook`.
+Pass `ANSIBLE_CONFIG` and `ANSIBLE_ROLES_PATH` inline as shown above. Assigning them on separate lines without `export` does not pass them to `ansible-playbook`.
 
-Use `ansible-core >= 2.18`. SSH host-key checking remains enabled. Do not commit private keys, passwords, GitHub tokens, or Codex credentials.
+Do not commit private keys, passwords, GitHub tokens, or Codex credentials.
 
 ## Codex authentication
 
-Codex authentication remains an explicit credential operation after the host exists:
+Codex authentication remains a separate explicit operation:
 
 ```bash
 ssh agent-relay-admin@HOST
 sudo -u github-runner -H /usr/local/bin/codex login
 ```
 
-`install.sh` neither performs nor verifies Codex authentication.
+Neither `install.sh` nor `scripts/github-connect` authenticates Codex.
 
 ## Deployment behavior
 
-The role previews repository reconciliation before changing the target. When deployment is required, it stops the runner listener, waits for active `Runner.Worker` processes, updates the checkout, and runs `install.sh` as `agent-relay-admin`.
+The host role previews repository reconciliation before changing the target. When deployment is required, it stops an active listener, waits for `Runner.Worker` processes, updates the checkout, and runs `install.sh` as `agent-relay-admin`.
 
-The role configures `docker.socket` with the ordinary `/run/docker.sock` listener and the Codex listener defined by `config/runner-host.json`, currently `/srv/github-runner/storage/docker-socket/docker.sock`. When the socket configuration changes, the role stops `docker.service`, restarts `docker.socket`, and then starts Docker so `dockerd -H fd://` receives both descriptors.
+The installer validates host state, installs runner binaries when absent, installs the systemd unit, builds a staged runtime, and activates it by same-filesystem rename. It never calls the GitHub registration API. Registration state is only inspected to decide whether the listener should be restarted or remain disabled.
 
-The installer validates users, directories, toolchains, Docker, checkout ownership, and runtime state. It preserves the Ansible-managed runner directory mode while extracting the GitHub Runner archive, builds a staged runtime, and activates it by same-filesystem rename.
-
-Use `playbooks/host.yml` for recurring releases. Use `playbooks/install.yml` only when runner registration or managed-label reconciliation is required.
+The Docker role keeps `/run/docker.sock` and adds `/srv/github-runner/storage/docker-socket/docker.sock`. When listener configuration changes, it stops `docker.service`, restarts `docker.socket`, and then starts Docker so `dockerd -H fd://` receives both descriptors.
 
 ## Interrupted runtime swap
 
-Normally `dist.previous` exists only between the two rename operations and is deleted immediately after a successful swap.
+Normally `dist.previous` exists only between two rename operations and is deleted after successful activation.
 
 If an interrupted run leaves `dist.previous`:
 
@@ -111,24 +162,25 @@ If an interrupted run leaves `dist.previous`:
    ```
 
 4. when a valid `dist` exists, deliberately remove the stale previous tree;
-5. rebuild the host when the state cannot be established safely.
+5. rebuild the host when state cannot be established safely.
 
-Listener startup failure does not trigger runtime rollback because the listener starts the GitHub runner and does not load Agent Relay `dist`.
+Listener startup failure does not trigger runtime rollback because the listener does not load the runtime during build validation.
 
 ## Status
 
 ```bash
 sudo systemctl status actions.runner.Divorium.gh-runner.service
 sudo systemctl status docker.socket docker.service
+sudo test -S /run/docker.sock
 sudo test -S /srv/github-runner/storage/docker-socket/docker.sock
 sudo -u github-runner -H env \
   DOCKER_HOST=unix:///srv/github-runner/storage/docker-socket/docker.sock \
   docker info
 ```
 
-Both Docker sockets must exist. The dedicated directory must be owned by `github-runner`, the socket must be `root:docker` mode `0660`, and the runner account must be a member of `docker`.
+Both Docker sockets must exist. The dedicated directory must be owned by `github-runner`, the socket must be `root:docker` mode `0660`, and the runner account must belong to `docker`.
 
-If the dedicated socket is missing or stale, rerun Ansible. Do not create a symlink to `/run/docker.sock`, grant write access to `/run`, or manually edit the systemd unit.
+When the dedicated socket is missing or stale, rerun `host.yml`. Do not create a symlink to `/run/docker.sock`, grant write access to `/run`, or edit the systemd unit manually.
 
 ## Filesystem layout
 
@@ -145,6 +197,6 @@ If the dedicated socket is missing or stale, rerun Ansible. Do not create a syml
 
 ## Codex output
 
-Codex output is normalized, redacted, and streamed live with a fixed `[codex] ` prefix. The same accepted bytes are written to the uploaded `agent-relay-output` transcript. Raw Codex JSONL is internal. `${GITHUB_OUTPUT}` contains workflow outputs only.
+Codex output is normalized, redacted, and streamed with a fixed `[codex] ` prefix. The same accepted bytes are written to `agent-relay-output`. Raw JSONL remains internal, and `${GITHUB_OUTPUT}` contains workflow outputs only.
 
-A zero process exit is not sufficient for success. Agent Relay requires at least one Codex `command_execution` or `file_change` lifecycle item. A session that only reports inability to operate fails and does not proceed to finalization.
+A zero process exit is insufficient for success. Agent Relay requires at least one `command_execution` or `file_change` lifecycle item; a session that only reports inability to operate fails before finalization.

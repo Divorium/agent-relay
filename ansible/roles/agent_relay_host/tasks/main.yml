@@ -5,14 +5,45 @@
 - name: Create administrator and service users
   ansible.builtin.import_tasks: users.yml
 
-- name: Create Agent Relay filesystem roots
-  ansible.builtin.import_tasks: filesystem.yml
+- name: Create Agent Relay state root
+  ansible.builtin.file:
+    path: /var/lib/agent-relay
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
 
-- name: Configure container services
-  ansible.builtin.import_tasks: containers.yml
+- name: Create Agent Relay lifecycle lock root
+  ansible.builtin.file:
+    path: "{{ agent_relay_lifecycle_root }}"
+    state: directory
+    owner: "{{ agent_relay_admin_user }}"
+    group: "{{ agent_relay_admin_user }}"
+    mode: "0700"
 
-- name: Install Agent Relay toolchains
-  ansible.builtin.import_tasks: toolchains.yml
+- name: Acquire Agent Relay lifecycle lock
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/mkdir
+      - "{{ agent_relay_lifecycle_lock }}"
+  changed_when: true
 
-- name: Checkout and deploy Agent Relay
-  ansible.builtin.import_tasks: deploy.yml
+- name: Reconcile locked Agent Relay host state
+  block:
+    - name: Create Agent Relay filesystem roots
+      ansible.builtin.import_tasks: filesystem.yml
+
+    - name: Configure container services
+      ansible.builtin.import_tasks: containers.yml
+
+    - name: Install Agent Relay toolchains
+      ansible.builtin.import_tasks: toolchains.yml
+
+    - name: Checkout and deploy Agent Relay
+      ansible.builtin.import_tasks: deploy.yml
+
+  always:
+    - name: Release Agent Relay lifecycle lock
+      ansible.builtin.file:
+        path: "{{ agent_relay_lifecycle_lock }}"
+        state: absent

@@ -63,6 +63,16 @@ jobs:
           path: ${{ runner.temp }}/agent-relay-test-output.log
           if-no-files-found: error
 
+      - name: Upload failing executor test sources
+        if: failure() && steps.tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-relay-executor-test-sources
+          path: |
+            test/executor.integration.test.ts
+            test/trust.test.ts
+          if-no-files-found: error
+
       - name: Validate production runtime build
         run: npm run check:runtime
 

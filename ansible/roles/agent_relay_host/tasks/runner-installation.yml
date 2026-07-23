@@ -1,0 +1,106 @@
+---
+- name: Download configured GitHub Runner archive
+  ansible.builtin.get_url:
+    url: >-
+      https://github.com/actions/runner/releases/download/v{{ agent_relay_host_contract.runner_version }}/actions-runner-linux-x64-{{ agent_relay_host_contract.runner_version }}.tar.gz
+    dest: "{{ agent_relay_runner_archive }}"
+    owner: root
+    group: root
+    mode: "0644"
+    checksum: "sha256:{{ agent_relay_host_contract.runner_sha256 }}"
+  when: agent_relay_runner_binary_state == 'absent'
+
+- name: Extract configured GitHub Runner payload
+  ansible.builtin.unarchive:
+    src: "{{ agent_relay_runner_archive }}"
+    dest: "{{ agent_relay_runner_root }}"
+    remote_src: true
+    owner: "{{ agent_relay_runner_user }}"
+    group: "{{ agent_relay_runner_user }}"
+    extra_opts:
+      - --no-overwrite-dir
+  when: agent_relay_runner_binary_state == 'absent'
+
+- name: Reconcile runner root ownership and mode
+  ansible.builtin.file:
+    path: "{{ agent_relay_runner_root }}"
+    state: directory
+    owner: "{{ agent_relay_runner_user }}"
+    group: "{{ agent_relay_runner_user }}"
+    mode: "0700"
+    recurse: false
+
+- name: Install runner service launcher
+  ansible.builtin.copy:
+    src: "{{ agent_relay_runner_root }}/bin/runsvc.sh"
+    dest: "{{ agent_relay_runner_root }}/runsvc.sh"
+    remote_src: true
+    owner: "{{ agent_relay_runner_user }}"
+    group: "{{ agent_relay_runner_user }}"
+    mode: "0755"
+
+- name: Inspect reconciled runner binaries
+  ansible.builtin.stat:
+    path: "{{ agent_relay_runner_root }}/{{ item }}"
+    follow: false
+  loop:
+    - bin/Runner.Listener
+    - bin/Runner.Worker
+    - bin/runsvc.sh
+    - config.sh
+    - runsvc.sh
+  register: agent_relay_runner_binary_files_reconciled
+
+- name: Verify reconciled runner binaries
+  ansible.builtin.assert:
+    that:
+      - >-
+        agent_relay_runner_binary_files_reconciled.results
+        | selectattr('stat.exists', 'equalto', true)
+        | selectattr('stat.isreg', 'equalto', true)
+        | selectattr('stat.islnk', 'equalto', false)
+        | selectattr('stat.executable', 'equalto', true)
+        | selectattr('stat.pw_name', 'equalto', agent_relay_runner_user)
+        | list
+        | length == 5
+    fail_msg: GitHub Runner payload is incomplete or unsafe after reconciliation.
+
+- name: Inspect runner work link
+  ansible.builtin.stat:
+    path: "{{ agent_relay_runner_root }}/_work"
+    follow: false
+  register: agent_relay_runner_work_link
+
+- name: Reject conflicting runner work path
+  ansible.builtin.assert:
+    that:
+      - >-
+        not agent_relay_runner_work_link.stat.exists
+        or (
+          agent_relay_runner_work_link.stat.islnk | default(false)
+          and agent_relay_runner_work_link.stat.lnk_target == '../work'
+        )
+    fail_msg: Runner work path must be the managed ../work symlink.
+
+- name: Create runner work link
+  ansible.builtin.file:
+    src: ../work
+    dest: "{{ agent_relay_runner_root }}/_work"
+    state: link
+    owner: "{{ agent_relay_runner_user }}"
+    group: "{{ agent_relay_runner_user }}"
+  when: not agent_relay_runner_work_link.stat.exists
+
+- name: Install runner systemd unit
+  ansible.builtin.template:
+    src: actions-runner.service.j2
+    dest: "{{ agent_relay_service_unit }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: agent_relay_service_unit_result
+
+- name: Reload systemd after runner unit reconciliation
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: agent_relay_service_unit_result.changed

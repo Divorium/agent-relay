@@ -16,9 +16,14 @@ import sys
 source_path = pathlib.Path(sys.argv[1])
 staged_path = pathlib.Path(sys.argv[2])
 source = source_path.read_text()
+installer_generator = 'python3 - "${source_root}/install.sh"'
 write_marker = "path.write_text(source)\nPY"
-if source.count(write_marker) != 1:
-    raise SystemExit("installer integration generator no longer matches the expected shape")
+installer_start = source.find(installer_generator)
+if installer_start < 0:
+    raise SystemExit("host installer integration generator is missing")
+write_index = source.find(write_marker, installer_start)
+if write_index < 0:
+    raise SystemExit("host installer integration generator no longer matches the expected shape")
 fixture_patch = r'''lock_file_case = '    "${LOCK_FILE}") echo 1000 ;;'
 root_owned_case = (
     '    "${LOCK_ROOT}"|"${BASE_ROOT}"|"${STORAGE_ROOT}"|'
@@ -31,7 +36,7 @@ if source.count(lock_file_case) != 2:
 source = source.replace(lock_file_case, root_owned_case)
 path.write_text(source)
 PY'''
-source = source.replace(write_marker, fixture_patch)
+source = source[:write_index] + fixture_patch + source[write_index + len(write_marker):]
 sudo_marker = 'if [[ "\\${1:-}" == chown ]]; then exit 0; fi'
 sudo_install = r'''if [[ "\${1:-}" == install ]]; then
   shift

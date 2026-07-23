@@ -233,7 +233,6 @@ export class CodexExecutor {
     try { await fanout.finish(); } catch (error) { firstFailure ??= error; }
     if (startupError) throw startupError;
     if (firstFailure !== undefined) throw firstFailure;
-    if (exitCode !== 0) throw new CodexExecutionError("CODEX_FAILED", `Codex exited with code ${exitCode}`);
-    return { exitCode, executionActivityCount: normalizer.executionActivityCount() };
+    return validateExecutionOutcome(exitCode, normalizer.executionActivityCount());
   }
 }

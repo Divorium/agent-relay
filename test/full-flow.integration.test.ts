@@ -150,6 +150,7 @@ test("a ready GitHub pull request traverses the complete runtime and invokes moc
 set -euo pipefail
 printf '%s\n' "$*" > "${codexLog}"
 printf 'after\n' > "${join(workspace, "tracked.txt")}"
+printf '%s\n' '{"type":"item.completed","item":{"id":"command_0","type":"command_execution","command":"apply full flow","aggregated_output":"","status":"completed","exit_code":0}}'
 printf '%s\n' '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"mock codex completed"}}'
 `, { mode: 0o700 });
     await chmod(fakeCodex, 0o700);

@@ -52,7 +52,7 @@ ansible-playbook \
   "$PWD/playbooks/host.yml"
 ```
 
-Rerun the same playbook to update the host and deployment. Ansible performs clone, checkout, pull-equivalent reconciliation, Docker socket reconciliation and installation.
+Rerun the same playbook to update the host and deployment. Ansible performs clone, checkout, pull-equivalent reconciliation and installation. The same run also reconciles the dedicated Docker socket before installation.
 
 Codex authentication remains an explicit credential operation after the host exists:
 

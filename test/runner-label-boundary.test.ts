@@ -18,7 +18,7 @@ test("Ansible owns one deterministic Agent Relay runner label", async () => {
   assert.match(tasks, /Require GitHub credential for runner lifecycle/u);
   assert.match(tasks, /Self-hosted runners: write permission/u);
   assert.match(tasks, /import_tasks: runner-label\.yml/u);
-  assert.match(reconciliation, /actions\/runners\?per_page=100/u);
+  assert.match(reconciliation, /actions\/runners\?name=\{\{ agent_relay_host_contract\.runner_name \| urlencode \}\}&per_page=100/u);
   assert.match(reconciliation, /selectattr\('name', 'equalto', agent_relay_host_contract\.runner_name\)/u);
   assert.match(reconciliation, /method: POST/u);
   assert.match(reconciliation, /labels:\n\s+- "\{\{ agent_relay_runner_label \}\}"/u);

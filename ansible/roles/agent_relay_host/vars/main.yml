@@ -21,6 +21,7 @@ agent_relay_docker_socket_root: "{{ agent_relay_storage_root }}/docker-socket"
 agent_relay_docker_socket_path: "{{ agent_relay_docker_socket_root }}/docker.sock"
 agent_relay_runtime_stage_root: "{{ agent_relay_storage_root }}/.agent-relay-dist-stage"
 agent_relay_runtime_previous_root: "{{ agent_relay_source_root }}/dist.previous"
+agent_relay_runtime_revision_marker: .agent-relay-source-revision
 agent_relay_runner_archive: "/var/tmp/actions-runner-linux-x64-{{ agent_relay_host_contract.runner_version }}.tar.gz"
 agent_relay_lifecycle_root: /var/lib/agent-relay/lifecycle
 agent_relay_lifecycle_lock: "{{ agent_relay_lifecycle_root }}/active"

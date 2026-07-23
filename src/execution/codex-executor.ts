@@ -7,7 +7,10 @@ import { DiagnosticLineParser, deriveJsonlRecordBytes, JsonlParser } from "./jso
 import { BoundedOutputPump, OrderedInputPump } from "./output-pump.js";
 import { RedactedFanout, type TranscriptSink } from "./transcript.js";
 
-export interface ExecutionOutcome { exitCode: number; }
+export interface ExecutionOutcome {
+  exitCode: number;
+  executionActivityCount: number;
+}
 export interface KillableProcess { pid?: number; kill(signal: "SIGTERM" | "SIGKILL"): unknown; }
 export type ProcessGroupKiller = (pid: number, signal: "SIGTERM" | "SIGKILL") => unknown;
 
@@ -67,7 +70,7 @@ export function validateExecutionOutcome(exitCode: number, executionActivityCoun
   if (executionActivityCount === 0) {
     throw new CodexExecutionError("CODEX_FAILED", "Codex completed without executing any command or file change");
   }
-  return { exitCode };
+  return { exitCode, executionActivityCount };
 }
 
 export function terminateProcess(
@@ -230,6 +233,7 @@ export class CodexExecutor {
     try { await fanout.finish(); } catch (error) { firstFailure ??= error; }
     if (startupError) throw startupError;
     if (firstFailure !== undefined) throw firstFailure;
-    return validateExecutionOutcome(exitCode, normalizer.executionActivityCount());
+    if (exitCode !== 0) throw new CodexExecutionError("CODEX_FAILED", `Codex exited with code ${exitCode}`);
+    return { exitCode, executionActivityCount: normalizer.executionActivityCount() };
   }
 }

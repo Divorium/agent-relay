@@ -165,16 +165,21 @@ export class CodexExecutor {
       fail,
       () => {
         discardOutput = true;
-        normalizer.clearLifecycleState();
       },
     );
+    const normalize = async (event: Parameters<CodexEventNormalizer["normalize"]>[0]): Promise<void> => {
+      const output = normalizer.normalize(event);
+      if (!discardOutput) {
+        await pump.enqueue(output);
+        return;
+      }
+      for (const ignored of output) void ignored;
+    };
     const stdout = new JsonlParser(this.maxJsonlRecordBytes);
     const stderr = new DiagnosticLineParser();
     input = new OrderedInputPump(pump, async (source, chunk) => {
       if (source === child.stdout) {
-        for (const event of stdout.write(chunk)) {
-          if (!discardOutput) await pump.enqueue(normalizer.normalize(event));
-        }
+        for (const event of stdout.write(chunk)) await normalize(event);
       } else {
         for (const diagnostic of stderr.write(chunk)) {
           if (!discardOutput) await pump.enqueue([normalizer.diagnostic(diagnostic.value, diagnostic.continuation)]);
@@ -219,9 +224,7 @@ export class CodexExecutor {
     await input.finish();
     if (firstFailure === undefined) {
       try {
-        for (const event of stdout.end()) {
-          if (!discardOutput) await pump.enqueue(normalizer.normalize(event));
-        }
+        for (const event of stdout.end()) await normalize(event);
         for (const diagnostic of stderr.end()) {
           if (!discardOutput) await pump.enqueue([normalizer.diagnostic(diagnostic.value, diagnostic.continuation)]);
         }

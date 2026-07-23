@@ -12,11 +12,28 @@ umask 0077
 
 script_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 toolchain_profile="${script_root}/toolchain-environment.sh"
-if [[ ! -f "${toolchain_profile}" || -L "${toolchain_profile}" ]]; then
-  echo "Toolchain environment must be a regular non-symlink file" >&2
+host_config_profile="${script_root}/host-config.sh"
+host_config_path="${script_root}/../config/runner-host.json"
+for required_file in "${toolchain_profile}" "${host_config_profile}" "${host_config_path}"; do
+  if [[ ! -f "${required_file}" || -L "${required_file}" ]]; then
+    echo "Trusted runtime configuration must be a regular non-symlink file: ${required_file}" >&2
+    exit 1
+  fi
+done
+source "${toolchain_profile}"
+source "${host_config_profile}"
+host_config_load "${host_config_path}"
+toolchain_validate_absolute_path 'Docker socket path' "${DOCKER_SOCKET_PATH}"
+
+docker_socket_root="${DOCKER_SOCKET_PATH%/*}"
+if [[ ! -d "${docker_socket_root}" || -L "${docker_socket_root}" ]]; then
+  echo "Docker socket root must be a regular directory: ${docker_socket_root}" >&2
   exit 1
 fi
-source "${toolchain_profile}"
+if [[ ! -S "${DOCKER_SOCKET_PATH}" || -L "${DOCKER_SOCKET_PATH}" ]]; then
+  echo "Docker socket must be a non-symlink Unix socket: ${DOCKER_SOCKET_PATH}" >&2
+  exit 1
+fi
 
 codex_auth="${HOME}/.codex/auth.json"
 if [[ ! -f "${codex_auth}" ]]; then
@@ -34,6 +51,7 @@ done
 current_user="$(id -un)"
 declare -a toolchain_env
 toolchain_environment_build "${current_user}" "${HOME}" "${runtime_dir}" toolchain_env
+toolchain_env+=("DOCKER_HOST=unix://${DOCKER_SOCKET_PATH}")
 
 child_pid=""
 forward_signal() {

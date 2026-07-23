@@ -86,7 +86,7 @@ test("runner systemd unit is declarative and contains no credential handling", a
   assert.doesNotMatch(unit, /token|credential|PAT|Environment=/iu);
 });
 
-test("runtime is built and validated before atomic activation", async () => {
+test("runtime is built in a clean environment and validated before atomic activation", async () => {
   const runtime = await text("ansible/roles/agent_relay_host/tasks/runtime-deployment.yml");
   const listener = await text("ansible/roles/agent_relay_host/tasks/listener-state.yml");
   const deploy = `${runtime}\n${listener}`;
@@ -95,7 +95,8 @@ test("runtime is built and validated before atomic activation", async () => {
   const importStage = deploy.indexOf("name: Import staged runtime entrypoint", inspect);
   const unsafe = deploy.indexOf("name: Detect unsafe staged runtime entries", importStage);
   const finalize = deploy.indexOf("name: Finalize staged runtime ownership", unsafe);
-  const activate = deploy.indexOf("name: Activate staged runtime atomically", finalize);
+  const verifyFinal = deploy.indexOf("name: Verify finalized runtime tree", finalize);
+  const activate = deploy.indexOf("name: Activate staged runtime atomically", verifyFinal);
   const start = deploy.indexOf("name: Enable and restart registered runner listener", activate);
 
   assert.ok(compile >= 0);
@@ -103,8 +104,13 @@ test("runtime is built and validated before atomic activation", async () => {
   assert.ok(importStage > inspect);
   assert.ok(unsafe > importStage);
   assert.ok(finalize > unsafe);
-  assert.ok(activate > finalize);
+  assert.ok(verifyFinal > finalize);
+  assert.ok(activate > verifyFinal);
   assert.ok(start > activate);
+  assert.equal((runtime.match(/- \/usr\/bin\/env\n\s+- -i/gu) ?? []).length, 2);
+  assert.match(runtime, /Finalize staged runtime ownership without following links or crossing filesystems[\s\S]*- \/usr\/bin\/find[\s\S]*- -P[\s\S]*- -xdev[\s\S]*- \/usr\/bin\/chown[\s\S]*- -h/u);
+  assert.doesNotMatch(runtime, /name: Finalize staged runtime ownership[\s\S]*recurse: true/u);
+  assert.match(runtime, /name: Detect unsafe finalized runtime entries/u);
   assert.match(runtime, /name: Remove safe stale runtime stage without crossing filesystems/u);
   assert.match(runtime, /- --one-file-system/u);
   assert.match(runtime, /name: Remove preserved runtime after successful activation without crossing filesystems/u);

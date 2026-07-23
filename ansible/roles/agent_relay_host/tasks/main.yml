@@ -1,4 +1,12 @@
 ---
+- name: Require GitHub credential for runner lifecycle
+  ansible.builtin.assert:
+    that:
+      - agent_relay_github_credential | length > 0
+    fail_msg: >-
+      Export AGENT_RELAY_GITHUB_CREDENTIAL on the Ansible control machine with organization
+      Self-hosted runners: write permission before running this role.
+
 - name: Install repositories and host packages
   ansible.builtin.import_tasks: packages.yml
 
@@ -16,3 +24,6 @@
 
 - name: Checkout and deploy Agent Relay
   ansible.builtin.import_tasks: deploy.yml
+
+- name: Reconcile Agent Relay runner label
+  ansible.builtin.import_tasks: runner-label.yml

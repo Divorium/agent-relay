@@ -100,7 +100,7 @@ test("normalizer records command and file activity without counting reasoning or
 });
 
 test("successful Codex exit requires observable execution activity", () => {
-  assert.deepEqual(validateExecutionOutcome(0, 1), { exitCode: 0 });
+  assert.deepEqual(validateExecutionOutcome(0, 1), { exitCode: 0, executionActivityCount: 1 });
   assert.throws(
     () => validateExecutionOutcome(1, 1),
     /Codex exited with code 1/u,

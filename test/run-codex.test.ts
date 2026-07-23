@@ -13,6 +13,8 @@ const ENVIRONMENT_NAMES = [
   "CODEX_TIMEOUT_MS", "MAX_OUTPUT_BYTES", "MAX_JSONL_RECORD_BYTES", "HOME", "RUNNER_TEMP", "CODEX_TRANSCRIPT_PATH",
 ] as const;
 
+const COMMAND_EVENT = "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"command_0\",\"type\":\"command_execution\",\"command\":\"fixture\",\"aggregated_output\":\"\",\"status\":\"completed\",\"exit_code\":0}}'\n";
+
 async function createFixture(name: string) {
   const root = join(tmpdir(), `agent-relay-cli-${name}-${process.pid}-${Date.now()}`);
   const workspaceRoot = join(root, "runner", "_work");
@@ -72,7 +74,7 @@ test("deriveCommitMessage normalizes and bounds the first H1", () => {
 test("direct CLI writes the commit message only after successful execution", async () => {
   const fixture = await createFixture("success");
   const executable = join(fixture.root, "fake-codex");
-  await writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  await writeFile(executable, `#!/bin/sh\n${COMMAND_EVENT}`, { mode: 0o700 });
   await chmod(executable, 0o700);
   try {
     await withEnvironment(fixtureEnvironment(fixture), async () => main(executable));
@@ -86,12 +88,30 @@ test("direct CLI derives the message before Codex moves the active plan", async 
   await writeFile(executable, `#!/bin/sh
 set -eu
 mv "${join(fixture.workspace, fixture.planPath)}" "${join(fixture.completed, "task.md")}"
-`, { mode: 0o700 });
+${COMMAND_EVENT}`, { mode: 0o700 });
   await chmod(executable, 0o700);
   try {
     await withEnvironment(fixtureEnvironment(fixture), async () => main(executable));
     assert.equal(await readFile(fixture.githubOutput, "utf8"), "commit_message=Implement native runner\n");
     assert.equal(await readFile(join(fixture.completed, "task.md"), "utf8"), "# Implement native runner\n\nPlan body.\n");
+  } finally { await rm(fixture.root, { recursive: true, force: true }); }
+});
+
+test("direct CLI rejects zero exit without execution activity", async () => {
+  const fixture = await createFixture("idle");
+  const executable = join(fixture.root, "idle-codex");
+  await writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  await chmod(executable, 0o700);
+  try {
+    await withEnvironment(fixtureEnvironment(fixture), async () => {
+      await assert.rejects(
+        () => main(executable),
+        (error: unknown) => error instanceof CodexExecutionError
+          && error.code === "CODEX_FAILED"
+          && /without executing any command or file change/u.test(error.message),
+      );
+    });
+    assert.equal(await readFile(fixture.githubOutput, "utf8"), "");
   } finally { await rm(fixture.root, { recursive: true, force: true }); }
 });
 
@@ -170,7 +190,7 @@ test("direct CLI validates required environment values and active plan path", as
 test("direct CLI applies default limits and rejects integers outside the safe range", async () => {
   const fixture = await createFixture("limits");
   const executable = join(fixture.root, "fake-codex");
-  await writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  await writeFile(executable, `#!/bin/sh\n${COMMAND_EVENT}`, { mode: 0o700 });
   await chmod(executable, 0o700);
   const environment = fixtureEnvironment(fixture);
   try {

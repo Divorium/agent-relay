@@ -1,156 +1,208 @@
 # Fix the Codex Docker socket sandbox boundary
 
-This ExecPlan is a living document governed by `.agent/PLANS.md`. Keep `Progress`, `Surprises & Discoveries`, `Decision Log`, `Outcomes & Retrospective`, and all implementation and validation instructions current until the corrected runtime is deployed and a real consumer repository completes command execution, Docker access, and finalization.
+This ExecPlan is a living document governed by `.agent/PLANS.md`. Keep `Progress`, `Surprises & Discoveries`, `Decision Log`, `Outcomes & Retrospective`, and the validation evidence current until the corrected Agent Relay revision is deployed and a real Monify pull request completes command execution, Docker access, and finalization.
 
 ## Purpose / Big Picture
 
-Agent Relay currently launches Codex with the host Docker socket file itself declared as a writable filesystem root. Codex 0.144.4 protects metadata names such as `.codex` beneath every writable root, so bubblewrap attempts to inspect `/run/docker.sock/.codex` and aborts before even `pwd` can run. A consumer pull request therefore appears to reach Codex but cannot execute commands, use Token Minify helpers, access Docker, test code, or edit files.
+Agent Relay must let Codex execute repository commands and Docker commands on the dedicated GitHub Actions runner without giving Codex Git credentials. The previous runtime declared `/run/docker.sock` and `/var/run/docker.sock` as writable filesystem roots. Codex treats every writable root as a directory beneath which protected metadata paths may exist, so it tried to inspect `/run/docker.sock/.codex` and failed before even `pwd` could start.
 
-After this change, Ansible creates a second Docker socket in a dedicated runner-owned directory, Agent Relay exposes that directory rather than the socket file to the Codex sandbox, and the launcher directs Docker CLI traffic to the dedicated socket through `DOCKER_HOST`. Agent Relay also refuses to accept a zero-exit Codex session unless the JSONL lifecycle proves that at least one command or file change occurred. A real consumer ExecPlan must then execute ordinary commands, Token Minify helpers, Docker commands, and finalization through the same production path.
+After this change, the host exposes a second real Docker socket under a runner-owned directory, Codex receives write access to the directory rather than the socket file, and `DOCKER_HOST` points Docker clients at the socket child. Agent Relay also rejects a zero-exit Codex process when no command or file-change lifecycle event occurred. The organization runner receives a managed `agent-relay` label so consumer workflows cannot be allocated to another generic self-hosted runner.
+
+The behavior is complete only when the merged revision is deployed through Ansible and Monify PR 48 proves `pwd`, Token Minify helpers, Docker CLI access, transcript upload, and trusted finalization through the production path.
 
 ## Progress
 
 - [x] (2026-07-23 19:35Z) Reproduced the failure from `Divorium/monify` PR 48, workflow run 30033072687, job 89296098924.
-- [x] (2026-07-23 19:45Z) Traced the failure to writable socket-file entries in `src/execution/codex-executor.ts` and verified the Codex bubblewrap writable-root behavior in the checked-out OpenAI Codex 0.144.4 source.
-- [x] (2026-07-23 20:00Z) Selected a dedicated systemd-activated Docker socket under `/srv/github-runner/storage/docker-socket` instead of granting write access to `/run`, bind-mounting the socket, or relying on a symlink.
-- [x] (2026-07-23 20:15Z) Added the host contract, Ansible directory and socket configuration, launcher validation, `DOCKER_HOST`, sandbox directory permission, semantic activity gate, tests, and current documentation.
-- [ ] (2026-07-23 20:20Z) Run the complete repository validation and fix every change-related failure.
-- [ ] (2026-07-23 20:25Z) Review the complete diff for security, lifecycle, deployment, output, and rollback defects.
-- [ ] (2026-07-23 20:30Z) Merge and deploy the corrected Agent Relay revision through the current Ansible flow, recording the deployed commit.
-- [ ] (2026-07-23 20:35Z) Rerun `Divorium/monify` PR 48 and observe commands, Token Minify helpers, Docker CLI access, no-change or changed-worktree finalization, transcript and finalizer artifacts, and a successful Codex job.
-- [ ] (2026-07-23 20:40Z) Complete the retrospective and move this file to `docs/exec-plans/completed/` only after the deployed consumer acceptance succeeds.
+- [x] (2026-07-23 19:45Z) Traced the failure to writable socket-file entries in `src/execution/codex-executor.ts` and verified the Codex writable-root behavior.
+- [x] (2026-07-23 20:00Z) Selected a second systemd-activated Docker socket under `/srv/github-runner/storage/docker-socket/docker.sock` instead of broad `/run` access, a symlink, a second daemon, or a proxy.
+- [x] (2026-07-23 20:15Z) Added the host contract, Ansible directory and socket configuration, launcher validation, `DOCKER_HOST`, directory-based sandbox permission, semantic activity gate, tests, and documentation.
+- [x] (2026-07-23 20:13Z) Fixed the new integration test type failure by adding the minimal `node:net` declaration required by the repository's pinned Node type surface.
+- [x] (2026-07-23 20:16Z) Observed successful complete CI run 30041216808 on SHA `cdc47f14a35c550b2a7388ed63d8dbf37af4288a`.
+- [x] (2026-07-23 20:20Z) Found nondeterministic consumer scheduling caused by both `gh-runner` and `docker-runner-02` matching `self-hosted`.
+- [x] (2026-07-23 20:22Z) Added the managed `agent-relay` runner-label contract, additive GitHub REST reconciliation, label verification, Monify `[self-hosted, agent-relay]` routing, and retained the exact runner-name check.
+- [x] (2026-07-23 20:22Z) Observed successful complete CI run 30041653005 on SHA `10956c4adb837838e478db3246d0df5d4779d368` after the runner-label change.
+- [ ] Confirm the latest complete CI run remains green after final documentation and plan updates.
+- [ ] Finish the complete branch diff review and record any remaining P0 or P1 findings.
+- [ ] User merges PR 58 after the pre-merge gate is reported ready.
+- [ ] Deploy the merged revision through Ansible with `AGENT_RELAY_GITHUB_CREDENTIAL` available and record the deployed commit.
+- [ ] Verify the `agent-relay` label, both Docker sockets, the dedicated Docker endpoint, and current finalizer revision on the host.
+- [ ] Rerun `Divorium/monify` PR 48 and observe commands, Token Minify helpers, Docker CLI access, no-change or changed-worktree finalization, transcript and finalizer artifacts, and successful completion.
+- [ ] Complete the retrospective and move this file to `docs/exec-plans/completed/` only after deployed consumer acceptance succeeds.
 
 ## Surprises & Discoveries
 
 - Observation: Direct write permission for a Unix socket is incompatible with the current Codex filesystem permission model.
-  Evidence: the Monify transcript reported `failed to inspect synthetic bubblewrap mount target /run/docker.sock/.codex: Not a directory`; OpenAI Codex registers protected metadata children beneath writable roots.
+  Evidence: the Monify transcript reported `failed to inspect synthetic bubblewrap mount target /run/docker.sock/.codex: Not a directory` before any command started.
 
-- Observation: A symlink inside a writable directory is not an acceptable unverified substitute.
-  Evidence: the desired contract must survive Codex path validation and bubblewrap mount construction. The host must provide a real socket at the configured child path rather than relying on symlink traversal behavior.
+- Observation: A symlink inside a writable directory is not an acceptable substitute for a real socket child.
+  Evidence: the sandbox path and socket type must survive Codex validation and bubblewrap mount construction without relying on symlink traversal.
 
 - Observation: Docker already starts through systemd socket activation with `dockerd -H fd://`.
-  Evidence: the existing Ansible role enables `docker.socket` before `docker.service`. A drop-in can reset `ListenStream` and declare both the standard and dedicated sockets so Docker receives both descriptors.
+  Evidence: the host enables `docker.socket` before `docker.service`, so one drop-in can declare both the standard and dedicated listeners.
 
-- Observation: Codex CLI can exit zero after producing only an assistant explanation that all tool execution is blocked.
-  Evidence: Monify run 30033072687 marked `Run Codex through Agent Relay` successful although no `command_execution` or `file_change` item occurred.
+- Observation: Codex CLI can exit zero after producing only an explanation that all tool execution is blocked.
+  Evidence: Monify run 30033072687 marked the Codex step successful although no `command_execution` or `file_change` item occurred.
 
-- Observation: the deployed finalizer on the runner did not behave like current source.
-  Evidence: no-change finalization failed and no `agent-relay-finalize.log` was uploaded, while current `runner/finalize.sh` redirects diagnostics before validation and exits zero when the worktree is unchanged. Deployment revision visibility and reconciliation are required before acceptance.
+- Observation: the deployed finalizer did not behave like current Agent Relay source.
+  Evidence: no-change finalization failed and no `agent-relay-finalize.log` was uploaded, while current `runner/finalize.sh` creates diagnostics before validation and exits zero for an unchanged worktree.
+
+- Observation: a post-allocation runner-name check is safe but not deterministic scheduling.
+  Evidence: both `gh-runner` and `docker-runner-02` matched `[self-hosted]`; the wrong runner could consume the job and only then fail. GitHub requires all `runs-on` labels to match, so `[self-hosted, agent-relay]` removes the competing runner from the eligible set.
+
+- Observation: an existing self-hosted runner cannot gain a custom label through `config.sh`.
+  Evidence: GitHub requires the runner labels REST API for existing registrations. The additive `POST` endpoint preserves unrelated custom labels, unlike replacing the full custom-label set.
+
+- Observation: reverting source alone does not remove an already installed systemd drop-in.
+  Evidence: Ansible creates `/etc/systemd/system/docker.socket.d/agent-relay.conf`; an older revision that does not know this file cannot delete it. Rollback must explicitly remove the managed file and restart both Docker units, or deploy a cleanup revision before returning to an older source revision.
 
 ## Decision Log
 
 - Decision: Add a second systemd-activated Docker socket at `/srv/github-runner/storage/docker-socket/docker.sock`.
-  Rationale: it provides a real Unix socket below a dedicated directory that Codex may treat as a writable root, preserves `/run/docker.sock` for operators, avoids broad `/run` write access, and uses the existing Docker socket-activation mechanism.
+  Rationale: it provides a real Unix socket below a dedicated directory that Codex may treat as a writable root, preserves `/run/docker.sock`, and uses the existing Docker daemon and socket-activation mechanism.
   Date/Author: 2026-07-23 / ChatGPT
 
 - Decision: Keep the dedicated directory owned by `github-runner` mode `0700`, while the socket remains `root:docker` mode `0660`.
-  Rationale: bubblewrap may create protected synthetic metadata below the writable directory, while Docker access remains governed by the already intentional Docker-group trust boundary.
+  Rationale: bubblewrap may create protected metadata below the writable directory, while Docker access remains within the already intentional Docker-group trust boundary.
   Date/Author: 2026-07-23 / ChatGPT
 
 - Decision: Store the socket path in `config/runner-host.json` and load it through `scripts/host-config.sh`.
-  Rationale: host, Ansible, launcher, tests, and documentation need one explicit value; hidden duplicated paths would recreate deployment drift.
+  Rationale: Ansible, launcher validation, Docker client routing, tests, and documentation need one explicit host contract.
   Date/Author: 2026-07-23 / ChatGPT
 
 - Decision: Set `DOCKER_HOST` only inside the clean Codex child environment.
-  Rationale: host operators keep standard Docker behavior, while commands and Token Minify helpers invoked by Codex consistently target the dedicated socket.
+  Rationale: host operators retain ordinary Docker behavior, while every Docker client launched by Codex uses the dedicated endpoint.
   Date/Author: 2026-07-23 / ChatGPT
 
-- Decision: Require at least one first-seen `command_execution` or `file_change` lifecycle item before accepting a zero process exit.
-  Rationale: every valid ExecPlan requires repository inspection or implementation activity. Assistant prose, reasoning, warnings, todos, or a completed turn alone do not prove that the sandbox could operate. The activity counter survives output-truncation lifecycle clearing so transport limits cannot erase semantic evidence.
+- Decision: Require at least one first-seen `command_execution` or `file_change` lifecycle item before accepting exit zero.
+  Rationale: assistant prose, reasoning, warnings, todos, or turn completion do not prove that the sandbox operated. The activity count survives output lifecycle clearing.
   Date/Author: 2026-07-23 / ChatGPT
 
-- Decision: Keep runtime deployment and consumer smoke as required acceptance evidence.
-  Rationale: static Ansible assertions cannot prove systemd descriptor handoff, bubblewrap compatibility, Docker CLI access, or the deployed finalizer revision.
+- Decision: Define `runner_label` as `agent-relay` in `config/runner-host.json` and reconcile it through Ansible.
+  Rationale: consumer workflows need deterministic allocation to the prepared host. The role queries by exact configured runner name, requires one match, adds the label with the additive endpoint, and reads labels back for verification.
+  Date/Author: 2026-07-23 / ChatGPT
+
+- Decision: Require `AGENT_RELAY_GITHUB_CREDENTIAL` for every playbook run.
+  Rationale: the role cannot verify or repair an existing organization-runner label without authenticated organization runner access. A fine-grained token needs `Self-hosted runners: Read and write`; a classic token needs `admin:org`.
+  Date/Author: 2026-07-23 / ChatGPT
+
+- Decision: Keep runtime deployment and consumer smoke as mandatory acceptance evidence.
+  Rationale: static tests cannot prove systemd descriptor handoff, bubblewrap compatibility, Docker CLI access, GitHub label visibility, or the deployed finalizer revision.
   Date/Author: 2026-07-23 / ChatGPT
 
 ## Outcomes & Retrospective
 
-Implementation is present on the branch but validation, deployment, and consumer evidence remain pending. The intended result is one explicit Docker socket contract shared by configuration, Ansible, launcher, sandbox, tests, and documentation, plus a semantic execution gate that rejects the observed false success. This section must be rewritten after the real Monify run confirms the outcome.
+The branch now has a coherent socket boundary, semantic success gate, and deterministic runner-routing contract. Two complete CI runs have passed after the implementation and label changes. The remaining uncertainty is environmental by definition: the code has not yet been merged and deployed, so the real systemd socket, GitHub runner label, Codex sandbox, Token Minify helpers, and finalizer must still be exercised together.
+
+The main lesson is that orchestration success is not execution success. The first consumer run reached the correct workflow but revealed both a sandbox type mismatch and a false semantic success. Subsequent review also showed that fail-closed identity validation does not replace deterministic scheduling. The final gate therefore remains a production-path consumer run, not static configuration alone.
 
 ## Context and Orientation
 
-`config/runner-host.json` is the shared host contract. `ansible/roles/agent_relay_host/vars/main.yml` derives host paths from it. `tasks/filesystem.yml` creates secure paths and `tasks/containers.yml` configures Docker and containerd. The new `templates/docker-socket.conf.j2` is a systemd drop-in for the existing `docker.socket` unit.
+`config/runner-host.json` is the host contract. It now defines `docker_socket_path` and `runner_label`. `ansible/roles/agent_relay_host/vars/main.yml` derives role variables from that contract. `tasks/filesystem.yml` creates secure paths, `tasks/containers.yml` configures Docker and its socket drop-in, and `tasks/runner-label.yml` reconciles the organization-runner label through GitHub's API.
 
-`scripts/codex-run` is the trusted launcher used by `CodexExecutor`. It creates per-run state, builds a clean environment, and invokes `/usr/local/bin/codex`. The launcher now reads the configured socket path, verifies the directory and Unix socket without following symlinks, and passes `DOCKER_HOST=unix://...` to the Codex child.
+`scripts/codex-run` is the trusted launcher used by `src/execution/codex-executor.ts`. It validates the configured socket root and socket type, creates isolated per-run state, builds a clean environment, sets `DOCKER_HOST`, and invokes `/usr/local/bin/codex`.
 
-`src/execution/codex-executor.ts` constructs Codex permission arguments and processes the child lifecycle. The sandbox receives write access to the dedicated directory, not to `/run`, `/var/run`, or either socket file. `src/execution/codex-normalizer.ts` validates JSONL lifecycle events and now counts first-seen command and file-change items.
+`src/execution/codex-executor.ts` constructs Codex permissions and processes the child lifecycle. The sandbox receives write access to `/srv/github-runner/storage/docker-socket`, not to `/run`, `/var/run`, or either socket file. `src/execution/codex-normalizer.ts` validates JSONL events and counts first-seen command and file-change items.
 
-`test/context-boundary.test.ts` covers the general permission boundary. `test/docker-socket-boundary.test.ts` covers the complete cross-file socket contract and semantic activity gate. The repository enforces strict TypeScript and 100 percent line, branch, and function coverage through `npm run check`.
+`test/docker-socket-boundary.test.ts` covers the socket contract and semantic activity gate. `test/runner-label-boundary.test.ts` covers deterministic runner-label ownership. `test/runtime-scripts.integration.test.ts` exercises the launcher against a real temporary Unix socket. The repository enforces TypeScript strictness and 100 percent line, branch, and function coverage through `npm run check`.
 
-The external reproducer is `Divorium/monify` PR 48. Run 30033072687 reached the installed runtime on runner `gh-runner`, but the Docker socket permission prevented every command. Issue `Divorium/agent-relay#57` records the blocker and acceptance criteria.
+The external consumer is `Divorium/monify` PR 48. Its `.github/workflows/codex.yml` targets `[self-hosted, agent-relay]`, still verifies `runner.name == gh-runner`, calls installed Agent Relay scripts, and delegates commits and pushes only to `runner/finalize.sh`.
 
 ## Plan of Work
 
-First, establish one configured socket path. Add `docker_socket_path` to `config/runner-host.json`, expose it through `scripts/host-config.sh`, and derive Ansible root and child variables from the same contract.
+The implementation phase is complete. The remaining work is validation and deployment. First, keep the latest Agent Relay CI green and review every changed file for privilege expansion, credential exposure, service lifecycle errors, label replacement, false success, and rollback drift. No merge occurs from this plan executor.
 
-Second, provision the host endpoint. Create the dedicated directory as `github-runner` mode `0700`. Install a root-owned Docker socket drop-in that clears inherited listeners, restores `/run/docker.sock`, adds the configured dedicated listener, sets `root:docker` mode `0660`, and removes stale sockets on stop. Restart `docker.socket` and `docker.service` when the drop-in changes.
+Second, the user merges PR 58. On the Ansible control machine, export a GitHub organization credential with runner write permission and deploy the merged revision through the documented playbook. Ansible must configure both Docker listeners, update the runtime, locate `gh-runner`, add `agent-relay` without replacing other labels, and verify the resulting labels.
 
-Third, connect the launcher and sandbox. `scripts/codex-run` must reject a missing, symlinked, or wrong-type directory/socket, then put `DOCKER_HOST` into the clean child environment. `createCodexArgs` must expose only the dedicated directory as writable and must contain no socket-file write entries.
+Third, verify the host directly. Both socket files must be real Unix sockets. Docker commands executed as `github-runner` with the dedicated `DOCKER_HOST` must succeed. GitHub must report the `agent-relay` label on `gh-runner`.
 
-Fourth, reject false success. `CodexEventNormalizer` records first-seen command and file-change activities. `CodexExecutor` accepts exit zero only when that count is positive, while preserving existing timeout, startup, parser, transcript, and nonzero-exit behavior.
+Finally, return Monify PR 48 to ready-for-review and inspect the real workflow. Codex must execute ordinary commands, locate all Token Minify helpers, access Docker, perform the active plan without Git mutation, and let the trusted finalizer either make exactly one commit or report a successful no-change outcome.
 
-Fifth, update tests and documentation. The tests must connect configuration, Ansible, systemd, launcher, sandbox, normalizer, and outcome validation. Current architecture and operations documents must describe the implemented endpoint, ownership, recovery, and post-deployment acceptance without presenting unverified deployment as complete.
+## Milestones
 
-Finally, run the complete repository check, review the full diff, merge, deploy through Ansible, record the deployed SHA, and rerun the Monify consumer workflow.
+Milestone 1 is the pre-merge implementation gate. It ends when Agent Relay CI is green on the final SHA and complete diff review finds no unresolved P0 or P1 defect. The observable proof is one successful CI run covering typecheck, 100 percent coverage, runtime build, shell and Node syntax, toolchain smoke, and installer system tests.
+
+Milestone 2 is host deployment. It ends when Ansible deploys the merged commit, GitHub reports the `agent-relay` label on `gh-runner`, both Docker sockets exist, and the dedicated endpoint responds to Docker CLI commands as `github-runner`.
+
+Milestone 3 is consumer execution. It ends when Monify PR 48 runs Codex through Agent Relay, the transcript proves helper and Docker command execution, the old `docker.sock/.codex` error is absent, and finalization behaves exactly as current source specifies.
 
 ## Concrete Steps
 
-Work from the Agent Relay repository root.
-
-Run the complete repository validation:
+From the Agent Relay repository root, run:
 
     npm ci
     npm run check
-
-Expect TypeScript typechecking, 100 percent-covered Node tests, runtime build, shell and Node syntax, toolchain smoke, installer integration simulation, and static Ansible contracts to pass. Do not weaken coverage or skip a failing test.
-
-Inspect the complete branch diff and whitespace:
-
     git diff --check main...HEAD
     git diff --stat main...HEAD
-    git diff main...HEAD -- config/runner-host.json scripts/host-config.sh scripts/codex-run src/execution/codex-executor.ts src/execution/codex-normalizer.ts ansible/roles/agent_relay_host test README.md ansible/README.md docs/operations/README.md docs/native-github-runner-specification.md docs/exec-plans/active/2026-07-23-fix-codex-docker-socket.md
 
-After merge, deploy only through the current Ansible procedure. Configure the inventory to the merged revision, then run the documented playbook. Record the exact deployed commit and verify:
+Expect all checks to pass. The check command must report 100 percent line, branch, and function coverage. Do not weaken tests or skip a failing check.
+
+After the user merges PR 58, configure the Ansible inventory to the merged revision and run from `ansible/`:
+
+    export AGENT_RELAY_GITHUB_CREDENTIAL='github_pat_...'
+    ANSIBLE_CONFIG="$PWD/ansible.cfg" \
+    ANSIBLE_ROLES_PATH="$PWD/roles" \
+    ansible-playbook \
+      --inventory "$PWD/inventory/example.ini" \
+      "$PWD/playbooks/host.yml"
+
+Record the exact merged commit and verify on the target:
 
     sudo systemctl status docker.socket docker.service
     sudo test -S /run/docker.sock
     sudo test -S /srv/github-runner/storage/docker-socket/docker.sock
-    sudo -u github-runner -H env DOCKER_HOST=unix:///srv/github-runner/storage/docker-socket/docker.sock docker version
-    sudo -u github-runner -H env DOCKER_HOST=unix:///srv/github-runner/storage/docker-socket/docker.sock docker compose version
+    sudo -u github-runner -H env \
+      DOCKER_HOST=unix:///srv/github-runner/storage/docker-socket/docker.sock \
+      docker version
+    sudo -u github-runner -H env \
+      DOCKER_HOST=unix:///srv/github-runner/storage/docker-socket/docker.sock \
+      docker compose version
 
-Then return Monify PR 48 to ready-for-review and observe the production workflow. Codex must run `pwd`, locate all Token Minify helpers, run `docker version`, run `docker compose version`, execute the active plan, and produce both transcript and finalizer logs.
+In GitHub organization runner settings, verify `gh-runner` has `self-hosted`, `linux`, `x64`, and `agent-relay`. Do not remove unrelated custom labels.
+
+Then mark Monify PR 48 ready for review. Its active plan must cause Codex to run:
+
+    worker-run -- pwd
+    worker-run -- command -v worker-read worker-run worker-write worker-extract-chat
+    worker-run -- docker version
+    worker-run -- docker compose version
+
+Inspect `agent-relay-output`. It must contain command lifecycle output and no `docker.sock/.codex` error. Inspect `agent-relay-finalize.log`. An unchanged worktree must exit zero without a commit; a changed worktree must produce exactly one trusted finalizer commit and one push.
 
 ## Validation and Acceptance
 
-1. **The sandbox receives a directory Docker boundary.** Scenario: `createCodexArgs` constructs agent filesystem permissions. Proof: unit and cross-file contract tests. Expected result: `/srv/github-runner/storage/docker-socket` is writable; neither Docker socket file nor `/run` is writable. Result: PENDING CI.
+1. The final Agent Relay SHA passes the complete repository CI with no skipped required check and 100 percent line, branch, and function coverage.
 
-2. **Ansible creates a real dedicated socket.** Scenario: the role runs on the supported Debian host. Proof: systemd status, socket type and ownership checks, and Docker CLI through the configured endpoint. Expected result: both sockets exist and reach the same Docker daemon; rerunning Ansible is idempotent. Result: PENDING deployment.
+2. `createCodexArgs` exposes `/srv/github-runner/storage/docker-socket` as writable and exposes neither socket file nor `/run` as a writable root.
 
-3. **Codex receives the dedicated endpoint.** Scenario: `scripts/codex-run` starts Codex. Proof: launcher tests and real consumer commands. Expected result: invalid paths fail before Codex; valid path yields `DOCKER_HOST=unix:///srv/github-runner/storage/docker-socket/docker.sock` inside tool processes. Result: PENDING CI and deployment.
+3. `scripts/codex-run` rejects a missing, symlinked, or non-socket endpoint and sets `DOCKER_HOST=unix:///srv/github-runner/storage/docker-socket/docker.sock` for the Codex child.
 
-4. **The original bubblewrap failure is removed.** Scenario: Monify PR 48 executes through the deployed runtime. Proof: Agent Relay transcript. Expected result: `pwd` and helper commands start, and no `docker.sock/.codex` error appears. Result: PENDING deployment.
+4. A controlled zero-exit Codex process without a command or file change fails with `CODEX_FAILED`; a process with observed execution activity may continue to finalization.
 
-5. **Semantic blockage cannot be reported as success.** Scenario: a controlled Codex process exits zero without any command or file-change lifecycle item. Proof: `validateExecutionOutcome` and normalizer tests. Expected result: Agent Relay throws `CODEX_FAILED` and skips finalization. Result: PENDING CI.
+5. Ansible locates exactly one `gh-runner`, adds `agent-relay` through the additive labels endpoint, preserves other custom labels, and verifies the returned label set.
 
-6. **Valid read-only work can succeed.** Scenario: Codex executes at least one command but produces no repository changes. Proof: controlled tests and real no-change finalization. Expected result: Agent Relay accepts the execution, finalizer exits zero with a log, and no commit is created. Result: PENDING CI and deployment.
+6. GitHub schedules Monify's Agent Relay jobs only to a runner matching both `self-hosted` and `agent-relay`; the retained runner-name check still rejects any incorrectly labeled host.
 
-7. **Changed work finalizes once.** Scenario: Codex executes commands and changes a consumer branch. Proof: Monify or an equivalent controlled consumer run. Expected result: finalizer uploads diagnostics, creates one commit, and pushes once without exposing the token to Codex. Result: PENDING deployment.
+7. After deployment, both Docker sockets are real and usable, and Docker commands work as `github-runner` through the dedicated endpoint.
 
-8. **The deployed revision is current and observable.** Scenario: the Ansible deployment completes. Proof: recorded source and activated runtime revision plus behavior of current finalizer. Expected result: runtime behavior matches the merged source, including no-change success and `FINALIZE_LOG`. Result: PENDING deployment.
+8. Monify PR 48 executes `pwd`, all four Token Minify helper lookups, `docker version`, and `docker compose version` through the real Codex sandbox with no `docker.sock/.codex` failure.
+
+9. No-change finalization exits zero and uploads diagnostics. Changed-worktree finalization creates one commit and pushes once. Codex never receives the push token and performs no Git mutation.
 
 ## Idempotence and Recovery
 
-The Ansible directory and template tasks are declarative. Repeated runs preserve the same directory ownership, socket listeners, modes, and service state. A socket drop-in change restarts `docker.socket` before Docker so descriptors are refreshed.
+The Ansible directory, template, service, and label tasks are repeatable. The label task skips the additive API call when `agent-relay` is already present and always reads labels back. The Docker socket drop-in restarts `docker.socket` and `docker.service` only when its content changes.
 
-If Docker fails after the drop-in change, keep the runner stopped, inspect `systemctl status` and `journalctl` for `docker.socket` and `docker.service`, correct the repository template or role, and rerun Ansible. Do not manually create socket files, add a symlink, grant write access to `/run`, or leave an unmanaged drop-in.
+If deployment fails before the runtime swap, the existing runtime remains active under the installer contract. Correct the repository or inventory and rerun the same playbook with the credential exported.
 
-The standard `/run/docker.sock` remains declared, so rollback is performed by reverting the merged change and rerunning Ansible. The reverted role must remove the managed drop-in if rollback support is needed before merge; review must confirm whether the current Ansible state removes obsolete templates or requires an explicit absent-state task.
+If Docker fails after the socket drop-in changes, stop the runner, inspect `systemctl status` and `journalctl` for `docker.socket` and `docker.service`, correct the managed template or role, and rerun Ansible. Do not create a socket symlink or grant broad write access to `/run`.
 
-A failed runtime build leaves the active runtime untouched under the existing installer contract. A failed consumer execution uploads the transcript and skips finalization. A failed finalization must upload its log and leave the branch recoverable under `runner/finalize.sh`.
+Source rollback alone does not remove `/etc/systemd/system/docker.socket.d/agent-relay.conf`. A rollback must first deploy an explicit cleanup revision that removes the managed drop-in, reloads systemd, and restarts `docker.socket` and `docker.service`, or perform that exact cleanup under a documented emergency procedure before deploying an older source revision. Do not claim that merely reverting Git automatically removes managed host state.
+
+Removing the `agent-relay` label makes Monify jobs remain queued rather than falling back to `docker-runner-02`. Restore the label through the same Ansible role before retrying.
 
 ## Artifacts and Notes
 
-Consumer failure evidence:
+Original consumer failure:
 
     repository: Divorium/monify
     pull request: 48
@@ -158,19 +210,26 @@ Consumer failure evidence:
     job: 89296098924
     message: failed to inspect synthetic bubblewrap mount target /run/docker.sock/.codex: Not a directory
 
-No command, helper, Docker operation, test, or file edit occurred in that run. The Codex step still concluded successfully because the process exited zero, and finalization failed without its expected log.
+Successful pre-merge evidence already observed:
 
-The dedicated endpoint is intentionally not a symlink. Its directory is the sandbox root, its child is the real socket created by systemd, and `DOCKER_HOST` selects it for all Docker clients launched by Codex.
+    Agent Relay run 30041216808
+    SHA cdc47f14a35c550b2a7388ed63d8dbf37af4288a
+    conclusion success
+
+    Agent Relay run 30041653005
+    SHA 10956c4adb837838e478db3246d0df5d4779d368
+    conclusion success
+
+The final pre-merge run must be recorded after the last documentation commit.
 
 ## Interfaces and Dependencies
 
 `config/runner-host.json` defines:
 
     docker_socket_path: /srv/github-runner/storage/docker-socket/docker.sock
+    runner_label: agent-relay
 
-`scripts/host-config.sh` exports:
-
-    DOCKER_SOCKET_PATH
+`scripts/host-config.sh` exports `DOCKER_SOCKET_PATH` for `scripts/codex-run`.
 
 `src/execution/codex-executor.ts` exports:
 
@@ -181,8 +240,10 @@ The dedicated endpoint is intentionally not a symlink. Its directory is the sand
 
     executionActivityCount(): number
 
-The implementation adds no runtime package dependency. It relies on the existing systemd `docker.socket`, Docker Engine `fd://` socket activation, Node.js built-ins, and the existing Codex JSONL lifecycle.
+`ansible/roles/agent_relay_host/tasks/runner-label.yml` uses GitHub's organization self-hosted runner list, additive label, and label-list endpoints. It requires a control-machine credential with organization runner read/write permission. The implementation adds no runtime package dependency.
 
 ## Plan Revision Notes
 
-2026-07-23 / ChatGPT: Created this plan from the real Monify consumer failure, current Agent Relay and OpenAI Codex source, and the implemented dedicated systemd socket plus semantic activity-gate design.
+2026-07-23 / ChatGPT: Created the plan from the real Monify consumer failure and the dedicated systemd socket plus semantic activity-gate design.
+
+2026-07-23 / ChatGPT: Updated the plan after complete CI exposed a missing `node:net` declaration and review exposed nondeterministic generic self-hosted scheduling. Added the managed `agent-relay` label, control credential requirement, consumer label routing, current CI evidence, and an explicit rollback caveat for persistent systemd host state.

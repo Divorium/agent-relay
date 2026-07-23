@@ -44,6 +44,12 @@
     enabled: true
     state: "{{ 'restarted' if agent_relay_containerd_config.changed else 'started' }}"
 
+- name: Stop Docker before changing socket listeners
+  ansible.builtin.systemd_service:
+    name: docker.service
+    state: stopped
+  when: agent_relay_docker_socket_config.changed
+
 - name: Enable and start Docker socket
   ansible.builtin.systemd_service:
     name: docker.socket
@@ -57,11 +63,11 @@
     enabled: true
     state: >-
       {{
-        'restarted'
-        if (
-          agent_relay_docker_config.changed
-          or agent_relay_containerd_config.changed
-          or agent_relay_docker_socket_config.changed
+        'started'
+        if agent_relay_docker_socket_config.changed
+        else (
+          'restarted'
+          if (agent_relay_docker_config.changed or agent_relay_containerd_config.changed)
+          else 'started'
         )
-        else 'started'
       }}

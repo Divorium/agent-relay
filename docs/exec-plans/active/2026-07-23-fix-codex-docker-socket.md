@@ -21,8 +21,8 @@ The behavior is complete only when the merged revision is deployed through Ansib
 - [x] (2026-07-23 20:20Z) Found nondeterministic consumer scheduling caused by both `gh-runner` and `docker-runner-02` matching `self-hosted`.
 - [x] (2026-07-23 20:22Z) Added the managed `agent-relay` runner-label contract, additive GitHub REST reconciliation, label verification, Monify `[self-hosted, agent-relay]` routing, and retained the exact runner-name check.
 - [x] (2026-07-23 20:22Z) Observed successful complete CI run 30041653005 on SHA `10956c4adb837838e478db3246d0df5d4779d368` after the runner-label change.
-- [ ] Confirm the latest complete CI run remains green after final documentation and plan updates.
-- [ ] Finish the complete branch diff review and record any remaining P0 or P1 findings.
+- [x] (2026-07-23 20:42Z) Confirmed complete CI run 30042975561 on final reviewed SHA `ad15b6aca2fdb9da9605ad3046b203ecdb5c0aed`; typecheck, tests with 100 percent coverage, runtime build, shell, Node, toolchain, and system tests all passed.
+- [x] (2026-07-23 20:42Z) Finished complete branch diff review. Two P1 findings were corrected: Docker is stopped before socket listener reconfiguration, and semantic success is enforced inside `CodexExecutor` rather than only by the CLI entrypoint. No unresolved P0 or P1 finding remains.
 - [ ] User merges PR 58 after the pre-merge gate is reported ready.
 - [ ] Deploy the merged revision through Ansible with `AGENT_RELAY_GITHUB_CREDENTIAL` available and record the deployed commit.
 - [ ] Verify the `agent-relay` label, both Docker sockets, the dedicated Docker endpoint, and current finalizer revision on the host.
@@ -51,6 +51,12 @@ The behavior is complete only when the merged revision is deployed through Ansib
 
 - Observation: an existing self-hosted runner cannot gain a custom label through `config.sh`.
   Evidence: GitHub requires the runner labels REST API for existing registrations. The additive `POST` endpoint preserves unrelated custom labels, unlike replacing the full custom-label set.
+
+- Observation: restarting `docker.socket` while `docker.service` still owns inherited listeners can fail or leave inconsistent listener state.
+  Evidence: final review found the role restarted the socket unit before stopping Docker. The corrected order stops `docker.service` only when the socket drop-in changes, restarts `docker.socket`, then starts Docker.
+
+- Observation: semantic success must be enforced at the executor boundary, not only by one CLI caller.
+  Evidence: direct callers of `CodexExecutor.run` previously received a zero-exit outcome before the CLI entrypoint applied the activity check. The executor now validates exit code and observed command/file activity before returning.
 
 - Observation: reverting source alone does not remove an already installed systemd drop-in.
   Evidence: Ansible creates `/etc/systemd/system/docker.socket.d/agent-relay.conf`; an older revision that does not know this file cannot delete it. Rollback must explicitly remove the managed file and restart both Docker units, or deploy a cleanup revision before returning to an older source revision.
@@ -91,7 +97,7 @@ The behavior is complete only when the merged revision is deployed through Ansib
 
 ## Outcomes & Retrospective
 
-The branch now has a coherent socket boundary, semantic success gate, and deterministic runner-routing contract. Two complete CI runs have passed after the implementation and label changes. The remaining uncertainty is environmental by definition: the code has not yet been merged and deployed, so the real systemd socket, GitHub runner label, Codex sandbox, Token Minify helpers, and finalizer must still be exercised together.
+The branch now has a coherent socket boundary, semantic success gate, deterministic runner-routing contract, and safe Docker listener lifecycle. Complete CI run 30042975561 passed on reviewed SHA `ad15b6aca2fdb9da9605ad3046b203ecdb5c0aed` after all P1 corrections. The remaining uncertainty is environmental by definition: the code has not yet been merged and deployed, so the real systemd socket, GitHub runner label, Codex sandbox, Token Minify helpers, and finalizer must still be exercised together.
 
 The main lesson is that orchestration success is not execution success. The first consumer run reached the correct workflow but revealed both a sandbox type mismatch and a false semantic success. Subsequent review also showed that fail-closed identity validation does not replace deterministic scheduling. The final gate therefore remains a production-path consumer run, not static configuration alone.
 
@@ -220,7 +226,13 @@ Successful pre-merge evidence already observed:
     SHA 10956c4adb837838e478db3246d0df5d4779d368
     conclusion success
 
-The final pre-merge run must be recorded after the last documentation commit.
+Final pre-merge evidence before this plan-only status update:
+
+    Agent Relay run 30042975561
+    SHA ad15b6aca2fdb9da9605ad3046b203ecdb5c0aed
+    conclusion success
+
+The plan-only status commit must receive the same complete green CI before the PR is reported ready.
 
 ## Interfaces and Dependencies
 

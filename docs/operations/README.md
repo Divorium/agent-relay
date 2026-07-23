@@ -34,7 +34,7 @@ ansible-playbook \
 
 Replace `inventory/runners.ini` with the configured inventory filename when different.
 
-Ansible owns the deployment lifecycle. It provisions the host, clones or updates the configured repository revision with `umask 0022`, reconciles checkout permissions, restores managed directory modes, drains active jobs when deployment is required and runs `install.sh`. Do not manually clone, pull or invoke the installer on the target.
+Ansible owns the deployment lifecycle. It provisions the host, clones or updates the configured repository revision with `umask 0022`, reconciles checkout permissions, restores managed directory modes, configures both Docker sockets, drains active jobs when deployment is required and runs `install.sh`. Do not manually clone, pull, edit Docker systemd drop-ins or invoke the installer on the target.
 
 The checkout is managed state. Local target changes are discarded when Ansible reconciles the configured revision.
 
@@ -73,6 +73,8 @@ sudo -u github-runner -H /usr/local/bin/codex login
 
 The role previews repository reconciliation before changing the target. When deployment is required, it stops the runner listener, waits for active `Runner.Worker` processes, updates the checkout and runs `install.sh` as `agent-relay-admin`.
 
+The role configures `docker.socket` with the ordinary `/run/docker.sock` listener and the Codex listener defined by `config/runner-host.json`, currently `/srv/github-runner/storage/docker-socket/docker.sock`. A socket configuration change restarts `docker.socket` and `docker.service` so `dockerd -H fd://` receives both descriptors.
+
 The installer validates users, directories, toolchains, Docker, checkout ownership and runtime state. It preserves the Ansible-managed runner directory mode while extracting the GitHub Runner archive, builds a staged runtime and activates it by same-filesystem rename.
 
 Rerun the same Ansible playbook for releases and host configuration changes.
@@ -101,8 +103,16 @@ Listener startup failure does not trigger runtime rollback because the listener 
 
 ```bash
 sudo systemctl status actions.runner.Divorium.gh-runner.service
-sudo -u github-runner -H docker info
+sudo systemctl status docker.socket docker.service
+sudo test -S /srv/github-runner/storage/docker-socket/docker.sock
+sudo -u github-runner -H env \
+  DOCKER_HOST=unix:///srv/github-runner/storage/docker-socket/docker.sock \
+  docker info
 ```
+
+Both Docker sockets must exist. The dedicated directory must be owned by `github-runner`, the socket must be `root:docker` mode `0660`, and the runner account must be a member of `docker`.
+
+If the dedicated socket is missing or stale, rerun Ansible. Do not create a symlink to `/run/docker.sock`, grant write access to `/run`, or manually edit the systemd unit.
 
 ## Filesystem layout
 
@@ -114,8 +124,11 @@ sudo -u github-runner -H docker info
 /srv/github-runner/storage/build-home
 /srv/github-runner/storage/docker/engine
 /srv/github-runner/storage/docker/containerd
+/srv/github-runner/storage/docker-socket/docker.sock
 ```
 
 ## Codex output
 
 Codex output is normalized, redacted and streamed live with a fixed `[codex] ` prefix. The same accepted bytes are written to the uploaded `agent-relay-output` transcript. Raw Codex JSONL is internal. `${GITHUB_OUTPUT}` contains workflow values only.
+
+A zero process exit is not sufficient for success. Agent Relay requires at least one Codex `command_execution` or `file_change` lifecycle item. A session that only reports inability to operate fails and does not proceed to finalization.

@@ -69,6 +69,31 @@
     - agent_relay_source_checkout.stat.isdir | default(false)
     - not (agent_relay_source_checkout.stat.islnk | default(false))
 
+- name: Inspect runner binary files
+  ansible.builtin.stat:
+    path: "{{ agent_relay_runner_root }}/{{ item }}"
+    follow: false
+  loop:
+    - bin/Runner.Listener
+    - bin/Runner.Worker
+    - bin/runsvc.sh
+    - config.sh
+    - runsvc.sh
+  register: agent_relay_runner_binary_files
+
+- name: Determine runner binary state
+  ansible.builtin.set_fact:
+    agent_relay_runner_binaries_complete: >-
+      {{
+        agent_relay_runner_binary_files.results
+        | selectattr('stat.exists', 'equalto', true)
+        | selectattr('stat.isreg', 'equalto', true)
+        | selectattr('stat.islnk', 'equalto', false)
+        | selectattr('stat.executable', 'equalto', true)
+        | list
+        | length == 5
+      }}
+
 - name: Inspect runner registration files
   ansible.builtin.stat:
     path: "{{ agent_relay_runner_root }}/{{ item }}"
@@ -81,13 +106,25 @@
 
 - name: Determine runner registration state
   ansible.builtin.set_fact:
-    agent_relay_registration_complete: >-
-      {{
-        agent_relay_registration_files.results
+    agent_relay_registration_state: >-
+      {% set existing = agent_relay_registration_files.results
         | selectattr('stat.exists', 'equalto', true)
-        | list
-        | length == 3
-      }}
+        | list %}
+      {% set complete = agent_relay_registration_files.results
+        | selectattr('stat.exists', 'equalto', true)
+        | selectattr('stat.isreg', 'equalto', true)
+        | selectattr('stat.islnk', 'equalto', false)
+        | selectattr('stat.pw_name', 'equalto', agent_relay_runner_user)
+        | selectattr('stat.mode', 'equalto', '0600')
+        | list %}
+      {{ 'absent' if existing | length == 0 else ('complete' if complete | length == 3 else 'partial') }}
+
+- name: Reject partial or unsafe runner registration
+  ansible.builtin.assert:
+    that:
+      - agent_relay_registration_state != 'partial'
+    fail_msg: >-
+      Runner registration is partial or unsafe. Rebuild the host or remove the registration state deliberately.
 
 - name: Inspect deployed runtime
   ansible.builtin.stat:
@@ -119,23 +156,12 @@
         agent_relay_checkout_preview.changed
         or (agent_relay_writable_source_entry.stdout | default('') | length > 0)
         or (agent_relay_runner_paths.changed | default(false))
-        or not agent_relay_registration_complete
+        or not agent_relay_runner_binaries_complete
         or not agent_relay_runtime_entrypoint.stat.exists
         or not agent_relay_service_unit_state.stat.exists
-        or agent_relay_service_state.rc != 0
+        or (agent_relay_registration_state == 'complete' and agent_relay_service_state.rc != 0)
+        or (agent_relay_registration_state == 'absent' and agent_relay_service_state.rc == 0)
       }}
-
-- name: Require installation playbook for first runner registration
-  ansible.builtin.assert:
-    that:
-      - agent_relay_manage_runner_lifecycle | bool
-      - agent_relay_github_credential | length > 0
-    fail_msg: >-
-      First runner registration requires playbooks/install.yml and AGENT_RELAY_GITHUB_CREDENTIAL
-      with organization Self-hosted runners: write permission.
-  when:
-    - agent_relay_deployment_required
-    - not agent_relay_registration_complete
 
 - name: Stop runner listener before deployment
   ansible.builtin.systemd_service:
@@ -226,22 +252,14 @@
   changed_when: agent_relay_checkout_permissions.stdout | length > 0
   when: agent_relay_deployment_required
 
-- name: Install or update Agent Relay
+- name: Install or update the complete Agent Relay host runtime
   become: true
   become_user: "{{ agent_relay_admin_user }}"
   ansible.builtin.command:
     argv:
       - "{{ agent_relay_source_root }}/install.sh"
     chdir: "{{ agent_relay_source_root }}"
-    stdin: >-
-      {{
-        agent_relay_github_credential
-        if (agent_relay_manage_runner_lifecycle | bool and not agent_relay_registration_complete)
-        else ''
-      }}
-    stdin_add_newline: true
   environment:
     HOME: "/home/{{ agent_relay_admin_user }}"
-  no_log: "{{ not agent_relay_registration_complete }}"
   changed_when: true
   when: agent_relay_deployment_required

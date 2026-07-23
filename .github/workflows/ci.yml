@@ -24,7 +24,24 @@ jobs:
         run: npm ci
 
       - name: Typecheck
-        run: npm run typecheck
+        id: typecheck
+        shell: bash
+        run: |
+          set +e
+          npm run typecheck > "${RUNNER_TEMP}/agent-relay-typecheck-output.log" 2>&1
+          status=$?
+          if (( status != 0 )); then
+            cat "${RUNNER_TEMP}/agent-relay-typecheck-output.log"
+          fi
+          exit "${status}"
+
+      - name: Upload typecheck failure output
+        if: failure() && steps.typecheck.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-relay-typecheck-output
+          path: ${{ runner.temp }}/agent-relay-typecheck-output.log
+          if-no-files-found: error
 
       - name: Run tests and coverage
         id: tests

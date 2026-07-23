@@ -1,10 +1,4 @@
 ---
-- name: Install repositories and host packages
-  ansible.builtin.import_tasks: packages.yml
-
-- name: Create administrator and service users
-  ansible.builtin.import_tasks: users.yml
-
 - name: Create Agent Relay state root
   ansible.builtin.file:
     path: /var/lib/agent-relay
@@ -17,9 +11,9 @@
   ansible.builtin.file:
     path: "{{ agent_relay_lifecycle_root }}"
     state: directory
-    owner: "{{ agent_relay_admin_user }}"
-    group: "{{ agent_relay_admin_user }}"
-    mode: "0700"
+    owner: root
+    group: root
+    mode: "0755"
 
 - name: Acquire Agent Relay lifecycle lock
   ansible.builtin.command:
@@ -30,6 +24,12 @@
 
 - name: Reconcile locked Agent Relay host state
   block:
+    - name: Install repositories and host packages
+      ansible.builtin.import_tasks: packages.yml
+
+    - name: Create administrator and service users
+      ansible.builtin.import_tasks: users.yml
+
     - name: Create Agent Relay filesystem roots
       ansible.builtin.import_tasks: filesystem.yml
 

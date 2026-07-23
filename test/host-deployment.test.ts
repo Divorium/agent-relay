@@ -50,14 +50,20 @@ test("host lifecycle uses one credential-free mutual exclusion boundary", async 
 
   assert.match(vars, /agent_relay_lifecycle_root: \/var\/lib\/agent-relay\/lifecycle/u);
   assert.match(vars, /agent_relay_lifecycle_lock: "\{\{ agent_relay_lifecycle_root \}\}\/active"/u);
-  assert.match(main, /name: Create Agent Relay lifecycle lock root/u);
+  assert.match(main, /name: Create Agent Relay lifecycle lock root[\s\S]*owner: root[\s\S]*group: root[\s\S]*mode: "0755"/u);
   assert.match(main, /name: Acquire Agent Relay lifecycle lock/u);
   assert.match(main, /name: Release Agent Relay lifecycle lock/u);
+  const lock = main.indexOf("name: Acquire Agent Relay lifecycle lock");
+  const packages = main.indexOf("name: Install repositories and host packages");
+  const users = main.indexOf("name: Create administrator and service users");
+  assert.ok(lock >= 0 && packages > lock && users > lock);
   assert.match(filesystem, /name: Reject unsafe obsolete installer lock/u);
   assert.match(filesystem, /name: Remove obsolete installer lock/u);
   assert.match(connection, /LIFECYCLE_ROOT=\/var\/lib\/agent-relay\/lifecycle/u);
-  assert.match(connection, /mkdir -- "\$\{LIFECYCLE_LOCK\}"/u);
-  assert.match(connection, /rmdir -- "\$\{LIFECYCLE_LOCK\}"/u);
+  assert.match(connection, /sudo -n mkdir -- "\$\{LIFECYCLE_LOCK\}"/u);
+  assert.match(connection, /sudo -n rmdir -- "\$\{LIFECYCLE_LOCK\}"/u);
+  assert.match(connection, /Lifecycle lock root must be root-owned/u);
+  assert.match(connection, /Lifecycle lock root must have mode 0755/u);
   assert.doesNotMatch(connection, /install\.lock|flock/u);
 });
 

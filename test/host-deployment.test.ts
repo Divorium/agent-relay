@@ -99,6 +99,9 @@ test("runtime is built and validated before atomic activation", async () => {
   assert.ok(finalize > unsafe);
   assert.ok(activate > finalize);
   assert.ok(start > activate);
+  assert.match(runtime, /name: Remove safe stale runtime stage without crossing filesystems/u);
+  assert.match(runtime, /- --one-file-system/u);
+  assert.match(runtime, /name: Remove preserved runtime after successful activation without crossing filesystems/u);
 });
 
 test("host contract supplies runner and toolchain versions", async () => {
@@ -118,12 +121,14 @@ test("host contract supplies runner and toolchain versions", async () => {
 test("legacy host installer entrypoints are absent from validation", async () => {
   const pkg = await text("package.json");
   const systemTest = await text("test-system/github-connect.integration.sh");
-  const connectionMetadata = await stat("scripts/github-connect");
+  const connection = await text("scripts/github-connect");
+  const connectionTasks = await text("ansible/roles/agent_relay_github_connection/tasks/main.yml");
   const toolchainMetadata = await stat("scripts/host-toolchain-check.sh");
 
   assert.doesNotMatch(pkg, /install\.sh|install-script\.integration/u);
   assert.match(pkg, /test-system\/github-connect\.integration\.sh/u);
   assert.match(systemTest, /GitHub connection integration checks passed/u);
-  assert.notEqual(connectionMetadata.mode & 0o111, 0);
+  assert.match(connection, /^#!\/usr\/bin\/env bash\n/u);
+  assert.match(connectionTasks, /argv:\n\s+- bash\n\s+- "\{\{ agent_relay_source_root \}\}\/scripts\/github-connect"/u);
   assert.notEqual(toolchainMetadata.mode & 0o111, 0);
 });

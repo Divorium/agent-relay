@@ -10,6 +10,8 @@ Use `ansible-core >= 2.18`. The role uses only `ansible.builtin` modules and kee
 
 The target needs only network access and root SSH. The playbook bootstraps Python 3, installs the host dependencies, creates the operational users, configures Docker, installs toolchains, deploys the repository and starts the GitHub runner.
 
+Docker keeps its standard `/run/docker.sock` endpoint and also receives an Ansible-managed systemd socket at `/srv/github-runner/storage/docker-socket/docker.sock`. The dedicated directory is owned by `github-runner`, the socket is `root:docker` mode `0660`, and Codex receives only that directory as a writable sandbox root. Do not replace this with write access to `/run` or with a socket-file permission entry.
+
 ## Configure inventory
 
 ```bash
@@ -50,7 +52,7 @@ ansible-playbook \
   "$PWD/playbooks/host.yml"
 ```
 
-Rerun the same playbook to update the host and deployment. Ansible performs clone, checkout, pull-equivalent reconciliation and installation.
+Rerun the same playbook to update the host and deployment. Ansible performs clone, checkout, pull-equivalent reconciliation, Docker socket reconciliation and installation.
 
 Codex authentication remains an explicit credential operation after the host exists:
 

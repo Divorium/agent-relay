@@ -178,11 +178,57 @@
     fail_msg: >-
       Runner registration is partial or unsafe. Rebuild the host or remove the registration state deliberately.
 
-- name: Inspect deployed runtime
+- name: Inspect deployed runtime entrypoint
   ansible.builtin.stat:
     path: "{{ agent_relay_source_root }}/dist/src/run-codex.js"
     follow: false
   register: agent_relay_runtime_entrypoint
+
+- name: Inspect deployed runtime revision marker
+  ansible.builtin.stat:
+    path: "{{ agent_relay_source_root }}/dist/{{ agent_relay_runtime_revision_marker }}"
+    follow: false
+  register: agent_relay_runtime_revision_marker_state
+
+- name: Read deployed runtime revision marker
+  ansible.builtin.slurp:
+    src: "{{ agent_relay_source_root }}/dist/{{ agent_relay_runtime_revision_marker }}"
+  register: agent_relay_runtime_revision_content
+  when:
+    - agent_relay_runtime_revision_marker_state.stat.exists | default(false)
+    - agent_relay_runtime_revision_marker_state.stat.isreg | default(false)
+    - not (agent_relay_runtime_revision_marker_state.stat.islnk | default(false))
+    - agent_relay_runtime_revision_marker_state.stat.pw_name | default('') == 'root'
+    - agent_relay_runtime_revision_marker_state.stat.gr_name | default('') == 'root'
+    - agent_relay_runtime_revision_marker_state.stat.mode | default('') == '0644'
+
+- name: Determine deployed runtime state
+  ansible.builtin.set_fact:
+    agent_relay_runtime_entrypoint_safe: >-
+      {{
+        agent_relay_runtime_entrypoint.stat.exists | default(false)
+        and agent_relay_runtime_entrypoint.stat.isreg | default(false)
+        and not (agent_relay_runtime_entrypoint.stat.islnk | default(false))
+        and agent_relay_runtime_entrypoint.stat.pw_name | default('') == 'root'
+        and agent_relay_runtime_entrypoint.stat.gr_name | default('') == 'root'
+        and agent_relay_runtime_entrypoint.stat.mode | default('') == '0644'
+      }}
+    agent_relay_runtime_revision_matches: >-
+      {{
+        agent_relay_checkout_preview.after is defined
+        and agent_relay_runtime_revision_marker_state.stat.exists | default(false)
+        and agent_relay_runtime_revision_marker_state.stat.isreg | default(false)
+        and not (agent_relay_runtime_revision_marker_state.stat.islnk | default(false))
+        and agent_relay_runtime_revision_marker_state.stat.pw_name | default('') == 'root'
+        and agent_relay_runtime_revision_marker_state.stat.gr_name | default('') == 'root'
+        and agent_relay_runtime_revision_marker_state.stat.mode | default('') == '0644'
+        and (
+          agent_relay_runtime_revision_content.content
+          | default('')
+          | b64decode
+          | trim
+        ) == agent_relay_checkout_preview.after
+      }}
 
 - name: Preview runner service unit reconciliation
   ansible.builtin.template:
@@ -213,7 +259,8 @@
         or (agent_relay_writable_source_entry.stdout | default('') | length > 0)
         or (agent_relay_runner_paths.changed | default(false))
         or agent_relay_runner_binary_state == 'absent'
-        or not agent_relay_runtime_entrypoint.stat.exists
+        or not agent_relay_runtime_entrypoint_safe
+        or not agent_relay_runtime_revision_matches
         or agent_relay_service_unit_preview.changed
         or (agent_relay_registration_state == 'complete' and agent_relay_service_state.rc != 0)
         or (agent_relay_registration_state == 'absent' and agent_relay_service_state.rc == 0)
@@ -244,7 +291,7 @@
       when:
         - agent_relay_registration_state == 'complete'
         - agent_relay_service_state.rc == 0
-        - agent_relay_runtime_entrypoint.stat.exists
+        - agent_relay_runtime_entrypoint_safe
 
     - name: Report host deployment failure
       ansible.builtin.fail:

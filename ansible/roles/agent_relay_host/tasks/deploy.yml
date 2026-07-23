@@ -107,17 +107,29 @@
 - name: Determine runner registration state
   ansible.builtin.set_fact:
     agent_relay_registration_state: >-
-      {% set existing = agent_relay_registration_files.results
-        | selectattr('stat.exists', 'equalto', true)
-        | list %}
-      {% set complete = agent_relay_registration_files.results
-        | selectattr('stat.exists', 'equalto', true)
-        | selectattr('stat.isreg', 'equalto', true)
-        | selectattr('stat.islnk', 'equalto', false)
-        | selectattr('stat.pw_name', 'equalto', agent_relay_runner_user)
-        | selectattr('stat.mode', 'equalto', '0600')
-        | list %}
-      {{ 'absent' if existing | length == 0 else ('complete' if complete | length == 3 else 'partial') }}
+      {{
+        'absent'
+        if (
+          agent_relay_registration_files.results
+          | selectattr('stat.exists', 'equalto', true)
+          | list
+          | length
+        ) == 0
+        else (
+          'complete'
+          if (
+            agent_relay_registration_files.results
+            | selectattr('stat.exists', 'equalto', true)
+            | selectattr('stat.isreg', 'equalto', true)
+            | selectattr('stat.islnk', 'equalto', false)
+            | selectattr('stat.pw_name', 'equalto', agent_relay_runner_user)
+            | selectattr('stat.mode', 'equalto', '0600')
+            | list
+            | length
+          ) == 3
+          else 'partial'
+        )
+      }}
 
 - name: Reject partial or unsafe runner registration
   ansible.builtin.assert:

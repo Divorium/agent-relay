@@ -31,6 +31,13 @@ test("host provisioning, launcher, and sandbox share one directory-based Docker 
   assert.match(filesystem, /owner: "\{\{ agent_relay_runner_user \}\}"[\s\S]*mode: "0700"/u);
   assert.match(containers, /\/etc\/systemd\/system\/docker\.socket\.d/u);
   assert.match(containers, /src: docker-socket\.conf\.j2/u);
+  assert.match(containers, /Stop Docker before changing socket listeners[\s\S]*name: docker\.service[\s\S]*state: stopped[\s\S]*when: agent_relay_docker_socket_config\.changed/u);
+  const stopDockerIndex = containers.indexOf("- name: Stop Docker before changing socket listeners");
+  const startSocketIndex = containers.indexOf("- name: Enable and start Docker socket");
+  const startDockerIndex = containers.indexOf("- name: Enable and start Docker\n");
+  assert.ok(stopDockerIndex >= 0);
+  assert.ok(startSocketIndex > stopDockerIndex);
+  assert.ok(startDockerIndex > startSocketIndex);
   assert.match(containers, /agent_relay_docker_socket_config\.changed/u);
   assert.match(socketUnit, /ListenStream=\nListenStream=\/run\/docker\.sock/u);
   assert.match(socketUnit, /ListenStream=\{\{ agent_relay_docker_socket_path \}\}/u);

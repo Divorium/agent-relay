@@ -113,7 +113,17 @@ test("CI uses the organization runner and executes the complete validation", asy
   assert.match(workflow, /actions\/checkout@v4/);
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /run: npm ci/);
-  assert.match(workflow, /run: npm run check/);
+  for (const command of [
+    "npm run typecheck",
+    "npm test",
+    "npm run check:runtime",
+    "npm run check:shell",
+    "npm run check:node-scripts",
+    "npm run check:toolchain",
+    "npm run check:system",
+  ]) {
+    assert.match(workflow, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "u"));
+  }
 });
 
 test("active packaging contains no Docker or Relay transport entrypoints", async () => {
@@ -134,7 +144,8 @@ test("active packaging contains no Docker or Relay transport entrypoints", async
   }
 
   const packageJson = await readFile("package.json", "utf8");
-  assert.doesNotMatch(packageJson, /dist\/src\/server\.js|runner-entrypoint/);
-  assert.match(packageJson, /bash -n install\.sh runner\/finalize\.sh/);
-  assert.doesNotMatch(packageJson, /update\.sh|docker-host/);
+  assert.doesNotMatch(packageJson, /install\.sh|install-script\.integration/u);
+  assert.match(packageJson, /test-system\/github-connect\.integration\.sh/u);
+  assert.match(packageJson, /bash -n runner\/finalize\.sh[\s\S]*scripts\/github-connect/u);
+  assert.doesNotMatch(packageJson, /update\.sh|docker-host/u);
 });

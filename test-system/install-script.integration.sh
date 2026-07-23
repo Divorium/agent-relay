@@ -50,10 +50,11 @@ EOF_OS_RELEASE
   cp "${REPOSITORY_ROOT}/runner/finalize.sh" "${REPOSITORY_ROOT}/runner/resolve-pr.mjs" \
     "${REPOSITORY_ROOT}/runner/resolve-plan.mjs" "${REPOSITORY_ROOT}/runner/resolve-request.mjs" \
     "${REPOSITORY_ROOT}/runner/run-codex.mjs" "${source_root}/runner/"
-  cp "${REPOSITORY_ROOT}/scripts/codex-run" "${REPOSITORY_ROOT}/scripts/host-config.sh" \
-    "${REPOSITORY_ROOT}/scripts/host-toolchain-check.sh" "${REPOSITORY_ROOT}/scripts/toolchain-environment.sh" \
-    "${REPOSITORY_ROOT}/scripts/toolchain-smoke.sh" "${source_root}/scripts/"
-  chmod 0755 "${source_root}"
+  cp "${REPOSITORY_ROOT}/scripts/codex-run" "${REPOSITORY_ROOT}/scripts/github-connect" \
+    "${REPOSITORY_ROOT}/scripts/host-config.sh" "${REPOSITORY_ROOT}/scripts/host-toolchain-check.sh" \
+    "${REPOSITORY_ROOT}/scripts/toolchain-environment.sh" "${REPOSITORY_ROOT}/scripts/toolchain-smoke.sh" \
+    "${source_root}/scripts/"
+  chmod 0755 "${source_root}" "${source_root}/install.sh" "${source_root}/scripts/github-connect"
 
   python3 - "${source_root}/config/runner-host.json" "${base_root}" <<'PY'
 import json
@@ -115,7 +116,32 @@ sudo_stat_mode() { stat_mode "$1"; }'''
 )
 path.write_text(source)
 PY
-  chmod 0755 "${source_root}/install.sh"
+
+  python3 - "${source_root}/scripts/github-connect" "${lock_root}" "${etc_root}" <<'PY'
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+source = source.replace("LOCK_ROOT=/var/lib/agent-relay", f"LOCK_ROOT={sys.argv[2]!r}")
+source = source.replace("/etc/systemd/system", f"{sys.argv[3]}/systemd/system")
+source = source.replace(
+    '''sudo_stat_uid() { sudo -n stat -c '%u' -- "$1"; }
+sudo_stat_mode() { sudo -n stat -c '%a' -- "$1"; }''',
+    '''sudo_stat_uid() {
+  case "$1" in
+    "${RUNNER_DIR}"|"${RUNNER_DIR}/"*) echo 2001 ;;
+    "${SERVICE_UNIT}") echo 0 ;;
+    *) /usr/bin/stat -c '%u' -- "$1" ;;
+  esac
+}
+sudo_stat_mode() { /usr/bin/stat -c '%a' -- "$1"; }'''
+)
+source = source.replace(
+    '''[[ "$(stat -c '%u' -- "${LOCK_FILE}")" == "${admin_uid}" ]] || fail "The administrator must own ${LOCK_FILE}"''',
+    '''[[ "${admin_uid}" == "1000" ]] || fail "The administrator must own ${LOCK_FILE}"'''
+)
+path.write_text(source)
+PY
 
   cat >"${source_root}/scripts/toolchain-environment.sh" <<EOF_TOOLCHAIN
 #!/usr/bin/env bash
@@ -190,9 +216,9 @@ case "\${1:-}:\${2:-}" in
 esac
 EOF_GETENT
 
-  cat >"${fake_bin}/stat" <<EOF_STAT
+  cat >"${fake_bin}/stat" <<'EOF_STAT'
 #!/usr/bin/env bash
-exec /usr/bin/stat "\$@"
+exec /usr/bin/stat "$@"
 EOF_STAT
 
   cat >"${fake_bin}/sudo" <<EOF_SUDO
@@ -222,7 +248,7 @@ set -euo pipefail
 printf '%s\n' "\$*" >> "${state_root}/systemctl.log"
 case "\${1:-}" in
   is-active) test -f "${state_root}/service-active" ;;
-  stop) rm -f "${state_root}/service-active" ;;
+  stop|disable) rm -f "${state_root}/service-active" ;;
   restart|start) touch "${state_root}/service-active" ;;
   enable|daemon-reload) exit 0 ;;
   *) exit 0 ;;
@@ -313,34 +339,52 @@ printf 'build\n' >> "${state_root}/build.log"
 EOF_TSC
 
   chmod 0755 "${fake_bin}"/*
-
   printf '%s\n' "${source_root}" "${state_root}" "${fake_bin}"
 }
 
-run_installer() {
-  local source_root=$1 state_root=$2 fake_bin=$3 token=${4-}
-  if [[ -n "${token}" ]]; then
-    printf '%s\n' "${token}" | PATH="${fake_bin}:/usr/bin:/bin" bash "${source_root}/install.sh"
-  else
-    PATH="${fake_bin}:/usr/bin:/bin" bash "${source_root}/install.sh" </dev/null
-  fi
+run_host_installer() {
+  local source_root=$1 fake_bin=$2
+  PATH="${fake_bin}:/usr/bin:/bin" bash "${source_root}/install.sh" </dev/null
 }
+
+run_github_connect() {
+  local source_root=$1 fake_bin=$2 token=$3
+  printf '%s\n' "${token}" | PATH="${fake_bin}:/usr/bin:/bin" bash "${source_root}/scripts/github-connect"
+}
+
+mapfile -t not_prepared < <(prepare_case not-prepared 0)
+if run_github_connect "${not_prepared[0]}" "${not_prepared[2]}" token; then
+  echo 'GitHub connection unexpectedly succeeded before host installation' >&2
+  exit 1
+fi
 
 mapfile -t first < <(prepare_case first 0)
 source_root=${first[0]}
 state_root=${first[1]}
 fake_bin=${first[2]}
 runner_root="$(dirname "${source_root}")/runner"
-run_installer "${source_root}" "${state_root}" "${fake_bin}" first-token
+run_host_installer "${source_root}" "${fake_bin}"
 [[ "$(stat -c '%a' -- "${runner_root}")" == 700 ]]
 [[ -f "${source_root}/dist/src/run-codex.js" ]]
+[[ ! -f "${state_root}/service-active" ]]
+[[ "$(grep -c actions-runner-linux "${state_root}/curl.log")" == 1 ]]
+[[ ! -f "${state_root}/config.log" ]]
+if grep -q registration-token "${state_root}/curl.log"; then
+  echo 'host installer requested a GitHub registration token' >&2
+  exit 1
+fi
+
+run_github_connect "${source_root}" "${fake_bin}" first-token
 [[ -f "${state_root}/service-active" ]]
 [[ "$(grep -c registration-token "${state_root}/curl.log")" == 1 ]]
-[[ "$(grep -c actions-runner-linux "${state_root}/curl.log")" == 1 ]]
 [[ "$(wc -l < "${state_root}/config.log")" == 1 ]]
-[[ "$(wc -l < "${state_root}/build.log")" == 1 ]]
 
-run_installer "${source_root}" "${state_root}" "${fake_bin}"
+run_github_connect "${source_root}" "${fake_bin}" second-token
+[[ "$(grep -c registration-token "${state_root}/curl.log")" == 1 ]]
+[[ "$(wc -l < "${state_root}/config.log")" == 1 ]]
+
+run_host_installer "${source_root}" "${fake_bin}"
+[[ -f "${state_root}/service-active" ]]
 [[ "$(grep -c registration-token "${state_root}/curl.log")" == 1 ]]
 [[ "$(grep -c actions-runner-linux "${state_root}/curl.log")" == 1 ]]
 [[ "$(wc -l < "${state_root}/config.log")" == 1 ]]
@@ -348,8 +392,8 @@ run_installer "${source_root}" "${state_root}" "${fake_bin}"
 
 stop_count_before="$(grep -c '^stop ' "${state_root}/systemctl.log" || true)"
 touch "${state_root}/fail-build"
-if run_installer "${source_root}" "${state_root}" "${fake_bin}"; then
-  echo 'installer unexpectedly succeeded after build failure' >&2
+if run_host_installer "${source_root}" "${fake_bin}"; then
+  echo 'host installer unexpectedly succeeded after build failure' >&2
   exit 1
 fi
 rm -f "${state_root}/fail-build"
@@ -358,20 +402,23 @@ rm -f "${state_root}/fail-build"
 
 previous_runtime="$(cat "${source_root}/dist/src/run-codex.js")"
 touch "${state_root}/fail-activate"
-if run_installer "${source_root}" "${state_root}" "${fake_bin}"; then
-  echo 'installer unexpectedly succeeded after activation failure' >&2
+if run_host_installer "${source_root}" "${fake_bin}"; then
+  echo 'host installer unexpectedly succeeded after activation failure' >&2
   exit 1
 fi
 [[ "$(cat "${source_root}/dist/src/run-codex.js")" == "${previous_runtime}" ]]
 [[ ! -e "${source_root}/dist.previous" ]]
 
 mapfile -t resume < <(prepare_case resume 1)
-run_installer "${resume[0]}" "${resume[1]}" "${resume[2]}" resume-token
-[[ "$(grep -c registration-token "${resume[1]}/curl.log")" == 1 ]]
-if grep -q actions-runner-linux "${resume[1]}/curl.log"; then
+run_host_installer "${resume[0]}" "${resume[2]}"
+if [[ -f "${resume[1]}/curl.log" ]] && grep -q actions-runner-linux "${resume[1]}/curl.log"; then
   echo 'complete runner binaries were downloaded again' >&2
   exit 1
 fi
+[[ ! -f "${resume[1]}/service-active" ]]
+run_github_connect "${resume[0]}" "${resume[2]}" resume-token
+[[ "$(grep -c registration-token "${resume[1]}/curl.log")" == 1 ]]
 [[ "$(wc -l < "${resume[1]}/config.log")" == 1 ]]
+[[ -f "${resume[1]}/service-active" ]]
 
-printf 'installer behavioral integration checks passed\n'
+printf 'host and GitHub connection integration checks passed\n'

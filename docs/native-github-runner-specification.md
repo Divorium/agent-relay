@@ -17,6 +17,7 @@ The repository role:
 - creates the administrator, `github-runner` and `agent-relay-builder`;
 - creates and reconciles named secure directories;
 - configures Docker Engine and containerd data roots and services;
+- configures the ordinary Docker socket and a dedicated Codex Docker socket under the runner storage root;
 - clones or updates the configured Agent Relay revision as the administrator with `umask 0022`;
 - removes group and other write bits from managed checkout files and directories without changing executable bits;
 - previews deployment changes, stops the listener and drains active workers when deployment is required;
@@ -60,10 +61,13 @@ The administrator is a trusted full-host account. The example inventory contains
 /srv/github-runner/storage/build-home   agent-relay-builder home and writable build state
 /srv/github-runner/storage/docker/engine
 /srv/github-runner/storage/docker/containerd
+/srv/github-runner/storage/docker-socket/docker.sock
 /var/lib/agent-relay/install.lock
 ```
 
 `/srv/github-runner/storage/runner/_work` is a managed symlink to `../work`. Runtime stages are created adjacent to `dist`; the previous `/srv/github-runner/storage/build` path is removed.
+
+The Docker socket directory is owned by `github-runner` and mode `0700`. The socket is created by the root-owned `docker.socket` unit as `root:docker` mode `0660`. The standard `/run/docker.sock` remains available for host operators. The dedicated socket path is defined in `config/runner-host.json` and is the only Docker filesystem root exposed as writable to Codex.
 
 ## Accounts and privilege boundary
 
@@ -87,7 +91,7 @@ The Ansible role owns package repositories and toolchains:
 - Docker Engine, containerd, Buildx and Compose with `state: present` from Docker's signed repository;
 - Git LFS and Debian 13 native dependencies required by runner 2.335.1.
 
-Docker and containerd package auto-start is suppressed until their managed configuration and data roots exist. Configuration changes restart containerd before Docker.
+Docker and containerd package auto-start is suppressed until their managed configuration, data roots and socket listeners exist. Configuration changes restart containerd before Docker. A Docker socket drop-in change restarts `docker.socket` and `docker.service`, allowing `dockerd -H fd://` to receive both managed socket descriptors.
 
 `scripts/toolchain-environment.sh` remains the authoritative runtime path layout:
 
@@ -98,6 +102,8 @@ Rust Cargo root /opt/rust/cargo
 RUSTUP_HOME     /opt/rust/rustup
 PATH            /opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin
 ```
+
+`scripts/codex-run` reads the trusted host contract, verifies the dedicated Docker socket directory and socket type, and adds `DOCKER_HOST=unix:///srv/github-runner/storage/docker-socket/docker.sock` to the clean Codex environment.
 
 ## Runner installation contract
 
@@ -156,7 +162,8 @@ The workflow is `.github/workflows/codex.yml` and processes one request as follo
 7. `CodexExecutor` canonicalizes the selected workspace and invokes `scripts/codex-run` with `codex exec --json`, timeout, process-group termination, normalized-output limits, streaming redaction, and filesystem/network permissions.
 8. Relay serializes callback-arrival chunks from stdout and stderr and applies bounded backpressure.
 9. Relay writes accepted redacted segments to both the live log and `${RUNNER_TEMP}/agent-relay-console.log`; the workflow uploads the latter as `agent-relay-output`.
-10. `finalize.sh` validates the branch and commit message, checks the diff, commits, and pushes through a temporary askpass helper. Codex receives no GitHub token.
+10. A zero exit is accepted only when the JSONL lifecycle contains at least one `command_execution` or `file_change` item.
+11. `finalize.sh` validates the branch and commit message, checks the diff, commits, and pushes through a temporary askpass helper. Codex receives no GitHub token.
 
 The workflow uses the self-hosted organization runner and accepts same-repository pull requests only.
 
@@ -166,15 +173,20 @@ The launcher and runtime:
 
 - refuse root execution;
 - require manual `github-runner` Codex authentication;
-- validate and source the trusted toolchain profile;
+- validate and source the trusted toolchain and host configuration profiles;
+- validate that the configured Docker socket root is a non-symlink directory and the socket is a non-symlink Unix socket;
 - build a private per-run state hierarchy and start Codex through `env -i`;
 - trust only the exact canonical selected workspace;
 - deny runner home, trusted source checkout, workspace root, `/tmp`, and `/var/tmp` to model-controlled tools;
 - expose `/opt/rust` read-only;
-- grant writes only to the selected repository and private runtime directory;
+- expose only `/srv/github-runner/storage/docker-socket` as the writable Docker boundary and set `DOCKER_HOST` to its socket child;
+- never expose `/run/docker.sock` or `/var/run/docker.sock` as writable filesystem roots;
+- grant writes only to the selected repository, dedicated Docker socket directory and private runtime directory;
 - keep the selected repository `.git` directory read-only;
 - enable network access and disable memories;
 - remove only their own private runtime directory.
+
+The dedicated socket directory is intentionally writable because current Codex bubblewrap creates protected `.codex`, `.git`, and `.agents` metadata targets below each writable root. A Unix socket file cannot be used directly as such a root. The runner already has intentional root-equivalent Docker group trust; this directory does not broaden write access to `/run` or Docker data roots.
 
 ## Codex output contract
 
@@ -183,6 +195,8 @@ Raw Codex JSONL is internal and never copied directly to the job log or artifact
 Every normalized physical line begins with `[codex] `. Unsafe controls are visibly encoded. Normalization precedes redaction and output-byte accounting. Transport splitting and queues are bounded and honor Node writable backpressure.
 
 Successful live output and the uploaded transcript are byte-identical. When the normalized redacted budget cannot accept another complete line, Relay keeps the accepted prefix and writes one `[codex] [OUTPUT TRUNCATED]` line to both sinks while continuing bounded protocol validation and drain. Timeout or nonzero process exit remains authoritative.
+
+A zero process exit is not sufficient for semantic success. Relay tracks first-seen `command_execution` and `file_change` lifecycle items. If neither occurs, execution fails with `CODEX_FAILED`, the workflow skips finalization, and the transcript remains available for diagnosis. Output truncation may clear replay/lifecycle state but does not erase the activity count.
 
 `GITHUB_OUTPUT` contains workflow values only. Pre-merge tests exercise the branch runtime with controlled processes; the actual pull-request Codex workflow uses the currently deployed trusted runtime, so final runtime smoke evidence is post-merge and post-deployment.
 
@@ -196,4 +210,6 @@ The pipeline runs `npm ci` and `npm run check`, including:
 - shell and Node-script syntax checks;
 - host toolchain smoke;
 - installer static and simulated system tests;
-- static assertions covering the Ansible deployment contract; no live Ansible execution or linting.
+- static assertions covering the Ansible deployment and Docker socket contract; no live Ansible execution or linting.
+
+Post-deployment acceptance additionally requires a real consumer ExecPlan to run `pwd`, Token Minify helpers, `docker version`, `docker compose version`, no-change finalization and changed-worktree finalization through the same Agent Relay sandbox and workflow path.

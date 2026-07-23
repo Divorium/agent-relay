@@ -63,22 +63,23 @@
   become_user: "{{ agent_relay_builder_user }}"
   ansible.builtin.command:
     argv:
+      - /usr/bin/env
+      - -i
+      - "HOME={{ agent_relay_build_home }}"
+      - "USER={{ agent_relay_builder_user }}"
+      - "LOGNAME={{ agent_relay_builder_user }}"
+      - SHELL=/usr/sbin/nologin
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
+      - "TMPDIR={{ agent_relay_build_home }}/tmp"
+      - "TMP={{ agent_relay_build_home }}/tmp"
+      - "TEMP={{ agent_relay_build_home }}/tmp"
+      - "PATH={{ agent_relay_toolchain_path }}"
       - /usr/local/bin/tsc
       - -p
       - "{{ agent_relay_source_root }}/tsconfig.runtime.json"
       - --outDir
       - "{{ agent_relay_runtime_stage_root }}"
-  environment:
-    HOME: "{{ agent_relay_build_home }}"
-    USER: "{{ agent_relay_builder_user }}"
-    LOGNAME: "{{ agent_relay_builder_user }}"
-    SHELL: /usr/sbin/nologin
-    LANG: C.UTF-8
-    LC_ALL: C.UTF-8
-    TMPDIR: "{{ agent_relay_build_home }}/tmp"
-    TMP: "{{ agent_relay_build_home }}/tmp"
-    TEMP: "{{ agent_relay_build_home }}/tmp"
-    PATH: "{{ agent_relay_toolchain_path }}"
 
 - name: Inspect staged runtime entrypoint
   ansible.builtin.stat:
@@ -99,28 +100,29 @@
   become_user: "{{ agent_relay_builder_user }}"
   ansible.builtin.command:
     argv:
+      - /usr/bin/env
+      - -i
+      - "HOME={{ agent_relay_build_home }}"
+      - "USER={{ agent_relay_builder_user }}"
+      - "LOGNAME={{ agent_relay_builder_user }}"
+      - SHELL=/usr/sbin/nologin
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
+      - "TMPDIR={{ agent_relay_build_home }}/tmp"
+      - "TMP={{ agent_relay_build_home }}/tmp"
+      - "TEMP={{ agent_relay_build_home }}/tmp"
+      - "PATH={{ agent_relay_toolchain_path }}"
+      - "STAGED_ENTRYPOINT=file://{{ agent_relay_runtime_stage_root }}/src/run-codex.js"
       - /usr/bin/node
       - --input-type=module
       - -e
       - await import(process.env.STAGED_ENTRYPOINT)
-  environment:
-    HOME: "{{ agent_relay_build_home }}"
-    USER: "{{ agent_relay_builder_user }}"
-    LOGNAME: "{{ agent_relay_builder_user }}"
-    SHELL: /usr/sbin/nologin
-    LANG: C.UTF-8
-    LC_ALL: C.UTF-8
-    TMPDIR: "{{ agent_relay_build_home }}/tmp"
-    TMP: "{{ agent_relay_build_home }}/tmp"
-    TEMP: "{{ agent_relay_build_home }}/tmp"
-    PATH: "{{ agent_relay_toolchain_path }}"
-    STAGED_ENTRYPOINT: "file://{{ agent_relay_runtime_stage_root }}/src/run-codex.js"
   changed_when: false
 
 - name: Detect unsafe staged runtime entries
   ansible.builtin.command:
     argv:
-      - find
+      - /usr/bin/find
       - -P
       - "{{ agent_relay_runtime_stage_root }}"
       - -xdev
@@ -141,24 +143,33 @@
       - agent_relay_unsafe_staged_runtime_entry.stdout | length == 0
     fail_msg: Staged runtime contains a symlink or special file.
 
-- name: Finalize staged runtime ownership
-  ansible.builtin.file:
-    path: "{{ agent_relay_runtime_stage_root }}"
-    owner: root
-    group: root
-    recurse: true
+- name: Finalize staged runtime ownership without following links or crossing filesystems
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/find
+      - -P
+      - "{{ agent_relay_runtime_stage_root }}"
+      - -xdev
+      - -exec
+      - /usr/bin/chown
+      - -h
+      - root:root
+      - --
+      - "{}"
+      - +
+  changed_when: true
 
 - name: Finalize staged runtime directory modes
   ansible.builtin.command:
     argv:
-      - find
+      - /usr/bin/find
       - -P
       - "{{ agent_relay_runtime_stage_root }}"
       - -xdev
       - -type
       - d
       - -exec
-      - chmod
+      - /usr/bin/chmod
       - "0755"
       - --
       - "{}"
@@ -168,19 +179,71 @@
 - name: Finalize staged runtime file modes
   ansible.builtin.command:
     argv:
-      - find
+      - /usr/bin/find
       - -P
       - "{{ agent_relay_runtime_stage_root }}"
       - -xdev
       - -type
       - f
       - -exec
-      - chmod
+      - /usr/bin/chmod
       - "0644"
       - --
       - "{}"
       - +
   changed_when: true
+
+- name: Detect unsafe finalized runtime entries
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/find
+      - -P
+      - "{{ agent_relay_runtime_stage_root }}"
+      - -xdev
+      - "("
+      - "!"
+      - -user
+      - root
+      - -o
+      - "!"
+      - -group
+      - root
+      - -o
+      - "("
+      - -type
+      - d
+      - "!"
+      - -perm
+      - "0755"
+      - ")"
+      - -o
+      - "("
+      - -type
+      - f
+      - "!"
+      - -perm
+      - "0644"
+      - ")"
+      - -o
+      - "("
+      - "!"
+      - -type
+      - d
+      - "!"
+      - -type
+      - f
+      - ")"
+      - ")"
+      - -print
+      - -quit
+  register: agent_relay_unsafe_finalized_runtime_entry
+  changed_when: false
+
+- name: Verify finalized runtime tree
+  ansible.builtin.assert:
+    that:
+      - agent_relay_unsafe_finalized_runtime_entry.stdout | length == 0
+    fail_msg: Finalized runtime has unsafe ownership, mode, file type, or filesystem boundaries.
 
 - name: Inspect active runtime directory
   ansible.builtin.stat:

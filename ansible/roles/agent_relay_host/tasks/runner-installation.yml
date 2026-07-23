@@ -87,6 +87,7 @@
     src: ../work
     dest: "{{ agent_relay_runner_root }}/_work"
     state: link
+    follow: false
     owner: "{{ agent_relay_runner_user }}"
     group: "{{ agent_relay_runner_user }}"
   when: not agent_relay_runner_work_link.stat.exists

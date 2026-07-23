@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ${{ github.ref }}
@@ -18,25 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Apply host-only installer separation
-        shell: bash
-        env:
-          TARGET_BRANCH: ${{ github.head_ref || github.ref_name }}
-        run: |
-          set -euo pipefail
-          python3 scripts/patch-host-only-installer.py
-          if git diff --quiet -- install.sh; then
-            exit 0
-          fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add install.sh
-          git commit -m "Separate host installation from GitHub connection"
-          git push origin "HEAD:${TARGET_BRANCH}"
+          persist-credentials: false
 
       - name: Install dependencies
         run: npm ci

@@ -1,0 +1,4 @@
+---
+- ansible.builtin.import_playbook: host.yml
+  vars:
+    agent_relay_manage_runner_lifecycle: true

@@ -10,11 +10,10 @@ async function json(path: string): Promise<Record<string, unknown>> {
   return JSON.parse(await text(path)) as Record<string, unknown>;
 }
 
-test("host and GitHub connection scripts are executable", async () => {
-  for (const path of ["scripts/host-toolchain-check.sh", "scripts/github-connect"]) {
-    const metadata = await stat(path);
-    assert.notEqual(metadata.mode & 0o111, 0);
-  }
+test("host toolchain check is executable and connection script has a shell entrypoint", async () => {
+  const metadata = await stat("scripts/host-toolchain-check.sh");
+  assert.notEqual(metadata.mode & 0o111, 0);
+  assert.match(await text("scripts/github-connect"), /^#!\/usr\/bin\/env bash\n/u);
 });
 
 test("installer validates protected directories through sudo", async () => {
@@ -53,7 +52,7 @@ test("Ansible owns host installation without GitHub lifecycle overlap", async ()
   assert.doesNotMatch(hostPlaybook, /github-connect|agent_relay_github_connection|AGENT_RELAY_GITHUB_CREDENTIAL/u);
   assert.match(connectionPlaybook, /role: agent_relay_github_connection/u);
   assert.doesNotMatch(connectionPlaybook, /import_playbook|role: agent_relay_host/u);
-  assert.match(connectionTasks, /scripts\/github-connect/u);
+  assert.match(connectionTasks, /- bash\n\s+- "\{\{ agent_relay_source_root \}\}\/scripts\/github-connect"/u);
   assert.doesNotMatch(connectionTasks, /packages\.yml|users\.yml|filesystem\.yml|containers\.yml|toolchains\.yml|deploy\.yml/u);
 
   assert.match(deploy, /name: Preview Agent Relay checkout reconciliation/);
@@ -190,5 +189,5 @@ test("system test executes the separated host and connection behavior", async ()
   assert.match(readme, /docs\/operations\/README\.md/);
   assert.match(ansibleReadme, /playbooks\/github-connect\.yml/);
   assert.match(ansibleReadme, /playbooks\/host\.yml/);
-  assert.match(ansibleReadme, /does not rerun host provisioning/u);
+  assert.match(ansibleReadme, /does not import, include, or rerun the host playbook/u);
 });

@@ -4,9 +4,9 @@
 
 Agent Relay runs on a dedicated Debian 13 (Trixie) x86-64 systemd host. Host provisioning, runtime deployment, and GitHub runner connection are declarative Ansible operations with two disjoint entrypoints.
 
-`ansible/playbooks/host.yml` owns the complete host and Agent Relay installation. `ansible/playbooks/github-connect.yml` owns only organization runner registration, listener activation, and managed label reconciliation. Neither playbook imports or includes the other.
+`ansible/playbooks/host.yml` owns the complete host and Agent Relay installation without a PAT. `ansible/playbooks/github-connect.yml` owns only organization runner registration, listener activation, and managed label reconciliation with a PAT. Neither playbook imports or includes the other.
 
-There is no Relay HTTP service, polling daemon, separate updater, WSL path, host migration framework, `.env`, Compose deployment of Agent Relay, or `/opt/agent-relay` copy.
+There is no Relay HTTP service, polling daemon, separate updater, host installer script, WSL path, migration framework, `.env`, Compose deployment of Agent Relay, or `/opt/agent-relay` copy.
 
 ## Responsibility boundaries
 
@@ -20,14 +20,14 @@ There is no Relay HTTP service, polling daemon, separate updater, WSL path, host
 - creates and reconciles declared secure directories;
 - configures Docker Engine and containerd data roots;
 - configures `/run/docker.sock` and the dedicated Codex Docker socket;
-- installs official GitHub Runner binaries when absent;
-- installs the runner systemd unit;
+- downloads and verifies official GitHub Runner binaries;
+- installs the runner systemd unit from a template;
 - clones or updates the configured repository revision with `umask 0022`;
 - removes group and other write bits from managed checkout files and directories;
 - builds and atomically activates the Agent Relay runtime;
 - restarts the runner listener only when complete registration already exists.
 
-The host role has no GitHub credential variable, makes no GitHub runner API request, and performs no runner registration. On a fresh unregistered host it leaves the runner unit disabled and stopped after installation.
+The host role contains no GitHub credential variable, makes no GitHub runner API request, invokes no registration command, and executes no installer script. On a fresh unregistered host it leaves the runner unit disabled and stopped.
 
 ### GitHub connection playbook and role
 
@@ -40,40 +40,25 @@ The host role has no GitHub credential variable, makes no GitHub runner API requ
 - enables and starts the runner listener;
 - finds exactly one organization runner named `gh-runner`;
 - adds `agent-relay` through the additive runner-label endpoint;
-- reads the labels back and verifies the managed label.
+- reads labels back and verifies the managed label.
 
-The connection role does not install packages, users, Docker, toolchains, source code, runner binaries, systemd units, or runtime files. It does not invoke `install.sh`, `host.yml`, or `agent_relay_host`.
+The connection role does not install packages, users, Docker, toolchains, source code, runner binaries, systemd units, or runtime files. It does not invoke `host.yml` or `agent_relay_host`.
 
 A fine-grained PAT needs `Self-hosted runners: Read and write`. A classic PAT needs `admin:org`. The credential is passed through standard input and authenticated API headers, is hidden from Ansible output, and is never stored on the target.
-
-### Host installer
-
-`install.sh` is invoked only by the host role. It:
-
-- validates host state prepared by Ansible;
-- downloads and verifies the official runner archive when runner binaries are absent;
-- preserves the Ansible-managed runner directory mode;
-- installs the root-owned runner systemd unit;
-- builds Agent Relay as `agent-relay-builder` into an adjacent private stage;
-- validates the stage before listener shutdown;
-- atomically replaces the active runtime;
-- restarts the listener only when protected registration files are already complete;
-- disables and stops the unit when registration is absent.
-
-It never reads a GitHub credential, obtains a registration token, or invokes `config.sh` for registration.
 
 ### GitHub connection script
 
 `scripts/github-connect` is invoked only by the connection role. It:
 
-- acquires the same installation lock used by `install.sh`;
+- acquires `/var/lib/agent-relay/lifecycle/active` atomically;
 - validates complete runner binaries, active runtime files, and the service unit;
 - validates absent, complete, or partial registration state;
 - obtains a short-lived organization registration token only when registration is absent;
 - invokes `config.sh` as `github-runner`;
 - protects `.runner`, `.credentials`, and `.credentials_rsaparams` with mode `0600`;
 - enables and restarts the service;
-- waits for `Runner.Listener` readiness.
+- waits for `Runner.Listener` readiness;
+- releases the lifecycle lock through an exit trap.
 
 It never installs or updates host packages, Docker, toolchains, runner binaries, source checkout, service unit content, or runtime files.
 
@@ -88,20 +73,29 @@ It never installs or updates host packages, Docker, toolchains, runner binaries,
 /srv/github-runner/storage/docker/engine
 /srv/github-runner/storage/docker/containerd
 /srv/github-runner/storage/docker-socket/docker.sock
-/var/lib/agent-relay/install.lock
+/srv/github-runner/storage/.agent-relay-dist-stage
+/var/lib/agent-relay/lifecycle/active
 ```
 
-`/srv/github-runner/storage/runner/_work` is a managed symlink to `../work`. Runtime stages are adjacent to `dist`; `dist.previous` exists only during a successful swap or interrupted recovery.
+`/srv/github-runner/storage/runner/_work` is a managed symlink to `../work`. `dist.previous` exists only during a successful swap or interrupted recovery.
+
+The Docker storage parent and containerd root are `root:root` mode `0711`. The daemon-owned Docker data root is `root:root` mode `0710`; Ansible declares this post-startup state rather than restoring a conflicting pre-startup mode.
 
 ## Accounts and privilege boundary
 
-- `agent-relay-admin` owns the checkout, performs Ansible-managed Git operations, and invokes trusted lifecycle scripts with passwordless sudo.
+- `agent-relay-admin` owns the checkout and is the account used by the narrow GitHub connection script.
 - `agent-relay-builder` has a locked password, `/usr/sbin/nologin`, no sudo, a private build home, and temporary stage ownership.
 - `github-runner` has a locked password and no sudo. It runs the official listener and Codex.
 - `github-runner` belongs to `docker`; this is intentional root-equivalent host trust.
 - Activated runtime files are `root:root`; directories are `0755`, and regular files are `0644`.
 
-Ansible changes only declared host paths and checkout permissions. It does not recursively rewrite runner-generated state, workspaces, runner home, Docker data, or activated runtime contents.
+Ansible changes only declared host paths and checkout permissions. It does not recursively rewrite runner-generated registration state, workspaces, runner home, Docker data, or activated runtime contents outside a controlled deployment transaction.
+
+## Lifecycle mutual exclusion
+
+Host deployment and GitHub connection share one atomic directory lock. Ansible creates the lock before host mutation and removes it in an `always` block. `scripts/github-connect` creates the same lock before registration inspection and removes it in an exit trap.
+
+A concurrent operation cannot acquire the directory and fails before mutation. An interrupted operation may leave an empty lock directory; recovery requires confirming that no lifecycle process is active before deliberate removal.
 
 ## Docker socket boundary
 
@@ -112,7 +106,7 @@ Docker starts through `dockerd -H fd://`. The managed `docker.socket` listener s
 /srv/github-runner/storage/docker-socket/docker.sock
 ```
 
-The dedicated directory is `github-runner`-owned mode `0700`. The socket is `root:docker` mode `0660`. When the socket drop-in changes, Ansible stops `docker.service`, restarts `docker.socket`, and starts Docker so the old daemon cannot retain inherited descriptors during rebinding.
+The dedicated directory is `github-runner`-owned mode `0700`. The socket is `root:docker` mode `0660`. When the socket drop-in changes, Ansible stops Docker, restarts the socket unit, and starts Docker so the old daemon cannot retain inherited descriptors during rebinding.
 
 `scripts/codex-run` validates the directory and socket without following symlinks, exposes only the directory as a writable Codex filesystem root, and sets:
 
@@ -120,9 +114,7 @@ The dedicated directory is `github-runner`-owned mode `0700`. The socket is `roo
 DOCKER_HOST=unix:///srv/github-runner/storage/docker-socket/docker.sock
 ```
 
-The launcher also sets `TOKEN_MINIFY_RUN_LOG_DIR` to a `worker-run` directory inside the per-execution private runtime. This keeps Token Minify command logs writable without exposing the runner home or `/var/lib` to Codex, and the launcher removes the directory with the rest of the private runtime after execution.
-
-Neither `/run` nor either socket file is a writable Codex root.
+The launcher also sets `TOKEN_MINIFY_RUN_LOG_DIR` to a `worker-run` directory inside the per-execution private runtime. Neither `/run` nor either socket file is a writable Codex root.
 
 ## Host toolchains
 
@@ -136,7 +128,7 @@ The host role owns:
 - Codex CLI 0.144.4;
 - Docker Engine, containerd, Buildx, Compose, Git LFS, and native runner dependencies.
 
-`scripts/toolchain-environment.sh` defines the trusted runtime path layout.
+`scripts/toolchain-environment.sh` defines the trusted runtime path layout, while `scripts/host-toolchain-check.sh` validates the installed versions during host deployment.
 
 ## Runner binary and registration state
 
@@ -144,9 +136,9 @@ Runner binary state is independent from GitHub registration state.
 
 Binary state:
 
-- absent: no required payload markers; `host.yml` downloads and verifies the runner archive;
-- complete: all required executable files exist with safe ownership and mode;
-- partial: installation fails without deleting state.
+- absent: the runner directory is empty; `host.yml` downloads and verifies the configured archive;
+- complete: all required executable files exist with safe ownership; the runner may perform its supported self-update independently;
+- partial: host deployment fails without deleting ambiguous state.
 
 Registration state:
 
@@ -158,22 +150,25 @@ This separation allows `host.yml` to finish before GitHub credentials exist and 
 
 ## Runtime activation
 
-On every required host deployment, `install.sh`:
+On every required host deployment, the host role:
 
-1. rejects unresolved `dist.previous`;
-2. removes only validated installer-owned stale stages;
-3. creates a private adjacent stage owned by `agent-relay-builder`;
-4. compiles `tsconfig.runtime.json` through a clean environment;
-5. rejects symlinks, special files, mount crossings, and path escapes;
-6. imports staged `src/run-codex.js` without invoking `main`;
-7. finalizes the stage as root-owned read-only runtime state;
-8. stops an active listener and waits for `Runner.Worker` processes;
-9. renames current `dist` to `dist.previous` and the stage to `dist`;
-10. restores `dist.previous` when the second rename fails;
-11. removes `dist.previous` after success;
-12. restarts the listener only for complete registration.
+1. acquires the lifecycle lock;
+2. stops an active listener and waits for `Runner.Worker` processes;
+3. reconciles source, runner payload, service unit, toolchains, and Docker state;
+4. rejects unresolved `dist.previous`;
+5. removes only a validated non-mounted stage path;
+6. creates a private stage owned by `agent-relay-builder`;
+7. compiles `tsconfig.runtime.json` through a clean environment;
+8. verifies the staged entrypoint and imports it without invoking `main`;
+9. rejects symlinks and special files in the stage;
+10. finalizes the stage as root-owned read-only runtime state;
+11. renames current `dist` to `dist.previous` and the stage to `dist`;
+12. restores `dist.previous` when activation fails and restoration is safe;
+13. removes `dist.previous` after success;
+14. restarts the listener only for complete registration;
+15. releases the lifecycle lock.
 
-Build or import failure leaves the current runtime and listener untouched. An unregistered host remains ready for `github-connect.yml` without an active listener.
+Build or import failure leaves the active runtime unchanged. A previously active registered listener is restarted after failure when the previous runtime remains valid. An unregistered host remains ready for `github-connect.yml` without an active listener.
 
 ## Operational sequence
 
@@ -232,12 +227,12 @@ CI runs:
 - production runtime compilation;
 - shell and Node syntax checks;
 - host toolchain smoke;
-- behavioral lifecycle tests for host installation and GitHub connection;
-- static assertions that the two Ansible playbooks and roles are disjoint;
-- installer and system integration tests.
+- behavioral GitHub connection tests;
+- static assertions for direct Ansible host deployment, atomic activation, lifecycle locking, PAT isolation, and disjoint roles.
 
 Post-deployment acceptance additionally requires:
 
+- a successful PAT-free `host.yml` execution;
 - both Docker sockets;
 - Docker access as `github-runner` through the dedicated endpoint;
 - the `agent-relay` label on `gh-runner`;

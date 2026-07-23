@@ -12,7 +12,13 @@ test("Ansible keeps host provisioning disjoint from GitHub connection", async ()
 
   const hostDefaults = await text("ansible/roles/agent_relay_host/defaults/main.yml");
   const hostTasks = await text("ansible/roles/agent_relay_host/tasks/main.yml");
-  const deployment = await text("ansible/roles/agent_relay_host/tasks/deploy.yml");
+  const deployment = [
+    await text("ansible/roles/agent_relay_host/tasks/deploy.yml"),
+    await text("ansible/roles/agent_relay_host/tasks/deployment-prepare.yml"),
+    await text("ansible/roles/agent_relay_host/tasks/runner-installation.yml"),
+    await text("ansible/roles/agent_relay_host/tasks/runtime-deployment.yml"),
+    await text("ansible/roles/agent_relay_host/tasks/listener-state.yml"),
+  ].join("\n");
   const hostPlaybook = await text("ansible/playbooks/host.yml");
   const connectionPlaybook = await text("ansible/playbooks/github-connect.yml");
   const connectionDefaults = await text("ansible/roles/agent_relay_github_connection/defaults/main.yml");
@@ -22,8 +28,10 @@ test("Ansible keeps host provisioning disjoint from GitHub connection", async ()
   assert.doesNotMatch(hostDefaults, /AGENT_RELAY_GITHUB_CREDENTIAL|agent_relay_manage_runner_lifecycle/u);
   assert.doesNotMatch(hostTasks, /runner-label|GitHub credential|github_connection/u);
   assert.doesNotMatch(hostPlaybook, /github-connect|agent_relay_github_connection|AGENT_RELAY_GITHUB_CREDENTIAL/u);
-  assert.doesNotMatch(deployment, /agent_relay_github_credential|registration-token|playbooks\/github-connect\.yml/u);
-  assert.match(deployment, /Install or update the complete Agent Relay host runtime/u);
+  assert.doesNotMatch(deployment, /install\.sh|agent_relay_github_credential|registration-token|config\.sh --unattended|playbooks\/github-connect\.yml/u);
+  assert.match(deployment, /ansible\.builtin\.get_url:/u);
+  assert.match(deployment, /name: Activate staged runtime atomically/u);
+  assert.match(deployment, /name: Enable and restart registered runner listener/u);
 
   assert.match(connectionPlaybook, /role: agent_relay_github_connection/u);
   assert.doesNotMatch(connectionPlaybook, /import_playbook|role: agent_relay_host/u);

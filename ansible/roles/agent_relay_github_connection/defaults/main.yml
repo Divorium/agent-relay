@@ -1,0 +1,3 @@
+---
+agent_relay_admin_user: agent-relay-admin
+agent_relay_github_credential: "{{ lookup('ansible.builtin.env', 'AGENT_RELAY_GITHUB_CREDENTIAL') }}"

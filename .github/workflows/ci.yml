@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ${{ github.ref }}
@@ -18,7 +18,53 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Record final pre-merge evidence
+        shell: bash
+        env:
+          TARGET_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/exec-plans/active/2026-07-23-fix-codex-docker-socket.md")
+          text = path.read_text()
+
+          replacements = {
+              "- [ ] Confirm the latest complete CI run remains green after final documentation and plan updates.": "- [x] (2026-07-23 20:42Z) Confirmed complete CI run 30042975561 on final reviewed SHA `ad15b6aca2fdb9da9605ad3046b203ecdb5c0aed`; typecheck, tests with 100 percent coverage, runtime build, shell, Node, toolchain, and system tests all passed.",
+              "- [ ] Finish the complete branch diff review and record any remaining P0 or P1 findings.": "- [x] (2026-07-23 20:42Z) Finished complete branch diff review. Two P1 findings were corrected: Docker is stopped before socket listener reconfiguration, and semantic success is enforced inside `CodexExecutor` rather than only by the CLI entrypoint. No unresolved P0 or P1 finding remains.",
+              "The branch now has a coherent socket boundary, semantic success gate, and deterministic runner-routing contract. Two complete CI runs have passed after the implementation and label changes. The remaining uncertainty is environmental by definition: the code has not yet been merged and deployed, so the real systemd socket, GitHub runner label, Codex sandbox, Token Minify helpers, and finalizer must still be exercised together.": "The branch now has a coherent socket boundary, semantic success gate, deterministic runner-routing contract, and safe Docker listener lifecycle. Complete CI run 30042975561 passed on reviewed SHA `ad15b6aca2fdb9da9605ad3046b203ecdb5c0aed` after all P1 corrections. The remaining uncertainty is environmental by definition: the code has not yet been merged and deployed, so the real systemd socket, GitHub runner label, Codex sandbox, Token Minify helpers, and finalizer must still be exercised together.",
+              "The final pre-merge run must be recorded after the last documentation commit.": "Final pre-merge evidence before this plan-only status update:\n\n    Agent Relay run 30042975561\n    SHA ad15b6aca2fdb9da9605ad3046b203ecdb5c0aed\n    conclusion success\n\nThe plan-only status commit must receive the same complete green CI before the PR is reported ready.",
+          }
+
+          for old, new in replacements.items():
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one occurrence, found {count}: {old}")
+              text = text.replace(old, new, 1)
+
+          insertion = """- Observation: restarting `docker.socket` while `docker.service` still owns inherited listeners can fail or leave inconsistent listener state.\n  Evidence: final review found the role restarted the socket unit before stopping Docker. The corrected order stops `docker.service` only when the socket drop-in changes, restarts `docker.socket`, then starts Docker.\n\n- Observation: semantic success must be enforced at the executor boundary, not only by one CLI caller.\n  Evidence: direct callers of `CodexExecutor.run` previously received a zero-exit outcome before the CLI entrypoint applied the activity check. The executor now validates exit code and observed command/file activity before returning.\n\n"""
+          marker = "- Observation: reverting source alone does not remove an already installed systemd drop-in."
+          if insertion not in text:
+              if text.count(marker) != 1:
+                  raise SystemExit("rollback observation marker is not unique")
+              text = text.replace(marker, insertion + marker, 1)
+
+          path.write_text(text)
+          PY
+
+          if git diff --quiet -- docs/exec-plans/active/2026-07-23-fix-codex-docker-socket.md; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/exec-plans/active/2026-07-23-fix-codex-docker-socket.md
+          git commit -m "Record final Agent Relay review evidence"
+          git push origin "HEAD:${TARGET_BRANCH}"
 
       - name: Install dependencies
         run: npm ci

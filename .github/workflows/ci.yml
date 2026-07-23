@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ${{ github.ref }}
@@ -18,25 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Apply executor activity fixture correction
-        shell: bash
-        env:
-          TARGET_BRANCH: ${{ github.head_ref || github.ref_name }}
-        run: |
-          set -euo pipefail
-          python3 scripts/patch-executor-activity-fixtures.py
-          if git diff --quiet -- test/executor.integration.test.ts test/trust.test.ts; then
-            exit 0
-          fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add test/executor.integration.test.ts test/trust.test.ts
-          git commit -m "Fix executor activity test fixtures"
-          git push origin "HEAD:${TARGET_BRANCH}"
+          persist-credentials: false
 
       - name: Install dependencies
         run: npm ci

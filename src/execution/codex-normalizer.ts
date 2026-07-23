@@ -53,11 +53,16 @@ export class CodexEventNormalizer {
   private readonly items = new Map<string, ItemState>();
   private readonly completedItems = new BoundedIdentitySet(MAX_REPLAY_IDENTITIES);
   private readonly eventIds = new BoundedIdentitySet(MAX_REPLAY_IDENTITIES);
+  private executionActivities = 0;
 
   clearLifecycleState(): void {
     this.items.clear();
     this.completedItems.clear();
     this.eventIds.clear();
+  }
+
+  executionActivityCount(): number {
+    return this.executionActivities;
   }
 
   retainedState(): { activeItems: number; completedItems: number; eventIds: number; fileChanges: number } {
@@ -128,6 +133,7 @@ export class CodexEventNormalizer {
     if (this.completedItems.has(id)) throw unsafe(`item ${id} received ${stage} after completion`);
     if (!existing && stage === "updated") throw unsafe(`item ${id} was updated before start`);
     if (!existing && this.items.size >= MAX_ACTIVE_ITEMS) throw unsafe(`active item limit of ${MAX_ACTIVE_ITEMS} exceeded`);
+    if (!existing && (type === "command_execution" || type === "file_change")) this.executionActivities += 1;
     const state = existing ?? { type, commandOutput: cumulative(""), text: cumulative(""), changes: new Map<string, CumulativeState>() };
     this.items.set(itemKey, state);
     switch (type) {

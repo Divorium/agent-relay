@@ -36,6 +36,8 @@ test("Ansible owns checkout and installation lifecycle", async () => {
   const deploy = await text("ansible/roles/agent_relay_host/tasks/deploy.yml");
   const main = await text("ansible/roles/agent_relay_host/tasks/main.yml");
   const defaults = await text("ansible/roles/agent_relay_host/defaults/main.yml");
+  const hostPlaybook = await text("ansible/playbooks/host.yml");
+  const installPlaybook = await text("ansible/playbooks/install.yml");
   const ansibleReadme = await text("ansible/README.md");
   const operations = await text("docs/operations/README.md");
   const pkg = await text("package.json");
@@ -44,7 +46,10 @@ test("Ansible owns checkout and installation lifecycle", async () => {
   assert.match(main, /import_tasks: deploy\.yml/);
   assert.match(defaults, /agent_relay_repository_url:/);
   assert.match(defaults, /agent_relay_repository_version: main/);
+  assert.match(defaults, /agent_relay_manage_runner_lifecycle: false/);
   assert.match(defaults, /AGENT_RELAY_GITHUB_CREDENTIAL/);
+  assert.doesNotMatch(hostPlaybook, /agent_relay_manage_runner_lifecycle:\s*true/);
+  assert.match(installPlaybook, /import_playbook: host\.yml[\s\S]*agent_relay_manage_runner_lifecycle: true/);
 
   assert.match(deploy, /name: Preview Agent Relay checkout reconciliation/);
   assert.match(deploy, /ansible\.builtin\.git:/);
@@ -58,7 +63,7 @@ test("Ansible owns checkout and installation lifecycle", async () => {
   assert.match(deploy, /- chmod\n\s+- go-w/);
   assert.match(deploy, /name: Install or update Agent Relay/);
   assert.match(deploy, /agent_relay_source_root \}\}\/install\.sh/);
-  assert.match(deploy, /stdin:.*agent_relay_github_credential/);
+  assert.match(deploy, /stdin:[\s\S]*agent_relay_github_credential[\s\S]*agent_relay_manage_runner_lifecycle/);
   assert.match(deploy, /no_log:.*agent_relay_registration_complete/);
 
   assert.match(filesystem, /register: agent_relay_runner_paths/);
@@ -167,5 +172,7 @@ test("system test executes installer behavior instead of only matching source", 
   assert.match(pkg, /scripts\/host-config\.sh scripts\/host-toolchain-check\.sh/);
   assert.match(readme, /ansible\/README\.md/);
   assert.match(readme, /docs\/operations\/README\.md/);
-  assert.match(ansibleReadme, /Ansible performs clone, checkout, pull-equivalent reconciliation and installation/);
+  assert.match(ansibleReadme, /playbooks\/install\.yml/);
+  assert.match(ansibleReadme, /playbooks\/host\.yml/);
+  assert.match(ansibleReadme, /complete existing runner registration does not require a PAT/);
 });

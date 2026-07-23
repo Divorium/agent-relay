@@ -8,7 +8,7 @@ Use `ansible-core >= 2.18`. The role uses only `ansible.builtin` modules and kee
 
 ## Target bootstrap state
 
-The target needs only network access and root SSH. The playbook bootstraps Python 3, installs the host dependencies, creates the operational users, configures Docker, installs toolchains, deploys the repository and starts the GitHub runner.
+The target needs only network access and root SSH. The playbook bootstraps Python 3, installs the host dependencies, creates the operational users, configures Docker, installs toolchains, deploys the repository, reconciles the dedicated `agent-relay` organization-runner label and starts the GitHub runner.
 
 Docker keeps its standard `/run/docker.sock` endpoint and also receives an Ansible-managed systemd socket at `/srv/github-runner/storage/docker-socket/docker.sock`. The dedicated directory is owned by `github-runner`, the socket is `root:docker` mode `0660`, and Codex receives only that directory as a writable sandbox root. Do not replace this with write access to `/run` or with a socket-file permission entry.
 
@@ -31,15 +31,15 @@ agent_relay_repository_version: main
 
 The checkout is managed state. Local changes on the target are discarded when Ansible reconciles the configured revision.
 
-## First runner registration
+## Runner lifecycle credential
 
-Export a GitHub organization credential only on the control machine before the first run:
+Export a GitHub organization credential on the control machine before every playbook run:
 
 ```bash
 export AGENT_RELAY_GITHUB_CREDENTIAL='github_pat_...'
 ```
 
-A fine-grained token needs the organization permission `Self-hosted runners: Read and write`. A classic PAT needs `admin:org`. The credential is sent to `install.sh` through standard input, is hidden from Ansible output and is not stored on the target.
+A fine-grained token needs the organization permission `Self-hosted runners: Read and write`. A classic PAT needs `admin:org`. Ansible uses the credential to locate `gh-runner`, add the custom `agent-relay` label without removing other labels and verify the resulting label set. On first registration, the same credential is sent to `install.sh` through standard input. It is hidden from Ansible output and is not stored on the target.
 
 ## Run
 
@@ -52,7 +52,7 @@ ansible-playbook \
   "$PWD/playbooks/host.yml"
 ```
 
-Rerun the same playbook to update the host and deployment. Ansible performs clone, checkout, pull-equivalent reconciliation and installation. The same run also reconciles the dedicated Docker socket before installation.
+Rerun the same playbook to update the host and deployment. Ansible performs clone, checkout, pull-equivalent reconciliation and installation. The same run also reconciles the dedicated Docker socket and the `agent-relay` runner label.
 
 Codex authentication remains an explicit credential operation after the host exists:
 

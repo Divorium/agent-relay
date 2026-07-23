@@ -41,7 +41,7 @@ test("CodexExecutor passes trusted workspace configuration to the launcher", asy
   await mkdir(join(workspace, ".git"), { recursive: true });
   await mkdir(runtimeRoot, { recursive: true });
   await writeFile(join(workspace, "docs", "exec-plans", "active", "plan.md"), "# Plan\n");
-  await writeFile(fakeCodex, `#!/bin/sh\nset -eu\nprintf '%s\\n' "$@" > "${log}"\n`, { mode: 0o700 });
+  await writeFile(fakeCodex, `#!/bin/sh\nset -eu\nprintf '%s\\n' "$@" > "${log}"\nprintf '%s\\n' '{"type":"item.completed","item":{"id":"command_0","type":"command_execution","command":"inspect trust","aggregated_output":"","status":"completed","exit_code":0}}'\n`, { mode: 0o700 });
   await chmod(fakeCodex, 0o700);
   try {
     const executor = new CodexExecutor(fakeCodex, 5_000, 100_000, home, runtimeRoot, "/srv/source");

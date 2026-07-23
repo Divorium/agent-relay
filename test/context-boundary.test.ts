@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { buildCodexPrompt } from "../src/execution/prompt.js";
-import { createCodexArgs, createCodexEnvironment } from "../src/execution/codex-executor.js";
+import { DOCKER_SOCKET_DIRECTORY, createCodexArgs, createCodexEnvironment } from "../src/execution/codex-executor.js";
 
 const workflowPaths = [
   ".github/workflows/codex.yml",
@@ -30,13 +30,14 @@ test("repository instructions remain durable and plan-driven", async () => {
   assert.match(rules, /## Decision Log/);
 });
 
-test("executor exposes Docker sockets without denying the workspace ancestor", () => {
+test("executor exposes the dedicated Docker socket directory without denying the workspace ancestor", () => {
   assert.deepEqual(createCodexEnvironment("/home/user", "/home/user/.cache/runtime"), {
     HOME: "/home/user",
     CODEX_RUNTIME_ROOT: "/home/user/.cache/runtime",
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
   });
+  assert.equal(DOCKER_SOCKET_DIRECTORY, "/srv/github-runner/storage/docker-socket");
   const args = createCodexArgs(
     "/runner/_work/repository/repository",
     "task prompt",
@@ -49,8 +50,8 @@ test("executor exposes Docker sockets without denying the workspace ancestor", (
   assert.match(filesystem, /"\/home\/user"="deny"/);
   assert.match(filesystem, /"\/srv\/github-runner\/storage\/agent-relay"="deny"/);
   assert.match(filesystem, /"\/opt\/rust"="read"/);
-  assert.match(filesystem, /"\/var\/run\/docker\.sock"="write"/);
-  assert.match(filesystem, /"\/run\/docker\.sock"="write"/);
+  assert.match(filesystem, /"\/srv\/github-runner\/storage\/docker-socket"="write"/);
+  assert.doesNotMatch(filesystem, /docker\.sock"="write"/);
   assert.doesNotMatch(filesystem, /"\/runner\/_work"="deny"/);
   assert.match(filesystem, /"\/runner\/_work\/repository\/repository"="write"/);
   assert.match(filesystem, /"\/runner\/_work\/repository\/repository\/\.git"="read"/);

@@ -2,59 +2,80 @@
 
 ## Scope and authority
 
-Agent Relay runs on a dedicated Debian 13 (Trixie) x86-64 systemd host. Host initialization and deployment orchestration are declarative Ansible state; runner installation and runtime activation are performed by one reusable `install.sh` invoked by Ansible.
+Agent Relay runs on a dedicated Debian 13 (Trixie) x86-64 systemd host. Host provisioning, runtime deployment, and GitHub runner connection are declarative Ansible operations with two disjoint entrypoints.
 
-The Ansible entrypoints are deliberately separate. `ansible/playbooks/install.yml` performs the complete host play with runner lifecycle management enabled and requires a GitHub organization PAT. `ansible/playbooks/host.yml` reconciles an already registered host without runner API access or a PAT.
+`ansible/playbooks/host.yml` owns the complete host and Agent Relay installation. `ansible/playbooks/github-connect.yml` owns only organization runner registration, listener activation, and managed label reconciliation. Neither playbook imports or includes the other.
 
-There is no Relay HTTP service, polling daemon, separate updater, WSL compatibility path, host migration framework, `.env`, Compose deployment of Agent Relay, or `/opt/agent-relay` copy.
+There is no Relay HTTP service, polling daemon, separate updater, WSL path, host migration framework, `.env`, Compose deployment of Agent Relay, or `/opt/agent-relay` copy.
 
-## Responsibility boundary
+## Responsibility boundaries
 
-### Ansible
+### Host playbook and role
 
-The repository role:
+`playbooks/host.yml` applies `agent_relay_host`. The role:
 
 - bootstraps Python 3 over root SSH;
-- installs sudo, system packages, native runner libraries, and toolchains;
-- creates the administrator, `github-runner`, and `agent-relay-builder`;
-- creates and reconciles named secure directories;
-- configures Docker Engine and containerd data roots and services;
-- configures the ordinary Docker socket and a dedicated Codex Docker socket under the runner storage root;
-- clones or updates the configured Agent Relay revision as the administrator with `umask 0022`;
-- removes group and other write bits from managed checkout files and directories without changing executable bits;
-- previews deployment changes, stops the listener, and drains active workers when deployment is required;
-- passes the first-registration GitHub credential from the control process to `install.sh` through standard input without persisting it;
-- invokes `install.sh` as the administrator;
-- reconciles the managed `agent-relay` organization-runner label only when runner lifecycle management is enabled;
-- provides `agent_relay_extra_apt_packages` for ordinary additional packages.
+- installs sudo, system packages, runner dependencies, Docker, and toolchains;
+- creates `agent-relay-admin`, `github-runner`, and `agent-relay-builder`;
+- creates and reconciles declared secure directories;
+- configures Docker Engine and containerd data roots;
+- configures `/run/docker.sock` and the dedicated Codex Docker socket;
+- installs official GitHub Runner binaries when absent;
+- installs the runner systemd unit;
+- clones or updates the configured repository revision with `umask 0022`;
+- removes group and other write bits from managed checkout files and directories;
+- builds and atomically activates the Agent Relay runtime;
+- restarts the runner listener only when complete registration already exists.
 
-`playbooks/install.yml` imports `playbooks/host.yml` with `agent_relay_manage_runner_lifecycle=true`. The default is false, so the recurring host playbook cannot register a missing runner or call the GitHub runner-label API. If registration is absent, `host.yml` fails and directs the operator to `install.yml`.
+The host role has no GitHub credential variable, makes no GitHub runner API request, and performs no runner registration. On a fresh unregistered host it leaves the runner unit disabled and stopped after installation.
 
-The role does not authenticate Codex, build `dist` itself, implement runner registration itself, or duplicate installer runtime logic.
+### GitHub connection playbook and role
 
-### Installer
+`playbooks/github-connect.yml` applies `agent_relay_github_connection`. The role:
 
-`install.sh`:
+- requires `AGENT_RELAY_GITHUB_CREDENTIAL` on the control machine;
+- verifies that host installation already produced runner binaries, runtime, and the systemd unit;
+- invokes `scripts/github-connect` as `agent-relay-admin`;
+- registers the organization runner only when registration is absent;
+- enables and starts the runner listener;
+- finds exactly one organization runner named `gh-runner`;
+- adds `agent-relay` through the additive runner-label endpoint;
+- reads the labels back and verifies the managed label.
 
-- validates the host prepared by Ansible, including Python 3 and administrator passwordless sudo;
-- installs and registers the official organization runner only when the corresponding state is absent;
+The connection role does not install packages, users, Docker, toolchains, source code, runner binaries, systemd units, or runtime files. It does not invoke `install.sh`, `host.yml`, or `agent_relay_host`.
+
+A fine-grained PAT needs `Self-hosted runners: Read and write`. A classic PAT needs `admin:org`. The credential is passed through standard input and authenticated API headers, is hidden from Ansible output, and is never stored on the target.
+
+### Host installer
+
+`install.sh` is invoked only by the host role. It:
+
+- validates host state prepared by Ansible;
+- downloads and verifies the official runner archive when runner binaries are absent;
+- preserves the Ansible-managed runner directory mode;
 - installs the root-owned runner systemd unit;
-- builds Agent Relay as `agent-relay-builder` into an adjacent stage;
-- dynamically imports the compiled entrypoint before listener shutdown;
-- atomically replaces `dist` and starts or restarts the runner.
+- builds Agent Relay as `agent-relay-builder` into an adjacent private stage;
+- validates the stage before listener shutdown;
+- atomically replaces the active runtime;
+- restarts the listener only when protected registration files are already complete;
+- disables and stops the unit when registration is absent.
 
-It performs no package installation, user creation, Ansible execution, Docker provisioning, runner dependency helper execution, Git synchronization, repository test suite, or Codex authentication.
+It never reads a GitHub credential, obtains a registration token, or invokes `config.sh` for registration.
 
-## Bootstrap and administrator
+### GitHub connection script
 
-The fresh target initially requires Debian 13 x86-64, network access, and root SSH. Ansible bootstraps `/usr/bin/python3`, installs sudo, and creates a configurable administrator with:
+`scripts/github-connect` is invoked only by the connection role. It:
 
-- a locked password;
-- configured SSH public keys;
-- membership in `sudo`;
-- a validated root-owned `sudoers.d` rule granting passwordless sudo.
+- acquires the same installation lock used by `install.sh`;
+- validates complete runner binaries, active runtime files, and the service unit;
+- validates absent, complete, or partial registration state;
+- obtains a short-lived organization registration token only when registration is absent;
+- invokes `config.sh` as `github-runner`;
+- protects `.runner`, `.credentials`, and `.credentials_rsaparams` with mode `0600`;
+- enables and restarts the service;
+- waits for `Runner.Listener` readiness.
 
-The administrator is a trusted full-host account. The example inventory contains no credential material.
+It never installs or updates host packages, Docker, toolchains, runner binaries, source checkout, service unit content, or runtime files.
 
 ## Fixed paths
 
@@ -63,158 +84,161 @@ The administrator is a trusted full-host account. The example inventory contains
 /srv/github-runner/storage/work         github-runner-owned workflow workspaces
 /srv/github-runner/storage/runner       official GitHub Actions runner
 /srv/github-runner/storage/home         github-runner home and Codex authentication
-/srv/github-runner/storage/build-home   agent-relay-builder home and writable build state
+/srv/github-runner/storage/build-home   builder home and temporary build state
 /srv/github-runner/storage/docker/engine
 /srv/github-runner/storage/docker/containerd
 /srv/github-runner/storage/docker-socket/docker.sock
 /var/lib/agent-relay/install.lock
 ```
 
-`/srv/github-runner/storage/runner/_work` is a managed symlink to `../work`. Runtime stages are created adjacent to `dist`; the previous `/srv/github-runner/storage/build` path is removed.
-
-The Docker socket directory is owned by `github-runner` and mode `0700`. The socket is created by the root-owned `docker.socket` unit as `root:docker` mode `0660`. The standard `/run/docker.sock` remains available for host operators. The dedicated socket path is defined in `config/runner-host.json` and is the only Docker filesystem root exposed as writable to Codex.
+`/srv/github-runner/storage/runner/_work` is a managed symlink to `../work`. Runtime stages are adjacent to `dist`; `dist.previous` exists only during a successful swap or interrupted recovery.
 
 ## Accounts and privilege boundary
 
-- The Ansible-created administrator owns the checkout; Ansible performs Git operations and invokes `install.sh` under this account.
-- `agent-relay-builder` has a locked password, `/usr/sbin/nologin`, no sudo, a private build home, and temporary ownership of a staged runtime.
-- `github-runner` has a locked password and no sudo. It runs the official runner and Codex.
-- `github-runner` belongs to the Docker group. This is root-equivalent host trust and is intentional.
-- Activated runtime files are root-owned; directories are `0755` and regular files are `0644`.
+- `agent-relay-admin` owns the checkout, performs Ansible-managed Git operations, and invokes trusted lifecycle scripts with passwordless sudo.
+- `agent-relay-builder` has a locked password, `/usr/sbin/nologin`, no sudo, a private build home, and temporary stage ownership.
+- `github-runner` has a locked password and no sudo. It runs the official listener and Codex.
+- `github-runner` belongs to `docker`; this is intentional root-equivalent host trust.
+- Activated runtime files are `root:root`; directories are `0755`, and regular files are `0644`.
 
-Ansible changes only declared host paths and the managed source checkout permission contract. It does not recursively rewrite checkout ownership, executable bits, runner payload contents, home, workspace, Docker data, or activated runtime contents. The installer validates these boundaries before mutation.
+Ansible changes only declared host paths and checkout permissions. It does not recursively rewrite runner-generated state, workspaces, runner home, Docker data, or activated runtime contents.
 
-## Host toolchains and packages
+## Docker socket boundary
 
-The Ansible role owns package repositories and toolchains:
-
-- Node.js 22 from NodeSource configured with a signed APT source;
-- Java 21 from Adoptium with `/opt/java/openjdk` as the stable root;
-- Go 1.24.5 from the checksum-verified official archive at `/usr/local/go`;
-- Rust through checksum-verified `rustup-init`, using the `stable` toolchain under `/opt/rust`;
-- TypeScript 5.8.3 and Codex CLI 0.144.4 under `/usr/local`;
-- Docker Engine, containerd, Buildx, and Compose with `state: present` from Docker's signed repository;
-- Git LFS and Debian 13 native dependencies required by runner 2.335.1.
-
-Docker and containerd package auto-start is suppressed until their managed configuration, data roots, and socket listeners exist. Configuration changes restart containerd before Docker. A Docker socket drop-in change stops `docker.service`, restarts `docker.socket`, and then starts Docker, allowing `dockerd -H fd://` to receive both managed socket descriptors without a listener ownership race.
-
-`scripts/toolchain-environment.sh` remains the authoritative runtime path layout:
+Docker starts through `dockerd -H fd://`. The managed `docker.socket` listener set contains:
 
 ```text
-JAVA_HOME       /opt/java/openjdk
-Go root         /usr/local/go
-Rust Cargo root /opt/rust/cargo
-RUSTUP_HOME     /opt/rust/rustup
-PATH            /opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin
+/run/docker.sock
+/srv/github-runner/storage/docker-socket/docker.sock
 ```
 
-`scripts/codex-run` reads the trusted host contract, verifies the dedicated Docker socket directory and socket type, and adds `DOCKER_HOST=unix:///srv/github-runner/storage/docker-socket/docker.sock` to the clean Codex environment.
+The dedicated directory is `github-runner`-owned mode `0700`. The socket is `root:docker` mode `0660`. When the socket drop-in changes, Ansible stops `docker.service`, restarts `docker.socket`, and starts Docker so the old daemon cannot retain inherited descriptors during rebinding.
 
-## Runner installation contract
+`scripts/codex-run` validates the directory and socket without following symlinks, exposes only the directory as a writable Codex filesystem root, and sets:
 
-Runner binary and registration state are independent.
+```text
+DOCKER_HOST=unix:///srv/github-runner/storage/docker-socket/docker.sock
+```
 
-Binary state is:
+Neither `/run` nor either socket file is a writable Codex root.
 
-- absent: no runner payload markers exist; download and SHA-256 verify runner 2.335.1, then extract as `github-runner` without overwriting the Ansible-managed destination directory mode;
-- complete: required executable payload exists and safe runner-generated/self-update state is tolerated;
-- partial or conflicting: fail without deletion.
+## Host toolchains
 
-Registration state is:
+The host role owns:
+
+- Node.js 22;
+- Java 21 under `/opt/java/openjdk`;
+- Go 1.24.5 under `/usr/local/go`;
+- stable Rust under `/opt/rust`;
+- TypeScript 5.8.3;
+- Codex CLI 0.144.4;
+- Docker Engine, containerd, Buildx, Compose, Git LFS, and native runner dependencies.
+
+`scripts/toolchain-environment.sh` defines the trusted runtime path layout.
+
+## Runner binary and registration state
+
+Runner binary state is independent from GitHub registration state.
+
+Binary state:
+
+- absent: no required payload markers; `host.yml` downloads and verifies the runner archive;
+- complete: all required executable files exist with safe ownership and mode;
+- partial: installation fails without deleting state.
+
+Registration state:
 
 - absent: `.runner`, `.credentials`, and `.credentials_rsaparams` are all absent;
-- complete: all are safe runner-owned regular files;
-- partial or conflicting: fail without registration or deletion.
+- complete: all three are runner-owned regular files mode `0600`;
+- partial or unsafe: both host and connection operations fail without mutation.
 
-Complete binaries without registration are resumable. Registration uses a short-lived organization registration token obtained from a GitHub credential exported only on the Ansible control machine. `playbooks/install.yml` passes the credential to the installer through standard input with task output suppressed; the credential is not persisted on the target. `playbooks/host.yml` never passes a credential and refuses absent registration.
+This separation allows `host.yml` to finish before GitHub credentials exist and allows every later release to run without a PAT.
 
-The runner is configured for `https://github.com/Divorium`, name `gh-runner`, work name `_work`, and default runner self-update behavior.
+## Runtime activation
 
-The systemd unit is root-owned and contains separate `After=network-online.target` and `Wants=network-online.target`, `User=github-runner`, runner working directory and executable, `KillMode=process`, `KillSignal=SIGTERM`, `TimeoutStopSec=5min`, `Restart=always`, `RestartSec=5s`, and `WantedBy=multi-user.target`.
+On every required host deployment, `install.sh`:
 
-## Runtime activation contract
+1. rejects unresolved `dist.previous`;
+2. removes only validated installer-owned stale stages;
+3. creates a private adjacent stage owned by `agent-relay-builder`;
+4. compiles `tsconfig.runtime.json` through a clean environment;
+5. rejects symlinks, special files, mount crossings, and path escapes;
+6. imports staged `src/run-codex.js` without invoking `main`;
+7. finalizes the stage as root-owned read-only runtime state;
+8. stops an active listener and waits for `Runner.Worker` processes;
+9. renames current `dist` to `dist.previous` and the stage to `dist`;
+10. restores `dist.previous` when the second rename fails;
+11. removes `dist.previous` after success;
+12. restarts the listener only for complete registration.
 
-On every successful installer invocation:
+Build or import failure leaves the current runtime and listener untouched. An unregistered host remains ready for `github-connect.yml` without an active listener.
 
-1. reject unresolved `dist.previous`;
-2. remove only validated installer-owned stale `.dist.stage.*` directories;
-3. create a private adjacent stage owned by `agent-relay-builder`;
-4. compile `tsconfig.runtime.json` through a clean environment;
-5. reject symlinks, special files, mount crossings, and path escapes;
-6. dynamically import staged `src/run-codex.js` as the builder without invoking `main`;
-7. finalize the stage as a root-owned read-only runtime tree;
-8. stop the listener and wait without killing until no runner-owned `Runner.Worker` remains;
-9. rename current `dist` to `dist.previous`, then stage to `dist`;
-10. restore `dist.previous` only if the second filesystem rename fails;
-11. remove `dist.previous`, enable/restart the service, and wait up to 60 seconds for the runner listener.
+## Operational sequence
 
-Build or import failure leaves the runtime and service untouched by the installer. Listener startup failure is not treated as runtime validation and does not cause runtime rollback.
+First installation:
 
-## Release procedure
+```text
+host.yml
+  -> github-connect.yml
+  -> explicit Codex login
+  -> Monify consumer acceptance
+```
 
-First installation uses `ansible/playbooks/install.yml` with `AGENT_RELAY_GITHUB_CREDENTIAL`. Recurring releases use `ansible/playbooks/host.yml` without a PAT. The host role previews repository reconciliation, stops the listener and drains `Runner.Worker` when deployment is required, updates the managed checkout, and invokes `install.sh`. Manual `git pull` and direct installer invocation are not supported release steps.
+Later releases:
+
+```text
+host.yml
+```
+
+`github-connect.yml` is rerun only for connection or managed-label recovery. It is not a release deployment step.
 
 ## GitHub request flow
 
-The workflow is `.github/workflows/codex.yml` and processes one request as follows:
+The consumer workflow:
 
-1. `resolve-request.mjs` selects and validates the pull request number from `pull_request` or `workflow_dispatch` input.
-2. `resolve-pr.mjs` requires an open non-draft same-repository pull request, validates its head ref and exact SHA, and publishes checkout outputs.
-3. `actions/checkout` checks out that exact SHA with `persist-credentials: false`.
-4. `resolve-plan.mjs` treats zero added or modified active ExecPlans in a pull request as a successful Codex skip, resolves exactly one, and rejects multiple candidates; manual dispatch continues to require and validate an explicit path.
-5. The validation job runs `npm ci` and `npm run check` before Codex execution.
-6. `run-codex.mjs` calls the compiled direct runtime.
-7. `CodexExecutor` canonicalizes the selected workspace and invokes `scripts/codex-run` with `codex exec --json`, timeout, process-group termination, normalized-output limits, streaming redaction, and filesystem/network permissions.
-8. Relay serializes callback-arrival chunks from stdout and stderr and applies bounded backpressure.
-9. Relay writes accepted redacted segments to both the live log and `${RUNNER_TEMP}/agent-relay-console.log`; the workflow uploads the latter as `agent-relay-output`.
-10. A zero exit is accepted only when the JSONL lifecycle contains at least one `command_execution` or `file_change` item.
-11. `finalize.sh` validates the branch and commit message, checks the diff, commits, and pushes through a temporary askpass helper. Codex receives no GitHub token.
+1. resolves an open same-repository pull request and exact head SHA;
+2. checks out with `persist-credentials: false`;
+3. resolves exactly one active ExecPlan or performs the defined no-plan skip;
+4. runs repository validation;
+5. invokes the installed Agent Relay runtime;
+6. runs Codex through `scripts/codex-run` with normalized JSONL output;
+7. accepts zero exit only after at least one first-seen `command_execution` or `file_change` event;
+8. uploads the normalized transcript;
+9. delegates commit and push to the trusted finalizer.
 
-The workflow uses the self-hosted organization runner and accepts same-repository pull requests only.
+Codex receives no GitHub push token and must not perform Git operations.
 
 ## Codex boundary
 
-The launcher and runtime:
+The launcher:
 
-- refuse root execution;
-- require manual `github-runner` Codex authentication;
-- validate and source the trusted toolchain and host configuration profiles;
-- validate that the configured Docker socket root is a non-symlink directory and the socket is a non-symlink Unix socket;
-- build a private per-run state hierarchy and start Codex through `env -i`;
-- trust only the exact canonical selected workspace;
-- deny runner home, trusted source checkout, workspace root, `/tmp`, and `/var/tmp` to model-controlled tools;
-- expose `/opt/rust` read-only;
-- expose only `/srv/github-runner/storage/docker-socket` as the writable Docker boundary and set `DOCKER_HOST` to its socket child;
-- never expose `/run/docker.sock` or `/var/run/docker.sock` as writable filesystem roots;
-- grant writes only to the selected repository, dedicated Docker socket directory, and private runtime directory;
-- keep the selected repository `.git` directory read-only;
-- enable network access and disable memories;
-- remove only their own private runtime directory.
-
-The dedicated socket directory is intentionally writable because current Codex bubblewrap creates protected `.codex`, `.git`, and `.agents` metadata targets below each writable root. A Unix socket file cannot be used directly as such a root. The runner already has intentional root-equivalent Docker group trust; this directory does not broaden write access to `/run` or Docker data roots.
-
-## Codex output contract
-
-Raw Codex JSONL is internal and never copied directly to the job log or artifact. Relay validates records across arbitrary byte chunks, normalizes supported item lifecycles, bounds unknown-event notices, and labels stderr diagnostics.
-
-Every normalized physical line begins with `[codex] `. Unsafe controls are visibly encoded. Normalization precedes redaction and output-byte accounting. Transport splitting and queues are bounded and honor Node writable backpressure.
-
-Successful live output and the uploaded transcript are byte-identical. When the normalized redacted budget cannot accept another complete line, Relay keeps the accepted prefix and writes one `[codex] [OUTPUT TRUNCATED]` line to both sinks while continuing bounded protocol validation and drain. Timeout or nonzero process exit remains authoritative.
-
-A zero process exit is not sufficient for semantic success. Relay tracks first-seen `command_execution` and `file_change` lifecycle items. If neither occurs, execution fails with `CODEX_FAILED`, the workflow skips finalization, and the transcript remains available for diagnosis. Output truncation may clear replay/lifecycle state but does not erase the activity count.
-
-`GITHUB_OUTPUT` contains workflow values only. Pre-merge tests exercise the branch runtime with controlled processes; the actual pull-request Codex workflow uses the currently deployed trusted runtime, so final runtime smoke evidence is post-merge and post-deployment.
+- refuses root execution;
+- requires explicit Codex authentication for `github-runner`;
+- uses a clean environment;
+- denies runner home, trusted source, workspace root, `/tmp`, and `/var/tmp` to model-controlled tools;
+- exposes `/opt/rust` read-only;
+- grants writes only to the selected repository, private runtime state, and the dedicated Docker socket directory;
+- keeps the selected `.git` directory read-only;
+- enables network access and disables memories.
 
 ## Validation contract
 
-The pipeline runs `npm ci` and `npm run check`, including:
+CI runs:
 
 - strict TypeScript typechecking;
-- Node tests with mandatory 100% coverage of `src/**/*.ts`;
+- Node tests with mandatory 100 percent line, branch, and function coverage;
 - production runtime compilation;
-- shell and Node-script syntax checks;
+- shell and Node syntax checks;
 - host toolchain smoke;
-- installer static and simulated system tests;
-- static assertions covering the separate install/update playbooks, Ansible deployment, Docker socket, and runner-label contracts; no live Ansible execution or linting.
+- behavioral lifecycle tests for host installation and GitHub connection;
+- static assertions that the two Ansible playbooks and roles are disjoint;
+- installer and system integration tests.
 
-Post-deployment acceptance additionally requires a real consumer ExecPlan to run `pwd`, Token Minify helpers, `docker version`, `docker compose version`, no-change finalization, and changed-worktree finalization through the same Agent Relay sandbox and workflow path.
+Post-deployment acceptance additionally requires:
+
+- both Docker sockets;
+- Docker access as `github-runner` through the dedicated endpoint;
+- the `agent-relay` label on `gh-runner`;
+- Monify PR execution of `pwd`, all Token Minify helpers, `docker version`, and `docker compose version`;
+- successful no-change and changed-worktree finalization;
+- a later PAT-free `host.yml` run.

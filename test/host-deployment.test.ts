@@ -88,10 +88,13 @@ test("runner systemd unit is declarative and contains no credential handling", a
 
 test("runtime is built in a clean environment and validated before atomic activation", async () => {
   const runtime = await text("ansible/roles/agent_relay_host/tasks/runtime-deployment.yml");
+  const deploymentState = await text("ansible/roles/agent_relay_host/tasks/deploy.yml");
+  const deploymentPrepare = await text("ansible/roles/agent_relay_host/tasks/deployment-prepare.yml");
   const listener = await text("ansible/roles/agent_relay_host/tasks/listener-state.yml");
   const deploy = `${runtime}\n${listener}`;
   const compile = deploy.indexOf("name: Compile staged Agent Relay runtime");
-  const inspect = deploy.indexOf("name: Inspect staged runtime entrypoint", compile);
+  const recordRevision = deploy.indexOf("name: Record staged runtime source revision", compile);
+  const inspect = deploy.indexOf("name: Inspect staged runtime entrypoint", recordRevision);
   const importStage = deploy.indexOf("name: Import staged runtime entrypoint", inspect);
   const unsafe = deploy.indexOf("name: Detect unsafe staged runtime entries", importStage);
   const finalize = deploy.indexOf("name: Finalize staged runtime ownership", unsafe);
@@ -100,7 +103,8 @@ test("runtime is built in a clean environment and validated before atomic activa
   const start = deploy.indexOf("name: Enable and restart registered runner listener", activate);
 
   assert.ok(compile >= 0);
-  assert.ok(inspect > compile);
+  assert.ok(recordRevision > compile);
+  assert.ok(inspect > recordRevision);
   assert.ok(importStage > inspect);
   assert.ok(unsafe > importStage);
   assert.ok(finalize > unsafe);
@@ -111,6 +115,11 @@ test("runtime is built in a clean environment and validated before atomic activa
   assert.match(runtime, /Finalize staged runtime ownership without following links or crossing filesystems[\s\S]*- \/usr\/bin\/find[\s\S]*- -P[\s\S]*- -xdev[\s\S]*- \/usr\/bin\/chown[\s\S]*- -h/u);
   assert.doesNotMatch(runtime, /name: Finalize staged runtime ownership[\s\S]*recurse: true/u);
   assert.match(runtime, /name: Detect unsafe finalized runtime entries/u);
+  assert.match(runtime, /content: "\{\{ agent_relay_checkout_result\.after \}\}\\n"/u);
+  assert.match(deploymentPrepare, /register: agent_relay_checkout_result/u);
+  assert.match(deploymentState, /name: Inspect deployed runtime revision marker/u);
+  assert.match(deploymentState, /agent_relay_runtime_revision_matches:/u);
+  assert.match(deploymentState, /or not agent_relay_runtime_revision_matches/u);
   assert.match(runtime, /name: Remove safe stale runtime stage without crossing filesystems/u);
   assert.match(runtime, /- --one-file-system/u);
   assert.match(runtime, /name: Remove preserved runtime after successful activation without crossing filesystems/u);

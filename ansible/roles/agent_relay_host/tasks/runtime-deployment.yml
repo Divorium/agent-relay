@@ -81,6 +81,23 @@
       - --outDir
       - "{{ agent_relay_runtime_stage_root }}"
 
+- name: Verify checked out source revision
+  ansible.builtin.assert:
+    that:
+      - agent_relay_checkout_result.after is defined
+      - agent_relay_checkout_result.after is match('^[0-9a-f]{40}$')
+    fail_msg: The reconciled Agent Relay checkout did not report a valid commit revision.
+
+- name: Record staged runtime source revision
+  become: true
+  become_user: "{{ agent_relay_builder_user }}"
+  ansible.builtin.copy:
+    content: "{{ agent_relay_checkout_result.after }}\n"
+    dest: "{{ agent_relay_runtime_stage_root }}/{{ agent_relay_runtime_revision_marker }}"
+    owner: "{{ agent_relay_builder_user }}"
+    group: "{{ agent_relay_builder_user }}"
+    mode: "0600"
+
 - name: Inspect staged runtime entrypoint
   ansible.builtin.stat:
     path: "{{ agent_relay_runtime_stage_root }}/src/run-codex.js"

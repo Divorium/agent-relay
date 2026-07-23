@@ -62,7 +62,7 @@ test("host provisioning, launcher, and sandbox share one directory-based Docker 
   assert.doesNotMatch(filesystemArgument, /docker\.sock"="write"/u);
 });
 
-test("normalizer records command and file activity without counting reasoning or replay", () => {
+test("normalizer records only completed command or substantive file-change activity", () => {
   const normalizer = new CodexEventNormalizer();
   assert.equal(normalizer.executionActivityCount(), 0);
 
@@ -76,12 +76,14 @@ test("normalizer records command and file activity without counting reasoning or
     type: "item.started",
     item: { id: "command-1", type: "command_execution", command: "pwd", aggregated_output: "" },
   })];
-  assert.equal(normalizer.executionActivityCount(), 1);
+  assert.equal(normalizer.executionActivityCount(), 0);
 
   [...normalizer.normalize({
     type: "item.updated",
     item: { id: "command-1", type: "command_execution", command: "pwd", aggregated_output: "/repo\n" },
   })];
+  assert.equal(normalizer.executionActivityCount(), 0);
+
   [...normalizer.normalize({
     type: "item.completed",
     item: {
@@ -101,7 +103,18 @@ test("normalizer records command and file activity without counting reasoning or
   const fileNormalizer = new CodexEventNormalizer();
   [...fileNormalizer.normalize({
     type: "item.completed",
-    item: { id: "file-1", type: "file_change", changes: [], status: "completed" },
+    item: { id: "file-empty", type: "file_change", changes: [], status: "completed" },
+  })];
+  assert.equal(fileNormalizer.executionActivityCount(), 0);
+
+  [...fileNormalizer.normalize({
+    type: "item.completed",
+    item: {
+      id: "file-real",
+      type: "file_change",
+      changes: [{ path: "src/index.ts", kind: "update", patch: "+export {};\n" }],
+      status: "completed",
+    },
   })];
   assert.equal(fileNormalizer.executionActivityCount(), 1);
 });

@@ -61,7 +61,7 @@ sudo_stat_mode() { sudo -n stat -c '%a' -- "$1"; }''',
     '''sudo_stat_uid() {
   case "$1" in
     "${RUNNER_DIR}"|"${RUNNER_DIR}/"*) printf '2001\\n' ;;
-    "${SERVICE_UNIT}") printf '0\\n' ;;
+    "${LIFECYCLE_ROOT}"|"${SERVICE_UNIT}") printf '0\\n' ;;
     *) stat -c '%u' -- "$1" ;;
   esac
 }

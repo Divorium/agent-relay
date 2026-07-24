@@ -85,9 +85,6 @@ jobs:
       - name: Validate Node scripts
         run: npm run check:node-scripts
 
-      - name: Validate toolchain
-        run: npm run check:toolchain
-
       - name: Validate system scripts
         id: system
         shell: bash

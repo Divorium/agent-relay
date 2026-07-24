@@ -36,9 +36,9 @@ Neither playbook imports, includes, or reruns the other.
 - [x] Finalized and revalidated the staged runtime without following links or crossing filesystems.
 - [x] Added an active-runtime source revision marker so a failed build is retried instead of becoming a false no-op.
 - [x] Replaced the installer lock with one lifecycle lock shared by host deployment and GitHub connection.
-- [x] Moved public pull-request validation to an ephemeral GitHub-hosted runner while retaining exact production toolchain checks in `host.yml` and the self-hosted Codex workflow.
+- [x] Restored all GitHub Actions validation to the managed self-hosted runner and restored `npm run check:toolchain` in CI.
 - [x] Removed obsolete installer tests and corrected integration mocks to model root ownership explicitly.
-- [x] Completed full repository CI run `30055241859` with typecheck, 100 percent coverage, runtime build, shell checks, Node checks, and system integration passing.
+- [ ] Run complete CI on the final self-hosted-only implementation.
 - [ ] User merges PR 58.
 - [ ] Run `host.yml` on the target without a PAT.
 - [ ] Run `github-connect.yml` with `AGENT_RELAY_GITHUB_CREDENTIAL` when runner connection is required.
@@ -55,7 +55,7 @@ Neither playbook imports, includes, or reruns the other.
 - Reaching the transcript byte limit must stop rendering, not JSONL lifecycle processing or semantic activity tracking.
 - A checkout commit alone cannot identify the active compiled runtime after a failed build; the activated runtime needs its own source revision marker.
 - Runner labels must constrain scheduling before allocation; a later runner-name assertion is only defense in depth.
-- Persistent self-hosted runners are not an appropriate default for public pull-request validation; ordinary CI can use an ephemeral hosted runner while privileged Codex execution remains separately controlled.
+- Every GitHub Actions workflow in this repository must run only on the managed self-hosted organization runner.
 - Host installation and GitHub connection are separate lifecycle concerns.
 - Making a PAT optional in one combined lifecycle still couples host updates to external credentials.
 - Docker changes its data-root mode after startup; Ansible must declare the final daemon-owned mode instead of fighting it.
@@ -77,7 +77,7 @@ Neither playbook imports, includes, or reruns the other.
 - Store the exact checked-out source commit in `dist/.agent-relay-source-revision` and rebuild when the marker is absent, unsafe, or different from the desired revision.
 - Keep parsing Codex JSONL after rendered output truncation so semantic completion remains accurate.
 - Set `TOKEN_MINIFY_RUN_LOG_DIR` beneath the launcher-created private runtime.
-- Run public pull-request repository validation on `ubuntu-24.04`; validate the exact managed host toolchain during `host.yml` and the self-hosted Codex validation workflow.
+- Run CI and Codex workflows only on the managed self-hosted runner. CI validates the exact installed toolchain through `npm run check:toolchain`.
 
 ## Responsibility Boundaries
 
@@ -99,7 +99,7 @@ It owns no PAT variable, registration-token call, `config.sh` invocation, or run
 
 It owns no package, Docker, toolchain, source, runner payload, service unit, or runtime deployment task.
 
-Public pull-request CI owns repository validation only. It does not reproduce the privileged Debian host or validate the exact installed Java, Go, Rust, Codex, Docker, and runner environment.
+GitHub Actions validation runs only on the managed self-hosted runner and validates both repository behavior and the exact installed host toolchain.
 
 ## Concrete Steps
 
@@ -112,12 +112,11 @@ npm test
 npm run check:runtime
 npm run check:shell
 npm run check:node-scripts
+npm run check:toolchain
 npm run check:system
 git diff --check main...HEAD
 git diff --stat main...HEAD
 ```
-
-The exact production toolchain is validated on the managed host by `host.yml` and on the self-hosted Codex validation workflow through `npm run check:toolchain`.
 
 After merge, from `ansible/`:
 
@@ -168,8 +167,8 @@ worker-run -- docker compose version
 
 ## Validation and Acceptance
 
-1. Public pull-request CI passes typecheck, tests with 100 percent line, branch, and function coverage, runtime build, shell checks, Node script checks, static deployment tests, and GitHub connection integration tests.
-2. `host.yml` validates the exact managed production toolchain before runtime activation; the self-hosted Codex workflow also runs `npm run check:toolchain`.
+1. Self-hosted CI passes typecheck, tests with 100 percent line, branch, and function coverage, runtime build, shell checks, Node script checks, exact toolchain validation, static deployment tests, and GitHub connection integration tests.
+2. `host.yml` validates the exact managed production toolchain before runtime activation.
 3. `host.yml` and `agent_relay_host` contain no PAT handling, registration-token request, runner-label API, `config.sh` registration invocation, or installer execution.
 4. The host role directly reconciles runner payload, systemd unit, runtime stage, source revision marker, activation, rollback, and service state.
 5. `github-connect.yml` and its role contain no host provisioning task or host-role invocation.
@@ -220,14 +219,5 @@ Unexpected mode for /srv/github-runner/storage/docker/engine; expected 711
 ```
 
 The final contract uses `0710` for Docker's daemon-owned data root and `0711` for its parent and the containerd root.
-
-Review validation run:
-
-```text
-repository: Divorium/agent-relay
-pull request: 58
-workflow run: 30055241859
-result: success
-```
 
 No merge is performed by this plan executor.

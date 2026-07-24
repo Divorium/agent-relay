@@ -129,7 +129,7 @@ The host role owns:
 - Codex CLI 0.144.4;
 - Docker Engine, containerd, Buildx, Compose, Git LFS, and native runner dependencies.
 
-`scripts/toolchain-environment.sh` defines the trusted runtime path layout, while `scripts/host-toolchain-check.sh` validates the installed versions during host deployment. The self-hosted Codex validation also runs `npm run check:toolchain`; public pull-request CI does not attempt to recreate the production host toolchain.
+`scripts/toolchain-environment.sh` defines the trusted runtime path layout, while `scripts/host-toolchain-check.sh` validates the installed versions during host deployment. Every GitHub Actions workflow executes on the managed self-hosted runner, and CI runs `npm run check:toolchain` against that installed environment.
 
 ## Runner binary and registration state
 
@@ -224,16 +224,15 @@ The launcher:
 
 ## Validation contract
 
-Public pull-request CI runs on an ephemeral GitHub-hosted Ubuntu 24.04 runner and includes:
+All GitHub Actions workflows run only on the managed self-hosted organization runner. Pull-request CI accepts same-repository pull requests only and includes:
 
 - strict TypeScript typechecking;
 - Node tests with mandatory 100 percent line, branch, and function coverage;
 - production runtime compilation;
 - shell and Node syntax checks;
+- exact managed-host toolchain validation through `npm run check:toolchain`;
 - behavioral GitHub connection tests;
 - static assertions for direct Ansible host deployment, atomic activation, lifecycle locking, PAT isolation, and disjoint roles.
-
-The exact production toolchain is validated by `scripts/host-toolchain-check.sh` during every required `host.yml` deployment and by `npm run check:toolchain` on the self-hosted Codex workflow.
 
 Post-deployment acceptance additionally requires:
 

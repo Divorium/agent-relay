@@ -19,17 +19,19 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Upload executor test source
-        uses: actions/upload-artifact@v4
-        with:
-          name: executor-test-source
-          path: test/executor.integration.test.ts
-          if-no-files-found: error
-
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
+
+      - name: Provide host-contract Node path
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -e /usr/bin/node ]]; then
+            sudo ln -s -- "$(command -v node)" /usr/bin/node
+          fi
+          test "$(readlink -f /usr/bin/node)" = "$(readlink -f "$(command -v node)")"
 
       - name: Install dependencies
         run: npm ci

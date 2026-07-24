@@ -66,6 +66,7 @@ It never installs or updates host packages, Docker, toolchains, runner binaries,
 
 ```text
 /srv/github-runner/storage/agent-relay  administrator-owned source; root-owned dist
+/srv/github-runner/storage/agent-relay/dist/.agent-relay-source-revision
 /srv/github-runner/storage/work         github-runner-owned workflow workspaces
 /srv/github-runner/storage/runner       official GitHub Actions runner
 /srv/github-runner/storage/home         github-runner home and Codex authentication
@@ -77,7 +78,7 @@ It never installs or updates host packages, Docker, toolchains, runner binaries,
 /var/lib/agent-relay/lifecycle/active
 ```
 
-`/srv/github-runner/storage/runner/_work` is a managed symlink to `../work`. `dist.previous` exists only during a successful swap or interrupted recovery.
+`/srv/github-runner/storage/runner/_work` is a managed symlink to `../work`. `dist.previous` exists only during a successful swap or interrupted recovery. The runtime revision marker contains the exact 40-character source commit used to build the active `dist` tree.
 
 The Docker storage parent and containerd root are `root:root` mode `0711`. The daemon-owned Docker data root is `root:root` mode `0710`; Ansible declares this post-startup state rather than restoring a conflicting pre-startup mode.
 
@@ -128,7 +129,7 @@ The host role owns:
 - Codex CLI 0.144.4;
 - Docker Engine, containerd, Buildx, Compose, Git LFS, and native runner dependencies.
 
-`scripts/toolchain-environment.sh` defines the trusted runtime path layout, while `scripts/host-toolchain-check.sh` validates the installed versions during host deployment.
+`scripts/toolchain-environment.sh` defines the trusted runtime path layout, while `scripts/host-toolchain-check.sh` validates the installed versions during host deployment. The self-hosted Codex validation also runs `npm run check:toolchain`; public pull-request CI does not attempt to recreate the production host toolchain.
 
 ## Runner binary and registration state
 
@@ -150,6 +151,8 @@ This separation allows `host.yml` to finish before GitHub credentials exist and 
 
 ## Runtime activation
 
+Deployment preview compares the desired checkout commit with the active runtime revision marker. A missing, unsafe, or mismatched marker forces a rebuild even when the checkout already points at the desired commit. This prevents a failed build from leaving an old `dist` tree that a later run would incorrectly accept.
+
 On every required host deployment, the host role:
 
 1. acquires the lifecycle lock;
@@ -159,14 +162,15 @@ On every required host deployment, the host role:
 5. removes only a validated non-mounted stage path;
 6. creates a private stage owned by `agent-relay-builder`;
 7. compiles `tsconfig.runtime.json` through a clean environment;
-8. verifies the staged entrypoint and imports it without invoking `main`;
-9. rejects symlinks and special files in the stage;
-10. finalizes the stage as root-owned read-only runtime state;
-11. renames current `dist` to `dist.previous` and the stage to `dist`;
-12. restores `dist.previous` when activation fails and restoration is safe;
-13. removes `dist.previous` after success;
-14. restarts the listener only for complete registration;
-15. releases the lifecycle lock.
+8. validates and records the exact source revision in the stage;
+9. verifies the staged entrypoint and imports it without invoking `main`;
+10. rejects symlinks and special files in the stage;
+11. finalizes and revalidates the stage as root-owned read-only runtime state;
+12. renames current `dist` to `dist.previous` and the stage to `dist`;
+13. restores `dist.previous` when activation fails and restoration is safe;
+14. removes `dist.previous` after success;
+15. restarts the listener only for complete registration;
+16. releases the lifecycle lock.
 
 Build or import failure leaves the active runtime unchanged. A previously active registered listener is restarted after failure when the previous runtime remains valid. An unregistered host remains ready for `github-connect.yml` without an active listener.
 
@@ -199,11 +203,11 @@ The consumer workflow:
 4. runs repository validation;
 5. invokes the installed Agent Relay runtime;
 6. runs Codex through `scripts/codex-run` with normalized JSONL output;
-7. accepts zero exit only after at least one first-seen `command_execution` or `file_change` event;
+7. accepts zero exit only after at least one completed command execution or completed non-empty file change;
 8. uploads the normalized transcript;
 9. delegates commit and push to the trusted finalizer.
 
-Codex receives no GitHub push token and must not perform Git operations.
+Codex receives no GitHub push token and must not perform Git operations. Activity that appears only after the live transcript reaches its byte limit is still parsed and counted, while additional normalized output is discarded.
 
 ## Codex boundary
 
@@ -220,15 +224,16 @@ The launcher:
 
 ## Validation contract
 
-CI runs:
+Public pull-request CI runs on an ephemeral GitHub-hosted Ubuntu 24.04 runner and includes:
 
 - strict TypeScript typechecking;
 - Node tests with mandatory 100 percent line, branch, and function coverage;
 - production runtime compilation;
 - shell and Node syntax checks;
-- host toolchain smoke;
 - behavioral GitHub connection tests;
 - static assertions for direct Ansible host deployment, atomic activation, lifecycle locking, PAT isolation, and disjoint roles.
+
+The exact production toolchain is validated by `scripts/host-toolchain-check.sh` during every required `host.yml` deployment and by `npm run check:toolchain` on the self-hosted Codex workflow.
 
 Post-deployment acceptance additionally requires:
 

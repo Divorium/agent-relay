@@ -19,6 +19,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Upload executor test source
+        uses: actions/upload-artifact@v4
+        with:
+          name: executor-test-source
+          path: test/executor.integration.test.ts
+          if-no-files-found: error
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

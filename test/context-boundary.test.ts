@@ -105,8 +105,9 @@ test("workflows validate and execute the pull request runtime with strict token 
   }
 });
 
-test("CI uses an ephemeral hosted runner and executes the complete validation", async () => {
+test("CI isolates repository validation from deployed host verification", async () => {
   const workflow = await readFile(".github/workflows/ci.yml", "utf8");
+  const deployment = await readFile("ansible/roles/agent_relay_host/tasks/deployment-prepare.yml", "utf8");
   assert.match(workflow, /runs-on: ubuntu-24\.04/);
   assert.doesNotMatch(workflow, /runs-on: \[self-hosted/);
   assert.doesNotMatch(workflow, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
@@ -115,6 +116,7 @@ test("CI uses an ephemeral hosted runner and executes the complete validation", 
   assert.match(workflow, /actions\/setup-node@v4/);
   assert.match(workflow, /node-version: "22"/);
   assert.match(workflow, /cache: npm/);
+  assert.match(workflow, /Provide host-contract Node path/);
   assert.match(workflow, /run: npm ci/);
   for (const command of [
     "npm run typecheck",
@@ -122,11 +124,13 @@ test("CI uses an ephemeral hosted runner and executes the complete validation", 
     "npm run check:runtime",
     "npm run check:shell",
     "npm run check:node-scripts",
-    "npm run check:toolchain",
     "npm run check:system",
   ]) {
     assert.match(workflow, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "u"));
   }
+  assert.doesNotMatch(workflow, /npm run check:toolchain/);
+  assert.match(deployment, /scripts\/host-toolchain-check\.sh/);
+  assert.match(deployment, /EXPECTED_CODEX_VERSION/);
 });
 
 test("active packaging contains no Docker or Relay transport entrypoints", async () => {

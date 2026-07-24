@@ -38,7 +38,7 @@ The host playbook does not require or read `AGENT_RELAY_GITHUB_CREDENTIAL`. It o
 - official GitHub Runner binaries;
 - the runner systemd unit;
 - managed source checkout;
-- staged Agent Relay runtime build and atomic activation;
+- staged Agent Relay runtime build, source-revision marker, and atomic activation;
 - registered-listener restart or unregistered-listener shutdown.
 
 All host deployment behavior is expressed as Ansible tasks and templates. The host role does not execute an installer script, perform runner registration, call the GitHub runner API, reconcile GitHub labels, or consume a PAT.
@@ -151,9 +151,11 @@ Neither host deployment nor `scripts/github-connect` authenticates Codex.
 
 ## Deployment behavior
 
-The host role previews repository reconciliation before changing the target. When deployment is required, it acquires the lifecycle lock, stops an active listener, drains `Runner.Worker` processes, updates the checkout, verifies toolchains and Docker, reconciles runner binaries and the systemd unit, builds a private runtime stage, validates it, and performs an atomic directory swap.
+The host role previews repository reconciliation before changing the target. It also compares the desired checkout commit with `dist/.agent-relay-source-revision`; a missing, unsafe, or mismatched marker forces a rebuild even when the checkout already points at the desired revision.
 
-A build or import failure leaves the active runtime unchanged. An activation failure restores `dist.previous` when possible. When a previously active registered listener was stopped and deployment fails before replacement, Ansible restarts the preserved listener when the old runtime remains valid.
+When deployment is required, it acquires the lifecycle lock, stops an active listener, drains `Runner.Worker` processes, updates the checkout, verifies toolchains and Docker, reconciles runner binaries and the systemd unit, builds a private runtime stage in a clean environment, records the checked-out source revision, imports the entrypoint, rejects special files, finalizes exact owner and mode postconditions, and performs an atomic directory swap.
+
+A build or import failure leaves the active runtime unchanged. An activation failure restores `dist.previous` when possible. When a previously active registered listener was stopped and deployment fails before replacement, Ansible restarts the preserved listener when the old runtime remains valid. A later run detects the old runtime marker and retries the failed build.
 
 The Docker role keeps `/run/docker.sock` and adds `/srv/github-runner/storage/docker-socket/docker.sock`. When listener configuration changes, it stops `docker.service`, restarts `docker.socket`, and then starts Docker so `dockerd -H fd://` receives both descriptors.
 
@@ -170,12 +172,10 @@ When an interrupted run leaves `dist.previous`:
 1. keep the runner stopped;
 2. inspect `dist` and `dist.previous` as root-owned regular directory trees;
 3. when `dist` is absent, restore the validated previous tree:
-
    ```bash
    sudo mv /srv/github-runner/storage/agent-relay/dist.previous \
      /srv/github-runner/storage/agent-relay/dist
    ```
-
 4. when a valid `dist` exists, deliberately remove the stale previous tree;
 5. rerun `host.yml` when state is safe;
 6. rebuild the host when state cannot be established safely.
@@ -200,6 +200,7 @@ When the dedicated socket is missing or stale, rerun `host.yml`. Do not create a
 
 ```text
 /srv/github-runner/storage/agent-relay
+/srv/github-runner/storage/agent-relay/dist/.agent-relay-source-revision
 /srv/github-runner/storage/work
 /srv/github-runner/storage/runner
 /srv/github-runner/storage/home
@@ -215,4 +216,4 @@ When the dedicated socket is missing or stale, rerun `host.yml`. Do not create a
 
 Codex output is normalized, redacted, and streamed with a fixed `[codex] ` prefix. The same accepted bytes are written to `agent-relay-output`. Raw JSONL remains internal, and `${GITHUB_OUTPUT}` contains workflow outputs only.
 
-A zero process exit is insufficient for success. Agent Relay requires at least one `command_execution` or `file_change` lifecycle item; a session that only reports inability to operate fails before finalization.
+A zero process exit is insufficient for success. Agent Relay requires at least one completed command execution or one completed file-change item containing at least one change. Empty file-change items and commands that only started do not satisfy the gate. After live output reaches its byte limit, JSONL parsing and semantic activity tracking continue while further normalized output is discarded.

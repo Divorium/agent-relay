@@ -1,0 +1,17 @@
+[Unit]
+Description=GitHub Actions Runner ({{ agent_relay_host_contract.organization }}.{{ agent_relay_host_contract.runner_name }})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ agent_relay_runner_user }}
+WorkingDirectory={{ agent_relay_runner_root }}
+ExecStart={{ agent_relay_runner_root }}/runsvc.sh
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=5min
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

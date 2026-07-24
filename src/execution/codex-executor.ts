@@ -7,9 +7,14 @@ import { DiagnosticLineParser, deriveJsonlRecordBytes, JsonlParser } from "./jso
 import { BoundedOutputPump, OrderedInputPump } from "./output-pump.js";
 import { RedactedFanout, type TranscriptSink } from "./transcript.js";
 
-export interface ExecutionOutcome { exitCode: number; }
+export interface ExecutionOutcome {
+  exitCode: number;
+  executionActivityCount: number;
+}
 export interface KillableProcess { pid?: number; kill(signal: "SIGTERM" | "SIGKILL"): unknown; }
 export type ProcessGroupKiller = (pid: number, signal: "SIGTERM" | "SIGKILL") => unknown;
+
+export const DOCKER_SOCKET_DIRECTORY = "/srv/github-runner/storage/docker-socket";
 
 const discardingTranscript: TranscriptSink = {
   async write() {},
@@ -43,8 +48,7 @@ export function createCodexArgs(
     permission("/opt/rust", "read"),
     permission("/tmp", "deny"),
     permission("/var/tmp", "deny"),
-    permission("/var/run/docker.sock", "write"),
-    permission("/run/docker.sock", "write"),
+    permission(DOCKER_SOCKET_DIRECTORY, "write"),
     permission(resolve(runtimeRoot), "write"),
     permission(resolvedWorkspace, "write"),
     permission(join(resolvedWorkspace, ".git"), "read"),
@@ -59,6 +63,14 @@ export function createCodexArgs(
     "-c", "permissions.agent.network.enabled=true",
     "exec", "--json", "--cd", resolvedWorkspace, prompt,
   ];
+}
+
+export function validateExecutionOutcome(exitCode: number, executionActivityCount: number): ExecutionOutcome {
+  if (exitCode !== 0) throw new CodexExecutionError("CODEX_FAILED", `Codex exited with code ${exitCode}`);
+  if (executionActivityCount === 0) {
+    throw new CodexExecutionError("CODEX_FAILED", "Codex completed without executing any command or file change");
+  }
+  return { exitCode, executionActivityCount };
 }
 
 export function terminateProcess(
@@ -153,16 +165,21 @@ export class CodexExecutor {
       fail,
       () => {
         discardOutput = true;
-        normalizer.clearLifecycleState();
       },
     );
+    const normalize = async (event: Parameters<CodexEventNormalizer["normalize"]>[0]): Promise<void> => {
+      const output = normalizer.normalize(event);
+      if (!discardOutput) {
+        await pump.enqueue(output);
+        return;
+      }
+      for (const ignored of output) void ignored;
+    };
     const stdout = new JsonlParser(this.maxJsonlRecordBytes);
     const stderr = new DiagnosticLineParser();
     input = new OrderedInputPump(pump, async (source, chunk) => {
       if (source === child.stdout) {
-        for (const event of stdout.write(chunk)) {
-          if (!discardOutput) await pump.enqueue(normalizer.normalize(event));
-        }
+        for (const event of stdout.write(chunk)) await normalize(event);
       } else {
         for (const diagnostic of stderr.write(chunk)) {
           if (!discardOutput) await pump.enqueue([normalizer.diagnostic(diagnostic.value, diagnostic.continuation)]);
@@ -207,9 +224,7 @@ export class CodexExecutor {
     await input.finish();
     if (firstFailure === undefined) {
       try {
-        for (const event of stdout.end()) {
-          if (!discardOutput) await pump.enqueue(normalizer.normalize(event));
-        }
+        for (const event of stdout.end()) await normalize(event);
         for (const diagnostic of stderr.end()) {
           if (!discardOutput) await pump.enqueue([normalizer.diagnostic(diagnostic.value, diagnostic.continuation)]);
         }
@@ -221,7 +236,6 @@ export class CodexExecutor {
     try { await fanout.finish(); } catch (error) { firstFailure ??= error; }
     if (startupError) throw startupError;
     if (firstFailure !== undefined) throw firstFailure;
-    if (exitCode !== 0) throw new CodexExecutionError("CODEX_FAILED", `Codex exited with code ${exitCode}`);
-    return { exitCode };
+    return validateExecutionOutcome(exitCode, normalizer.executionActivityCount());
   }
 }

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { buildCodexPrompt } from "../src/execution/prompt.js";
-import { createCodexArgs, createCodexEnvironment } from "../src/execution/codex-executor.js";
+import { DOCKER_SOCKET_DIRECTORY, createCodexArgs, createCodexEnvironment } from "../src/execution/codex-executor.js";
 
 const workflowPaths = [
   ".github/workflows/codex.yml",
@@ -30,13 +30,14 @@ test("repository instructions remain durable and plan-driven", async () => {
   assert.match(rules, /## Decision Log/);
 });
 
-test("executor exposes Docker sockets without denying the workspace ancestor", () => {
+test("executor exposes the dedicated Docker socket directory without denying the workspace ancestor", () => {
   assert.deepEqual(createCodexEnvironment("/home/user", "/home/user/.cache/runtime"), {
     HOME: "/home/user",
     CODEX_RUNTIME_ROOT: "/home/user/.cache/runtime",
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
   });
+  assert.equal(DOCKER_SOCKET_DIRECTORY, "/srv/github-runner/storage/docker-socket");
   const args = createCodexArgs(
     "/runner/_work/repository/repository",
     "task prompt",
@@ -49,8 +50,8 @@ test("executor exposes Docker sockets without denying the workspace ancestor", (
   assert.match(filesystem, /"\/home\/user"="deny"/);
   assert.match(filesystem, /"\/srv\/github-runner\/storage\/agent-relay"="deny"/);
   assert.match(filesystem, /"\/opt\/rust"="read"/);
-  assert.match(filesystem, /"\/var\/run\/docker\.sock"="write"/);
-  assert.match(filesystem, /"\/run\/docker\.sock"="write"/);
+  assert.match(filesystem, /"\/srv\/github-runner\/storage\/docker-socket"="write"/);
+  assert.doesNotMatch(filesystem, /docker\.sock"="write"/);
   assert.doesNotMatch(filesystem, /"\/runner\/_work"="deny"/);
   assert.match(filesystem, /"\/runner\/_work\/repository\/repository"="write"/);
   assert.match(filesystem, /"\/runner\/_work\/repository\/repository\/\.git"="read"/);
@@ -104,15 +105,25 @@ test("workflows validate and execute the pull request runtime with strict token 
   }
 });
 
-test("CI uses the organization runner and executes the complete validation", async () => {
+test("CI uses only the self-hosted organization runner and executes complete validation", async () => {
   const workflow = await readFile(".github/workflows/ci.yml", "utf8");
+  assert.match(workflow, /if: \$\{\{ github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository \}\}/);
   assert.match(workflow, /runs-on: \[self-hosted\]/);
-  assert.match(workflow, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
-  assert.doesNotMatch(workflow, /agent-relay\]/);
+  assert.doesNotMatch(workflow, /ubuntu-|windows-|macos-|actions\/setup-node/u);
   assert.match(workflow, /actions\/checkout@v4/);
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /run: npm ci/);
-  assert.match(workflow, /run: npm run check/);
+  for (const command of [
+    "npm run typecheck",
+    "npm test",
+    "npm run check:runtime",
+    "npm run check:shell",
+    "npm run check:node-scripts",
+    "npm run check:toolchain",
+    "npm run check:system",
+  ]) {
+    assert.match(workflow, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "u"));
+  }
 });
 
 test("active packaging contains no Docker or Relay transport entrypoints", async () => {
@@ -133,7 +144,8 @@ test("active packaging contains no Docker or Relay transport entrypoints", async
   }
 
   const packageJson = await readFile("package.json", "utf8");
-  assert.doesNotMatch(packageJson, /dist\/src\/server\.js|runner-entrypoint/);
-  assert.match(packageJson, /bash -n install\.sh runner\/finalize\.sh/);
-  assert.doesNotMatch(packageJson, /update\.sh|docker-host/);
+  assert.doesNotMatch(packageJson, /install\.sh|install-script\.integration/u);
+  assert.match(packageJson, /test-system\/github-connect\.integration\.sh/u);
+  assert.match(packageJson, /bash -n runner\/finalize\.sh[\s\S]*scripts\/github-connect/u);
+  assert.doesNotMatch(packageJson, /update\.sh|docker-host/u);
 });

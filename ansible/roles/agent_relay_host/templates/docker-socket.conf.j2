@@ -1,0 +1,8 @@
+[Socket]
+ListenStream=
+ListenStream=/run/docker.sock
+ListenStream={{ agent_relay_docker_socket_path }}
+SocketMode=0660
+SocketUser=root
+SocketGroup=docker
+RemoveOnStop=true

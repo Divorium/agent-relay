@@ -1,0 +1,339 @@
+---
+- name: Inspect interrupted runtime state
+  ansible.builtin.stat:
+    path: "{{ agent_relay_runtime_previous_root }}"
+    follow: false
+  register: agent_relay_runtime_previous_state
+
+- name: Reject unresolved previous runtime
+  ansible.builtin.assert:
+    that:
+      - not agent_relay_runtime_previous_state.stat.exists
+    fail_msg: dist.previous exists; follow the documented interrupted-swap recovery procedure.
+
+- name: Inspect stale runtime stage
+  ansible.builtin.stat:
+    path: "{{ agent_relay_runtime_stage_root }}"
+    follow: false
+  register: agent_relay_runtime_stage_state
+
+- name: Inspect stale stage mount state
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/mountpoint
+      - -q
+      - "{{ agent_relay_runtime_stage_root }}"
+  register: agent_relay_runtime_stage_mount
+  changed_when: false
+  failed_when: false
+  when:
+    - agent_relay_runtime_stage_state.stat.exists
+    - agent_relay_runtime_stage_state.stat.isdir | default(false)
+
+- name: Reject unsafe stale runtime stage
+  ansible.builtin.assert:
+    that:
+      - agent_relay_runtime_stage_state.stat.isdir | default(false)
+      - not (agent_relay_runtime_stage_state.stat.islnk | default(false))
+      - (agent_relay_runtime_stage_mount.rc | default(1)) != 0
+    fail_msg: Runtime stage is not a regular non-mounted directory and requires deliberate recovery.
+  when: agent_relay_runtime_stage_state.stat.exists
+
+- name: Remove safe stale runtime stage without crossing filesystems
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/rm
+      - -rf
+      - --one-file-system
+      - --
+      - "{{ agent_relay_runtime_stage_root }}"
+  changed_when: true
+  when: agent_relay_runtime_stage_state.stat.exists
+
+- name: Create private runtime stage
+  ansible.builtin.file:
+    path: "{{ agent_relay_runtime_stage_root }}"
+    state: directory
+    owner: "{{ agent_relay_builder_user }}"
+    group: "{{ agent_relay_builder_user }}"
+    mode: "0700"
+
+- name: Compile staged Agent Relay runtime
+  become: true
+  become_user: "{{ agent_relay_builder_user }}"
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/env
+      - -i
+      - "HOME={{ agent_relay_build_home }}"
+      - "USER={{ agent_relay_builder_user }}"
+      - "LOGNAME={{ agent_relay_builder_user }}"
+      - SHELL=/usr/sbin/nologin
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
+      - "TMPDIR={{ agent_relay_build_home }}/tmp"
+      - "TMP={{ agent_relay_build_home }}/tmp"
+      - "TEMP={{ agent_relay_build_home }}/tmp"
+      - "PATH={{ agent_relay_toolchain_path }}"
+      - /usr/local/bin/tsc
+      - -p
+      - "{{ agent_relay_source_root }}/tsconfig.runtime.json"
+      - --outDir
+      - "{{ agent_relay_runtime_stage_root }}"
+
+- name: Verify checked out source revision
+  ansible.builtin.assert:
+    that:
+      - agent_relay_checkout_result.after is defined
+      - agent_relay_checkout_result.after is match('^[0-9a-f]{40}$')
+    fail_msg: The reconciled Agent Relay checkout did not report a valid commit revision.
+
+- name: Record staged runtime source revision
+  become: true
+  become_user: "{{ agent_relay_builder_user }}"
+  ansible.builtin.copy:
+    content: "{{ agent_relay_checkout_result.after }}\n"
+    dest: "{{ agent_relay_runtime_stage_root }}/{{ agent_relay_runtime_revision_marker }}"
+    owner: "{{ agent_relay_builder_user }}"
+    group: "{{ agent_relay_builder_user }}"
+    mode: "0600"
+
+- name: Inspect staged runtime entrypoint
+  ansible.builtin.stat:
+    path: "{{ agent_relay_runtime_stage_root }}/src/run-codex.js"
+    follow: false
+  register: agent_relay_staged_runtime_entrypoint
+
+- name: Verify staged runtime entrypoint
+  ansible.builtin.assert:
+    that:
+      - agent_relay_staged_runtime_entrypoint.stat.exists
+      - agent_relay_staged_runtime_entrypoint.stat.isreg
+      - not agent_relay_staged_runtime_entrypoint.stat.islnk
+    fail_msg: Compiled runtime entrypoint is missing or unsafe.
+
+- name: Import staged runtime entrypoint
+  become: true
+  become_user: "{{ agent_relay_builder_user }}"
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/env
+      - -i
+      - "HOME={{ agent_relay_build_home }}"
+      - "USER={{ agent_relay_builder_user }}"
+      - "LOGNAME={{ agent_relay_builder_user }}"
+      - SHELL=/usr/sbin/nologin
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
+      - "TMPDIR={{ agent_relay_build_home }}/tmp"
+      - "TMP={{ agent_relay_build_home }}/tmp"
+      - "TEMP={{ agent_relay_build_home }}/tmp"
+      - "PATH={{ agent_relay_toolchain_path }}"
+      - "STAGED_ENTRYPOINT=file://{{ agent_relay_runtime_stage_root }}/src/run-codex.js"
+      - /usr/bin/node
+      - --input-type=module
+      - -e
+      - await import(process.env.STAGED_ENTRYPOINT)
+  changed_when: false
+
+- name: Detect unsafe staged runtime entries
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/find
+      - -P
+      - "{{ agent_relay_runtime_stage_root }}"
+      - -xdev
+      - "!"
+      - -type
+      - d
+      - "!"
+      - -type
+      - f
+      - -print
+      - -quit
+  register: agent_relay_unsafe_staged_runtime_entry
+  changed_when: false
+
+- name: Verify staged runtime tree
+  ansible.builtin.assert:
+    that:
+      - agent_relay_unsafe_staged_runtime_entry.stdout | length == 0
+    fail_msg: Staged runtime contains a symlink or special file.
+
+- name: Finalize staged runtime ownership without following links or crossing filesystems
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/find
+      - -P
+      - "{{ agent_relay_runtime_stage_root }}"
+      - -xdev
+      - -exec
+      - /usr/bin/chown
+      - -h
+      - root:root
+      - --
+      - "{}"
+      - +
+  changed_when: true
+
+- name: Finalize staged runtime directory modes
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/find
+      - -P
+      - "{{ agent_relay_runtime_stage_root }}"
+      - -xdev
+      - -type
+      - d
+      - -exec
+      - /usr/bin/chmod
+      - "0755"
+      - --
+      - "{}"
+      - +
+  changed_when: true
+
+- name: Finalize staged runtime file modes
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/find
+      - -P
+      - "{{ agent_relay_runtime_stage_root }}"
+      - -xdev
+      - -type
+      - f
+      - -exec
+      - /usr/bin/chmod
+      - "0644"
+      - --
+      - "{}"
+      - +
+  changed_when: true
+
+- name: Detect unsafe finalized runtime entries
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/find
+      - -P
+      - "{{ agent_relay_runtime_stage_root }}"
+      - -xdev
+      - "("
+      - "!"
+      - -user
+      - root
+      - -o
+      - "!"
+      - -group
+      - root
+      - -o
+      - "("
+      - -type
+      - d
+      - "!"
+      - -perm
+      - "0755"
+      - ")"
+      - -o
+      - "("
+      - -type
+      - f
+      - "!"
+      - -perm
+      - "0644"
+      - ")"
+      - -o
+      - "("
+      - "!"
+      - -type
+      - d
+      - "!"
+      - -type
+      - f
+      - ")"
+      - ")"
+      - -print
+      - -quit
+  register: agent_relay_unsafe_finalized_runtime_entry
+  changed_when: false
+
+- name: Verify finalized runtime tree
+  ansible.builtin.assert:
+    that:
+      - agent_relay_unsafe_finalized_runtime_entry.stdout | length == 0
+    fail_msg: Finalized runtime has unsafe ownership, mode, file type, or filesystem boundaries.
+
+- name: Inspect active runtime directory
+  ansible.builtin.stat:
+    path: "{{ agent_relay_source_root }}/dist"
+    follow: false
+  register: agent_relay_active_runtime_state
+
+- name: Reject unsafe active runtime path
+  ansible.builtin.assert:
+    that:
+      - >-
+        not agent_relay_active_runtime_state.stat.exists
+        or (
+          agent_relay_active_runtime_state.stat.isdir | default(false)
+          and not (agent_relay_active_runtime_state.stat.islnk | default(false))
+        )
+    fail_msg: Active runtime path is not a regular directory.
+
+- name: Activate staged runtime atomically
+  block:
+    - name: Preserve current runtime
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/mv
+          - --
+          - "{{ agent_relay_source_root }}/dist"
+          - "{{ agent_relay_runtime_previous_root }}"
+      when: agent_relay_active_runtime_state.stat.exists
+
+    - name: Promote staged runtime
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/mv
+          - --
+          - "{{ agent_relay_runtime_stage_root }}"
+          - "{{ agent_relay_source_root }}/dist"
+  rescue:
+    - name: Inspect runtime after failed activation
+      ansible.builtin.stat:
+        path: "{{ agent_relay_source_root }}/dist"
+        follow: false
+      register: agent_relay_failed_activation_runtime
+
+    - name: Inspect preserved runtime after failed activation
+      ansible.builtin.stat:
+        path: "{{ agent_relay_runtime_previous_root }}"
+        follow: false
+      register: agent_relay_failed_activation_previous
+
+    - name: Restore preserved runtime after failed activation
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/mv
+          - --
+          - "{{ agent_relay_runtime_previous_root }}"
+          - "{{ agent_relay_source_root }}/dist"
+      when:
+        - not agent_relay_failed_activation_runtime.stat.exists
+        - agent_relay_failed_activation_previous.stat.exists
+        - agent_relay_failed_activation_previous.stat.isdir | default(false)
+        - not (agent_relay_failed_activation_previous.stat.islnk | default(false))
+
+    - name: Report runtime activation failure
+      ansible.builtin.fail:
+        msg: Agent Relay runtime activation failed; the previous runtime was restored when possible.
+
+- name: Remove preserved runtime after successful activation without crossing filesystems
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/rm
+      - -rf
+      - --one-file-system
+      - --
+      - "{{ agent_relay_runtime_previous_root }}"
+  changed_when: true
+  when: agent_relay_active_runtime_state.stat.exists

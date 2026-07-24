@@ -2,6 +2,7 @@
   "organization": "Divorium",
   "organization_url": "https://github.com/Divorium",
   "runner_name": "gh-runner",
+  "runner_label": "agent-relay",
   "runner_version": "2.335.1",
   "runner_sha256": "4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf",
   "github_api_version": "2026-03-10",
@@ -13,6 +14,7 @@
   "typescript_version": "5.8.3",
   "codex_version": "0.144.4",
   "base_root": "/srv/github-runner",
+  "docker_socket_path": "/srv/github-runner/storage/docker-socket/docker.sock",
   "runner_user": "github-runner",
   "builder_user": "agent-relay-builder"
 }

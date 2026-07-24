@@ -1,0 +1,26 @@
+---
+- name: Require GitHub credential for runner connection
+  ansible.builtin.assert:
+    that:
+      - agent_relay_github_credential | length > 0
+    fail_msg: >-
+      Export AGENT_RELAY_GITHUB_CREDENTIAL on the Ansible control machine with organization
+      Self-hosted runners: write permission before running playbooks/github-connect.yml.
+
+- name: Connect the prepared runner to GitHub
+  become: true
+  become_user: "{{ agent_relay_admin_user }}"
+  ansible.builtin.command:
+    argv:
+      - bash
+      - "{{ agent_relay_source_root }}/scripts/github-connect"
+    chdir: "{{ agent_relay_source_root }}"
+    stdin: "{{ agent_relay_github_credential }}"
+    stdin_add_newline: true
+  environment:
+    HOME: "/home/{{ agent_relay_admin_user }}"
+  no_log: true
+  changed_when: true
+
+- name: Reconcile the managed GitHub runner label
+  ansible.builtin.import_tasks: runner-label.yml

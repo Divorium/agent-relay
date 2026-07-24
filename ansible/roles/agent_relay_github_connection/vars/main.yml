@@ -1,0 +1,5 @@
+---
+agent_relay_host_contract: "{{ lookup('ansible.builtin.file', role_path ~ '/../../../config/runner-host.json') | from_json }}"
+agent_relay_storage_root: "{{ agent_relay_host_contract.base_root }}/storage"
+agent_relay_source_root: "{{ agent_relay_storage_root }}/agent-relay"
+agent_relay_runner_label: "{{ agent_relay_host_contract.runner_label }}"

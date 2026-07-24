@@ -10,7 +10,7 @@
     - { path: "{{ agent_relay_host_contract.base_root }}", mode: "0755" }
     - { path: "{{ agent_relay_storage_root }}", mode: "0755" }
     - { path: "{{ agent_relay_storage_root }}/docker", mode: "0711" }
-    - { path: "{{ agent_relay_docker_root }}", mode: "0711" }
+    - { path: "{{ agent_relay_docker_root }}", mode: "0710" }
     - { path: "{{ agent_relay_containerd_root }}", mode: "0711" }
     - { path: /var/lib/agent-relay, mode: "0755" }
 
@@ -35,6 +35,7 @@
     - "{{ agent_relay_runner_root }}"
     - "{{ agent_relay_work_root }}"
     - "{{ agent_relay_runner_home }}"
+    - "{{ agent_relay_docker_socket_root }}"
   register: agent_relay_runner_paths
 
 - name: Create builder home
@@ -55,12 +56,32 @@
     mode: "0700"
     recurse: false
 
-- name: Create installer lock
+- name: Inspect obsolete installer lock
+  ansible.builtin.stat:
+    path: /var/lib/agent-relay/install.lock
+    follow: false
+  register: agent_relay_obsolete_installer_lock
+
+- name: Reject unsafe obsolete installer lock
+  ansible.builtin.assert:
+    that:
+      - agent_relay_obsolete_installer_lock.stat.isreg
+      - not agent_relay_obsolete_installer_lock.stat.islnk
+    fail_msg: Obsolete installer lock is not a regular non-symlink file.
+  when: agent_relay_obsolete_installer_lock.stat.exists
+
+- name: Require obsolete installer lock to be idle
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/flock
+      - -n
+      - /var/lib/agent-relay/install.lock
+      - /usr/bin/true
+  changed_when: false
+  when: agent_relay_obsolete_installer_lock.stat.exists
+
+- name: Remove obsolete installer lock
   ansible.builtin.file:
     path: /var/lib/agent-relay/install.lock
-    state: touch
-    owner: "{{ agent_relay_admin_user }}"
-    group: "{{ agent_relay_admin_user }}"
-    mode: "0600"
-    access_time: preserve
-    modification_time: preserve
+    state: absent
+  when: agent_relay_obsolete_installer_lock.stat.exists

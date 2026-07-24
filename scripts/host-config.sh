@@ -39,6 +39,7 @@ mapping = {
     "TYPESCRIPT_VERSION": "typescript_version",
     "CODEX_VERSION": "codex_version",
     "BASE_ROOT": "base_root",
+    "DOCKER_SOCKET_PATH": "docker_socket_path",
     "RUNNER_USER": "runner_user",
     "BUILD_USER": "builder_user",
 }
@@ -52,7 +53,7 @@ for shell_name, json_name in mapping.items():
         raise SystemExit(f"invalid host config value: {json_name}")
     print(f"{shell_name}={shlex.quote(text)}")
 PY
-)" || return 1
+  )" || return 1
 
   eval "${assignments}"
 }

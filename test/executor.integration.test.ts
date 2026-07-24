@@ -121,6 +121,7 @@ test("CodexExecutor streams redacted output and edits the workspace", async () =
 set -eu
 [ "\${HOME}" = "${home}" ]
 [ "\${CODEX_RUNTIME_ROOT}" = "${runtimeRoot}" ]
+printf '%s\n' '{"type":"item.completed","item":{"id":"command_0","type":"command_execution","command":"edit workspace","aggregated_output":"","status":"completed","exit_code":0}}'
 printf '%s' '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"authorization: Bearer github_pat_abcdefghijkl'
 printf '%s\n' 'mnopqrstuvwxyz1234567890"}}'
 printf 'warning\n' >&2
@@ -182,7 +183,7 @@ while true; do /bin/sleep 1; done
 test("CodexExecutor caps output and emits one truncation marker", async () => {
   const { root, workspace, home, runtimeRoot } = await createRoot("truncate");
   const executable = join(root, "verbose-codex");
-  await writeFile(executable, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"abcdefghijklmnopqrstuvwxyz\"}}'\n", { mode: 0o700 });
+  await writeFile(executable, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"command_0\",\"type\":\"command_execution\",\"command\":\"verbose\",\"aggregated_output\":\"abcdefghijklmnopqrstuvwxyz\",\"status\":\"completed\",\"exit_code\":0}}'\n", { mode: 0o700 });
   await chmod(executable, 0o700);
 
   const executor = new CodexExecutor(executable, 5_000, 8, home, runtimeRoot, "/srv/github-runner/storage/agent-relay");
@@ -367,7 +368,7 @@ test("CodexExecutor discards chunks received after the output limit", async () =
   const executable = join(root, "chunked-codex");
   const drained = join(root, "drained");
   await writeFile(executable, `#!/bin/sh
-printf '%s\\n' '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"abcdefghijklmnopqrstuvwxyz"}}'
+printf '%s\\n' '{"type":"item.completed","item":{"id":"command_0","type":"command_execution","command":"truncate","aggregated_output":"abcdefghijklmnopqrstuvwxyz","status":"completed","exit_code":0}}'
 /bin/sleep 0.05
 printf '%s\\n' '{"type":"turn.started"}'
 printf overflow >&2
@@ -436,11 +437,15 @@ test("CodexExecutor bounds a one-write child burst behind a slow live Writable",
   const { root, workspace, home, runtimeRoot } = await createRoot("burst-backpressure");
   const executable = join(root, "burst-codex");
   await writeFile(executable, `#!/usr/bin/node
+const activity = JSON.stringify({
+  type: "item.completed",
+  item: { id: "activity", type: "command_execution", command: "burst", aggregated_output: "", status: "completed", exit_code: 0 },
+});
 const records = Array.from({ length: 600 }, (_, index) => JSON.stringify({
   type: "item.completed",
   item: { id: "burst-" + index, type: "agent_message", text: index + ":" + "x".repeat(600) },
 })).join("\\n") + "\\n";
-process.stdout.write(records);
+process.stdout.write(activity + "\\n" + records);
 `, { mode: 0o700 });
   await chmod(executable, 0o700);
   const transcriptPath = join(root, "burst.log");
@@ -483,13 +488,13 @@ process.stdout.write(JSON.stringify({ type: "item.completed", item }) + "\\n");
 test("CodexExecutor accepts a valid final JSONL record without LF", async () => {
   const { root, workspace, home, runtimeRoot } = await createRoot("final-record");
   const executable = join(root, "final-codex");
-  await writeFile(executable, "#!/bin/sh\nprintf '%s' '{\"type\":\"turn.started\"}'\n", { mode: 0o700 });
+  await writeFile(executable, "#!/bin/sh\nprintf '%s' '{\"type\":\"item.completed\",\"item\":{\"id\":\"command_0\",\"type\":\"command_execution\",\"command\":\"final record\",\"aggregated_output\":\"\",\"status\":\"completed\",\"exit_code\":0}}'\n", { mode: 0o700 });
   await chmod(executable, 0o700);
   try {
     const output = await captureStdout(async () => {
       await new CodexExecutor(executable, 5_000, 100_000, home, runtimeRoot, "/srv/source").run(planPath, workspace);
     });
-    assert.equal(output, "[codex] turn started\n");
+    assert.equal(output, "[codex] command completed: status=completed exit=0\n");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -497,6 +502,7 @@ test("CodexExecutor bounds and labels multi-megabyte no-newline stderr", async (
   const { root, workspace, home, runtimeRoot } = await createRoot("large-stderr");
   const executable = join(root, "diagnostic-codex");
   await writeFile(executable, `#!/usr/bin/node
+process.stdout.write('{"type":"item.completed","item":{"id":"command_0","type":"command_execution","command":"diagnostics","aggregated_output":"","status":"completed","exit_code":0}}\\n');
 process.stderr.write("🧪".repeat(600_000));
 `, { mode: 0o700 });
   await chmod(executable, 0o700);

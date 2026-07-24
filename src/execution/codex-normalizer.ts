@@ -53,11 +53,16 @@ export class CodexEventNormalizer {
   private readonly items = new Map<string, ItemState>();
   private readonly completedItems = new BoundedIdentitySet(MAX_REPLAY_IDENTITIES);
   private readonly eventIds = new BoundedIdentitySet(MAX_REPLAY_IDENTITIES);
+  private executionActivities = 0;
 
   clearLifecycleState(): void {
     this.items.clear();
     this.completedItems.clear();
     this.eventIds.clear();
+  }
+
+  executionActivityCount(): number {
+    return this.executionActivities;
   }
 
   retainedState(): { activeItems: number; completedItems: number; eventIds: number; fileChanges: number } {
@@ -156,6 +161,7 @@ export class CodexEventNormalizer {
     if (stage === "completed") {
       const status = string(item.status, "command.status");
       const exitCode = item.exit_code === null || item.exit_code === undefined ? "none" : String(this.number(item.exit_code, "command.exit_code"));
+      this.executionActivities += 1;
       yield line("command completed:", `status=${status} exit=${exitCode}`);
     }
   }
@@ -178,7 +184,11 @@ export class CodexEventNormalizer {
       if (delta) yield line("patch:", delta);
       state.changes.set(key, cumulative(patch));
     }
-    if (stage === "completed") yield line("file changes completed:", string(item.status, "file_change.status"));
+    if (stage === "completed") {
+      const status = string(item.status, "file_change.status");
+      if (state.changes.size > 0) this.executionActivities += 1;
+      yield line("file changes completed:", status);
+    }
   }
 
   private *textItem(stage: "started" | "updated" | "completed", item: JsonRecord, state: ItemState, label: string, finalOnly: boolean): Generator<string> {

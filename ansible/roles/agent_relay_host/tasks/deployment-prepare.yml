@@ -1,0 +1,132 @@
+---
+- name: Stop runner listener before host mutation
+  ansible.builtin.systemd_service:
+    name: "{{ agent_relay_service_name }}"
+    state: stopped
+  when: agent_relay_service_state.rc == 0
+
+- name: Wait for active runner jobs to finish
+  ansible.builtin.shell: |
+    set -o pipefail
+    runner_uid="$(id -u "${RUNNER_USER}")"
+    ! ps -e -o euid=,comm= | awk -v uid="${runner_uid}" '$1 == uid && $2 == "Runner.Worker" { found=1 } END { exit !found }'
+  args:
+    executable: /bin/bash
+  environment:
+    RUNNER_USER: "{{ agent_relay_runner_user }}"
+  register: agent_relay_worker_state
+  changed_when: false
+  until: agent_relay_worker_state.rc == 0
+  retries: 150
+  delay: 2
+
+- name: Checkout Agent Relay source
+  become: true
+  become_user: "{{ agent_relay_admin_user }}"
+  ansible.builtin.git:
+    repo: "{{ agent_relay_repository_url }}"
+    dest: "{{ agent_relay_source_root }}"
+    version: "{{ agent_relay_repository_version }}"
+    update: true
+    force: true
+    umask: "0022"
+  environment:
+    HOME: "/home/{{ agent_relay_admin_user }}"
+    GIT_TERMINAL_PROMPT: "0"
+  register: agent_relay_checkout_result
+
+- name: Reconcile source checkout write permissions
+  become: true
+  become_user: "{{ agent_relay_admin_user }}"
+  ansible.builtin.command:
+    argv:
+      - find
+      - -P
+      - "{{ agent_relay_source_root }}"
+      - -xdev
+      - "("
+      - -path
+      - "{{ agent_relay_source_root }}/dist"
+      - -o
+      - -path
+      - "{{ agent_relay_source_root }}/dist/*"
+      - -o
+      - -path
+      - "{{ agent_relay_source_root }}/dist.previous"
+      - -o
+      - -path
+      - "{{ agent_relay_source_root }}/dist.previous/*"
+      - ")"
+      - -prune
+      - -o
+      - "("
+      - -type
+      - f
+      - -o
+      - -type
+      - d
+      - ")"
+      - -perm
+      - /022
+      - -print
+      - -exec
+      - chmod
+      - go-w
+      - --
+      - "{}"
+      - +
+  register: agent_relay_checkout_permissions
+  changed_when: agent_relay_checkout_permissions.stdout | length > 0
+
+- name: Validate configured host toolchains
+  ansible.builtin.command:
+    argv:
+      - "{{ agent_relay_source_root }}/scripts/host-toolchain-check.sh"
+  environment:
+    PATH: "{{ agent_relay_toolchain_path }}"
+    JAVA_HOME: /opt/java/openjdk
+    RUSTUP_HOME: /opt/rust/rustup
+    CARGO_HOME: /opt/rust/cargo
+    TOOLCHAIN_JAVA_HOME: /opt/java/openjdk
+    TOOLCHAIN_GO_ROOT: /usr/local/go
+    TOOLCHAIN_RUST_BIN: /opt/rust/cargo/bin
+    TOOLCHAIN_RUSTUP_HOME: /opt/rust/rustup
+    TOOLCHAIN_RUST_CARGO_HOME: /opt/rust/cargo
+    EXPECTED_NODE_MAJOR: "{{ agent_relay_node_major }}"
+    EXPECTED_JAVA_MAJOR: "{{ agent_relay_java_major }}"
+    EXPECTED_GO_VERSION: "{{ agent_relay_go_version }}"
+    EXPECTED_RUST_TOOLCHAIN: "{{ agent_relay_rust_toolchain }}"
+    EXPECTED_TYPESCRIPT_VERSION: "{{ agent_relay_typescript_version }}"
+    EXPECTED_CODEX_VERSION: "{{ agent_relay_codex_version }}"
+  changed_when: false
+
+- name: Validate runner Docker access
+  become: true
+  become_user: "{{ agent_relay_runner_user }}"
+  ansible.builtin.command:
+    argv:
+      - docker
+      - info
+  environment:
+    HOME: "{{ agent_relay_runner_home }}"
+  changed_when: false
+
+- name: Inspect Docker data root
+  become: true
+  become_user: "{{ agent_relay_runner_user }}"
+  ansible.builtin.command:
+    argv:
+      - docker
+      - info
+      - --format
+      - "{{ '{{.DockerRootDir}}' }}"
+  environment:
+    HOME: "{{ agent_relay_runner_home }}"
+  register: agent_relay_docker_data_root
+  changed_when: false
+
+- name: Verify Docker data root
+  ansible.builtin.assert:
+    that:
+      - agent_relay_docker_data_root.stdout | trim == agent_relay_docker_root
+    fail_msg: Docker uses an unexpected data root.

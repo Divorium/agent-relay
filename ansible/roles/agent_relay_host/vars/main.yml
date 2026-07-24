@@ -17,6 +17,15 @@ agent_relay_runner_home: "{{ agent_relay_storage_root }}/home"
 agent_relay_build_home: "{{ agent_relay_storage_root }}/build-home"
 agent_relay_docker_root: "{{ agent_relay_storage_root }}/docker/engine"
 agent_relay_containerd_root: "{{ agent_relay_storage_root }}/docker/containerd"
+agent_relay_docker_socket_root: "{{ agent_relay_storage_root }}/docker-socket"
+agent_relay_docker_socket_path: "{{ agent_relay_docker_socket_root }}/docker.sock"
+agent_relay_runtime_stage_root: "{{ agent_relay_storage_root }}/.agent-relay-dist-stage"
+agent_relay_runtime_previous_root: "{{ agent_relay_source_root }}/dist.previous"
+agent_relay_runtime_revision_marker: .agent-relay-source-revision
+agent_relay_runner_archive: "/var/tmp/actions-runner-linux-x64-{{ agent_relay_host_contract.runner_version }}.tar.gz"
+agent_relay_lifecycle_root: /var/lib/agent-relay/lifecycle
+agent_relay_lifecycle_lock: "{{ agent_relay_lifecycle_root }}/active"
+agent_relay_toolchain_path: /opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin
 agent_relay_service_name: "actions.runner.{{ agent_relay_host_contract.organization }}.{{ agent_relay_host_contract.runner_name }}.service"
 agent_relay_service_unit: "/etc/systemd/system/{{ agent_relay_service_name }}"
 

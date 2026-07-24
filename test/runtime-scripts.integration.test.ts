@@ -4,6 +4,7 @@ import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/pr
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
+import { createServer } from "node:net";
 
 function runProcess(
   command: string,
@@ -65,6 +66,43 @@ async function copyToolchainProfile(targetDirectory: string): Promise<void> {
   );
 }
 
+async function prepareLauncherRuntime(root: string): Promise<{
+  scripts: string;
+  socketPath: string;
+  closeSocket: () => Promise<void>;
+}> {
+  const scripts = join(root, "scripts");
+  const config = join(root, "config");
+  const socketRoot = join(root, "docker-socket");
+  const socketPath = join(socketRoot, "docker.sock");
+  await mkdir(scripts, { recursive: true });
+  await mkdir(config, { recursive: true });
+  await mkdir(socketRoot, { recursive: true });
+  await copyToolchainProfile(scripts);
+  await writeFile(
+    join(scripts, "host-config.sh"),
+    await readFile(join(process.cwd(), "scripts", "host-config.sh"), "utf8"),
+    { mode: 0o600 },
+  );
+  const hostContract = JSON.parse(await readFile(join(process.cwd(), "config", "runner-host.json"), "utf8")) as Record<string, unknown>;
+  hostContract.base_root = root;
+  hostContract.docker_socket_path = socketPath;
+  await writeFile(join(config, "runner-host.json"), `${JSON.stringify(hostContract, null, 2)}\n`, { mode: 0o600 });
+
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, () => resolve());
+  });
+  return {
+    scripts,
+    socketPath,
+    closeSocket: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    }),
+  };
+}
+
 test("codex-run preserves real state and routes tool state into one private runtime", async () => {
   const root = join(tmpdir(), `agent-relay-codex-run-${process.pid}-${Date.now()}`);
   const home = join(root, "home");
@@ -75,7 +113,8 @@ test("codex-run preserves real state and routes tool state into one private runt
   const unrelatedWorkspace = join(home, "other-workspace", "keep.txt");
   const invocationLog = join(root, "invocation.log");
   const fakeCodex = join(root, "fake-codex");
-  const launcher = join(root, "codex-run");
+  const runtime = await prepareLauncherRuntime(root);
+  const launcher = join(runtime.scripts, "codex-run");
 
   await mkdir(join(home, ".codex"), { recursive: true });
   await mkdir(join(home, ".local", "share", "actions-runner"), { recursive: true });
@@ -110,6 +149,8 @@ set -euo pipefail
   printf 'TMP=%s\n' "\${TMP:-}"
   printf 'TEMP=%s\n' "\${TEMP:-}"
   printf 'DOCKER_CONFIG=%s\n' "\${DOCKER_CONFIG:-}"
+  printf 'DOCKER_HOST=%s\n' "\${DOCKER_HOST:-}"
+  printf 'TOKEN_MINIFY_RUN_LOG_DIR=%s\n' "\${TOKEN_MINIFY_RUN_LOG_DIR:-}"
   printf 'PATH=%s\n' "\${PATH:-}"
   printf 'GIT_OPTIONAL_LOCKS=%s\n' "\${GIT_OPTIONAL_LOCKS:-}"
   printf 'LEAK=%s\n' "\${LEAK_ME:-}"
@@ -117,7 +158,6 @@ set -euo pipefail
 } > "${invocationLog}"
 `, { mode: 0o700 });
   await chmod(fakeCodex, 0o700);
-  await copyToolchainProfile(root);
 
   const launcherSource = (await readFile(join(process.cwd(), "scripts", "codex-run"), "utf8"))
     .replace("/usr/local/bin/codex", fakeCodex);
@@ -165,11 +205,14 @@ set -euo pipefail
     assert.match(invocation, /TMP=.*\/tmp/);
     assert.match(invocation, /TEMP=.*\/tmp/);
     assert.match(invocation, /DOCKER_CONFIG=.*\/docker/);
+    assert.match(invocation, new RegExp(`DOCKER_HOST=unix://${escapeRegExp(runtime.socketPath)}`));
+    assert.match(invocation, /TOKEN_MINIFY_RUN_LOG_DIR=.*\/worker-run/);
     assert.match(invocation, /PATH=\/opt\/java\/openjdk\/bin:\/usr\/local\/go\/bin:\/opt\/rust\/cargo\/bin:\/usr\/local\/bin:\/usr\/bin:\/bin/);
     assert.match(invocation, /GIT_OPTIONAL_LOCKS=0/);
     assert.match(invocation, /LEAK=\n/);
     assert.match(invocation, /ARGS=--model test-model/);
   } finally {
+    await runtime.closeSocket();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -180,11 +223,11 @@ test("codex-run rejects missing authentication before launching Codex", async ()
   const runtimeRoot = join(home, ".cache", "agent-relay-runtime");
   const marker = join(root, "executed");
   const fakeCodex = join(root, "fake-codex");
-  const launcher = join(root, "codex-run");
+  const runtime = await prepareLauncherRuntime(root);
+  const launcher = join(runtime.scripts, "codex-run");
   await mkdir(home, { recursive: true });
   await writeFile(fakeCodex, `#!/bin/bash\nprintf executed > "${marker}"\n`, { mode: 0o700 });
   await chmod(fakeCodex, 0o700);
-  await copyToolchainProfile(root);
   await writeFile(
     launcher,
     (await readFile(join(process.cwd(), "scripts", "codex-run"), "utf8")).replace("/usr/local/bin/codex", fakeCodex),
@@ -201,6 +244,7 @@ test("codex-run rejects missing authentication before launching Codex", async ()
     assert.match(result.stderr, /Codex authentication is missing/);
     await assert.rejects(readFile(marker, "utf8"));
   } finally {
+    await runtime.closeSocket();
     await rm(root, { recursive: true, force: true });
   }
 });

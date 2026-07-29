@@ -153,3 +153,22 @@ test("legacy host installer entrypoints are absent from validation", async () =>
   assert.match(connectionTasks, /argv:\n\s+- bash\n\s+- "\{\{ agent_relay_source_root \}\}\/scripts\/github-connect"/u);
   assert.notEqual(toolchainMetadata.mode & 0o111, 0);
 });
+
+test("host contract pins an explicit Rust toolchain and every target consumers require", async () => {
+  const contract = await json("config/runner-host.json") as { rust_toolchain: string; rust_targets: string[] };
+  assert.match(
+    contract.rust_toolchain,
+    /^\d+\.\d+\.\d+$/,
+    "rust_toolchain must pin an exact version; a moving channel changes the sandbox under running agents",
+  );
+  assert.ok(Array.isArray(contract.rust_targets) && contract.rust_targets.length > 0, "rust_targets must be declared");
+  assert.ok(contract.rust_targets.includes("wasm32-unknown-unknown"), "consumer action packs build for wasm32-unknown-unknown");
+
+  const toolchains = await text("ansible/roles/agent_relay_host/tasks/toolchains.yml");
+  assert.match(
+    toolchains,
+    /rustup", "target", "add"/,
+    "targets must be installed during provisioning; the agent sandbox mounts /opt/rust read-only and cannot install them itself",
+  );
+  assert.match(toolchains, /loop: "\{\{ agent_relay_rust_targets \}\}"/);
+});

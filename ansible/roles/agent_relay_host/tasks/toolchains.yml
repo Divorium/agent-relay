@@ -154,6 +154,16 @@
     RUSTUP_HOME: /opt/rust/rustup
   when: "not agent_relay_rust_active.stdout.startswith(agent_relay_rust_toolchain)"
 
+- name: Install configured Rust targets
+  ansible.builtin.command:
+    argv: ["/opt/rust/cargo/bin/rustup", "target", "add", "--toolchain", "{{ agent_relay_rust_toolchain }}", "{{ item }}"]
+  environment:
+    CARGO_HOME: /opt/rust/cargo
+    RUSTUP_HOME: /opt/rust/rustup
+  loop: "{{ agent_relay_rust_targets }}"
+  register: agent_relay_rust_target_add
+  changed_when: "'is already installed' not in agent_relay_rust_target_add.stdout"
+
 - name: Publish Rust executables
   ansible.builtin.file:
     src: "/opt/rust/cargo/bin/{{ item }}"

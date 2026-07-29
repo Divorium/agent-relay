@@ -10,6 +10,13 @@ import { CodexExecutionError } from "../src/execution/errors.js";
 import { renderRelayLines, splitNormalizedSegments } from "../src/execution/output-renderer.js";
 import { BoundedOutputPump, OrderedInputPump } from "../src/execution/output-pump.js";
 
+// The pump callbacks are typed (error: unknown) => void. assert.fail does not accept
+// unknown as its first argument, so it cannot be passed directly; wrap it so a callback
+// that fires still fails the test with the original error attached.
+const failOnError = (error: unknown): void => {
+  assert.fail(error instanceof Error ? error : new Error(String(error)));
+};
+
 function parseChunks(chunks: Uint8Array[], max?: number): JsonRecord[] {
   const records: JsonRecord[] = [];
   const parser = new JsonlParser(max);
@@ -424,7 +431,7 @@ test("one large normalized value cannot synchronously overfill the bounded queue
   const live = new ControlledWritable();
   const transcript = new MemoryTranscript();
   const fanout = new RedactedFanout(live, transcript, 100_000);
-  const pump = new BoundedOutputPump(fanout, assert.fail, () => undefined, 1024, 512, 256);
+  const pump = new BoundedOutputPump(fanout, failOnError, () => undefined, 1024, 512, 256);
   let settled = false;
   const normalizedValue = Array.from({ length: 200 }, () => `[codex] ${"x".repeat(120)}\n`).join("");
   const producing = pump.enqueue([normalizedValue]).finally(() => { settled = true; });
@@ -446,7 +453,7 @@ test("tagged raw admission pauses a parser burst and preserves ordered identical
   const live = new ControlledWritable();
   const transcript = new MemoryTranscript();
   const fanout = new RedactedFanout(live, transcript, 1_000_000);
-  const output = new BoundedOutputPump(fanout, assert.fail, () => undefined, 512, 256, 128);
+  const output = new BoundedOutputPump(fanout, failOnError, () => undefined, 512, 256, 128);
   const parser = new JsonlParser(1_000_000);
   const normalizer = new CodexEventNormalizer();
   let pauses = 0;
@@ -454,7 +461,7 @@ test("tagged raw admission pauses a parser burst and preserves ordered identical
   const source = { pause() { pauses += 1; }, resume() { resumes += 1; } };
   const input = new OrderedInputPump(output, async (_source, chunk) => {
     for (const event of parser.write(chunk)) await output.enqueue(normalizer.normalize(event));
-  }, assert.fail);
+  }, failOnError);
   const records = Array.from({ length: 40 }, (_, index) => JSON.stringify({
     type: "item.completed",
     item: { id: `burst-${index}`, type: "agent_message", text: `${index}:${"x".repeat(600)}` },

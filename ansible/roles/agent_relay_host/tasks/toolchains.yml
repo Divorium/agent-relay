@@ -164,6 +164,67 @@
   register: agent_relay_rust_target_add
   changed_when: "'is already installed' not in agent_relay_rust_target_add.stdout"
 
+- name: Inspect configured Rust coverage toolchain
+  ansible.builtin.command:
+    argv: ["/opt/rust/cargo/bin/rustup", "toolchain", "list"]
+  environment:
+    CARGO_HOME: /opt/rust/cargo
+    RUSTUP_HOME: /opt/rust/rustup
+  register: agent_relay_rust_coverage_toolchains
+  changed_when: false
+
+- name: Install configured Rust coverage toolchain
+  ansible.builtin.command:
+    argv:
+      - /opt/rust/cargo/bin/rustup
+      - toolchain
+      - install
+      - "{{ agent_relay_rust_coverage_toolchain }}"
+      - --profile
+      - minimal
+  environment:
+    CARGO_HOME: /opt/rust/cargo
+    RUSTUP_HOME: /opt/rust/rustup
+  when: agent_relay_rust_coverage_toolchain not in agent_relay_rust_coverage_toolchains.stdout
+
+- name: Install configured Rust coverage component
+  ansible.builtin.command:
+    argv:
+      - /opt/rust/cargo/bin/rustup
+      - component
+      - add
+      - --toolchain
+      - "{{ agent_relay_rust_coverage_toolchain }}"
+      - "{{ agent_relay_rust_coverage_component }}"
+  environment:
+    CARGO_HOME: /opt/rust/cargo
+    RUSTUP_HOME: /opt/rust/rustup
+  register: agent_relay_rust_coverage_component_add
+  changed_when: "'is up to date' not in ((agent_relay_rust_coverage_component_add.stdout ~ agent_relay_rust_coverage_component_add.stderr) | lower)"
+
+- name: Inspect installed cargo-llvm-cov version
+  ansible.builtin.command:
+    argv: ["/opt/rust/cargo/bin/cargo-llvm-cov", "--version"]
+  register: agent_relay_cargo_llvm_cov_current
+  changed_when: false
+  failed_when: false
+
+- name: Install configured cargo-llvm-cov version
+  ansible.builtin.command:
+    argv:
+      - /opt/rust/cargo/bin/cargo
+      - "+{{ agent_relay_rust_toolchain }}"
+      - install
+      - cargo-llvm-cov
+      - --version
+      - "{{ agent_relay_cargo_llvm_cov_version }}"
+      - --locked
+      - --force
+  environment:
+    CARGO_HOME: /opt/rust/cargo
+    RUSTUP_HOME: /opt/rust/rustup
+  when: (agent_relay_cargo_llvm_cov_current.stdout | trim) != ('cargo-llvm-cov ' ~ agent_relay_cargo_llvm_cov_version)
+
 - name: Publish Rust executables
   ansible.builtin.file:
     src: "/opt/rust/cargo/bin/{{ item }}"

@@ -45,6 +45,14 @@ The Codex launcher continues to expose `/opt/rust` read-only. This plan does not
 
 Keep the exact stable toolchain and WASM target unchanged. Add one exact nightly coverage toolchain, its required LLVM component, and one exact `cargo-llvm-cov` version to `config/runner-host.json`. Install them in `ansible/roles/agent_relay_host/tasks/toolchains.yml` only when missing or mismatched. Pass their expected values to `scripts/host-toolchain-check.sh` from `ansible/roles/agent_relay_host/tasks/deployment-prepare.yml`. Add static tests proving the contract and task order.
 
+## Milestones
+
+Milestone 1 establishes the declarative host contract and installation sequence. At its end, the exact nightly toolchain, LLVM component, and Cargo utility are represented in one checked-in contract and installed by the existing PAT-free host role. The focused static test must prove that the stable toolchain remains unchanged and that coverage installation happens after stable Rust and WASM-target provisioning.
+
+Milestone 2 establishes post-install validation without creating a pre-deployment CI cycle. At its end, `host.yml` passes the expected coverage values to `scripts/host-toolchain-check.sh`, which rejects a missing nightly, component, binary, or version before runtime activation. Ordinary pull-request CI continues to validate the currently deployed host rather than requiring the proposed host state in advance.
+
+Milestone 3 closes repository validation and review. The repository test suite and shell checks must pass on the pull-request head, the final diff must contain no sandbox or workflow permission changes, and the plan must remain active until the target host has executed `host.yml` and produced installed-toolchain evidence.
+
 ## Concrete Steps
 
 Use the repository root as the working directory.
@@ -91,3 +99,5 @@ The host contract adds `rust_coverage_toolchain`, `rust_coverage_component`, and
 ## Plan Revision Notes
 
 2026-08-01 / ChatGPT: Created the active implementation record after confirming that branch coverage requires nightly Rust and that the existing read-only `/opt/rust` boundary is correct.
+
+2026-08-01 / ChatGPT: Added explicit milestones so the plan separately proves provisioning, post-install validation, and repository qualification.

@@ -4,7 +4,7 @@
   "runner_name": "gh-runner",
   "runner_label": "agent-relay",
   "runner_version": "2.335.1",
-  "runner_sha256": "4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf",
+  "runner_sha256": "4ef2f25285f1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf",
   "github_api_version": "2026-03-10",
   "node_major": 22,
   "java_major": 21,
@@ -14,6 +14,9 @@
   "rust_targets": [
     "wasm32-unknown-unknown"
   ],
+  "rust_coverage_toolchain": "nightly-2026-07-31",
+  "rust_coverage_component": "llvm-tools-preview",
+  "cargo_llvm_cov_version": "0.8.6",
   "typescript_version": "5.8.3",
   "codex_version": "0.144.4",
   "base_root": "/srv/github-runner",

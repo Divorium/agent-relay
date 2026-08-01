@@ -96,6 +96,9 @@
     EXPECTED_JAVA_MAJOR: "{{ agent_relay_java_major }}"
     EXPECTED_GO_VERSION: "{{ agent_relay_go_version }}"
     EXPECTED_RUST_TOOLCHAIN: "{{ agent_relay_rust_toolchain }}"
+    EXPECTED_RUST_COVERAGE_TOOLCHAIN: "{{ agent_relay_rust_coverage_toolchain }}"
+    EXPECTED_RUST_COVERAGE_COMPONENT: "{{ agent_relay_rust_coverage_component }}"
+    EXPECTED_CARGO_LLVM_COV_VERSION: "{{ agent_relay_cargo_llvm_cov_version }}"
     EXPECTED_TYPESCRIPT_VERSION: "{{ agent_relay_typescript_version }}"
     EXPECTED_CODEX_VERSION: "{{ agent_relay_codex_version }}"
   changed_when: false

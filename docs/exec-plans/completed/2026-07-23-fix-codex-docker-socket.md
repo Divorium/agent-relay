@@ -221,3 +221,7 @@ Unexpected mode for /srv/github-runner/storage/docker/engine; expected 711
 The final contract uses `0710` for Docker's daemon-owned data root and `0711` for its parent and the containerd root.
 
 No merge is performed by this plan executor.
+
+## Superseded
+
+Retired on 2026-07-30 without completing the remaining checklist items. This plan describes `install.sh` and `update.sh`, which no longer exist: `update.sh` was removed by the Ansible migration in #48 and `install.sh` by the sandbox boundary fix in #58. Deployment and host preparation are now owned by `ansible/`. The unchecked items are moot against the current tree; nothing here should be used as a current instruction. Kept under `completed/` as a historical record per `AGENTS.md`.

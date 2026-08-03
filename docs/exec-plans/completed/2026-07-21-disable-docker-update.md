@@ -44,3 +44,7 @@ The existing Docker provisioner remains in the repository unchanged. This change
 - `node --test dist/test/installer.test.js dist/test/update-regression.test.js`: 19 passed.
 
 The full Node suite was also attempted in the extracted repository snapshot. Eight unrelated executor fixture tests failed because their generated child executables were unavailable in that snapshot environment; all updater-specific and installer-specific tests passed.
+
+## Superseded
+
+Retired on 2026-07-30 without completing the remaining checklist items. This plan describes `install.sh` and `update.sh`, which no longer exist: `update.sh` was removed by the Ansible migration in #48 and `install.sh` by the sandbox boundary fix in #58. Deployment and host preparation are now owned by `ansible/`. The unchecked items are moot against the current tree; nothing here should be used as a current instruction. Kept under `completed/` as a historical record per `AGENTS.md`.

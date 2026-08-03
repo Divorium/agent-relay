@@ -129,3 +129,7 @@ Ansible execution and Ansible linting remain intentionally outside this task. No
 ## Outcomes
 
 The repository contains a complete implementation for preparing a fresh runner host with Ansible and installing or refreshing the runner with one reusable `install.sh`. The remaining operator activities are supplying inventory/public keys, executing the playbook, manually authenticating Codex and supplying a GitHub credential during first runner registration.
+
+## Superseded
+
+Retired on 2026-07-30 without completing the remaining checklist items. This plan describes `install.sh` and `update.sh`, which no longer exist: `update.sh` was removed by the Ansible migration in #48 and `install.sh` by the sandbox boundary fix in #58. Deployment and host preparation are now owned by `ansible/`. The unchecked items are moot against the current tree; nothing here should be used as a current instruction. Kept under `completed/` as a historical record per `AGENTS.md`.

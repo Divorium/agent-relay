@@ -46,7 +46,7 @@ async function createFakeCommand(directory: string, name: string, output?: strin
   const outputs: Record<string, string> = {
     node: "v22.20.0",
     tsc: "Version 5.8.3",
-    codex: "codex-cli 0.144.4",
+    codex: "codex-cli 99.99.99",
     go: "go version go1.24.5 linux/amd64",
     java: 'openjdk version "21.0.1"',
     rustc: "rustc 1.90.0 (mock)",
@@ -249,7 +249,7 @@ test("codex-run rejects missing authentication before launching Codex", async ()
   }
 });
 
-test("toolchain smoke validates retained pins and the complete environment profile", async () => {
+test("toolchain smoke accepts changing Codex versions and validates the complete environment profile", async () => {
   const root = join(tmpdir(), `agent-relay-toolchain-${process.pid}-${Date.now()}`);
   const scripts = join(root, "scripts");
   const bin = join(root, "bin");
@@ -319,7 +319,6 @@ test("toolchain smoke validates retained pins and the complete environment profi
     DOCKER_CONFIG: join(stateRoot, "docker"),
     PATH: `${javaHome}/bin:${goRoot}/bin:${rustCargoHome}/bin:${bin}:/usr/bin:/bin`,
     EXPECTED_TYPESCRIPT_VERSION: "5.8.3",
-    EXPECTED_CODEX_VERSION: "0.144.4",
     EXPECTED_GO_VERSION: "1.24.5",
     EXPECTED_TOOLCHAIN_STATE_ROOT: stateRoot,
     FAKE_COMMAND_LOG: log,
@@ -341,6 +340,7 @@ test("toolchain smoke validates retained pins and the complete environment profi
     }
     assert.equal(await readFile(headLog, "utf8"), "head -n 1\n");
     assert.doesNotMatch(invocations, /^ssh |^dotnet /m);
+    assert.doesNotMatch(invocations, /^codex --version$/m);
     assert.match(invocations, /^rustup show active-toolchain$/m);
     assert.match(invocations, /^codex --ask-for-approval never exec --help$/m);
 

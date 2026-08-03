@@ -73,7 +73,6 @@ node_version="$(node --version)"
 java_version="$(java -version 2>&1 | head -n 1)"
 go_version="$(go version)"
 tsc_version="$(tsc --version)"
-codex_version="$(codex --version)"
 
 [[ "${node_version}" == v"${EXPECTED_NODE_MAJOR}".* ]] || {
   echo "Node.js ${EXPECTED_NODE_MAJOR} is required: ${node_version}" >&2
@@ -89,10 +88,6 @@ codex_version="$(codex --version)"
 }
 [[ "${tsc_version}" == "Version ${EXPECTED_TYPESCRIPT_VERSION}" ]] || {
   echo "Unexpected TypeScript version: ${tsc_version}" >&2
-  exit 1
-}
-[[ "${codex_version}" =~ (^|[[:space:]])${EXPECTED_CODEX_VERSION//./\.}$ ]] || {
-  echo "Unexpected Codex version: ${codex_version}" >&2
   exit 1
 }
 RUSTUP_HOME="${TOOLCHAIN_RUSTUP_HOME}" CARGO_HOME="${TOOLCHAIN_RUST_CARGO_HOME}" \

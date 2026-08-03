@@ -172,3 +172,42 @@ test("host contract pins an explicit Rust toolchain and every target consumers r
   );
   assert.match(toolchains, /loop: "\{\{ agent_relay_rust_targets \}\}"/);
 });
+
+test("host provisions and verifies the exact Rust branch-coverage toolchain", async () => {
+  const contract = await json("config/runner-host.json") as {
+    rust_coverage_toolchain: string;
+    rust_coverage_component: string;
+    cargo_llvm_cov_version: string;
+  };
+  const vars = await text("ansible/roles/agent_relay_host/vars/main.yml");
+  const toolchains = await text("ansible/roles/agent_relay_host/tasks/toolchains.yml");
+  const deploymentPrepare = await text("ansible/roles/agent_relay_host/tasks/deployment-prepare.yml");
+  const hostCheck = await text("scripts/host-toolchain-check.sh");
+
+  assert.equal(contract.rust_coverage_toolchain, "nightly-2026-07-31");
+  assert.equal(contract.rust_coverage_component, "llvm-tools-preview");
+  assert.equal(contract.cargo_llvm_cov_version, "0.8.6");
+
+  assert.match(vars, /agent_relay_rust_coverage_toolchain:/u);
+  assert.match(vars, /agent_relay_rust_coverage_component:/u);
+  assert.match(vars, /agent_relay_cargo_llvm_cov_version:/u);
+
+  const installToolchain = toolchains.indexOf("name: Install configured Rust coverage toolchain");
+  const installComponent = toolchains.indexOf("name: Install configured Rust coverage component");
+  const inspectCargoLlvmCov = toolchains.indexOf("name: Inspect installed cargo-llvm-cov version");
+  const installCargoLlvmCov = toolchains.indexOf("name: Install configured cargo-llvm-cov version");
+  assert.ok(installToolchain >= 0);
+  assert.ok(installComponent > installToolchain);
+  assert.ok(inspectCargoLlvmCov > installComponent);
+  assert.ok(installCargoLlvmCov > inspectCargoLlvmCov);
+  assert.match(toolchains, /rustup\n\s+- toolchain\n\s+- install[\s\S]*agent_relay_rust_coverage_toolchain/u);
+  assert.match(toolchains, /rustup\n\s+- component\n\s+- add[\s\S]*agent_relay_rust_coverage_component/u);
+  assert.match(toolchains, /cargo-llvm-cov[\s\S]*agent_relay_cargo_llvm_cov_version[\s\S]*--locked[\s\S]*--force/u);
+
+  assert.match(deploymentPrepare, /EXPECTED_RUST_COVERAGE_TOOLCHAIN:/u);
+  assert.match(deploymentPrepare, /EXPECTED_RUST_COVERAGE_COMPONENT:/u);
+  assert.match(deploymentPrepare, /EXPECTED_CARGO_LLVM_COV_VERSION:/u);
+  assert.match(hostCheck, /cargo-llvm-cov/u);
+  assert.match(hostCheck, /rustup toolchain list/u);
+  assert.match(hostCheck, /rustup component list --toolchain/u);
+});

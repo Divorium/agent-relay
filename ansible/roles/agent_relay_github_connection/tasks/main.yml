@@ -8,6 +8,7 @@
       Self-hosted runners: write permission before running playbooks/github-connect.yml.
 
 - name: Inspect prepared runner files
+  become: true
   ansible.builtin.stat:
     path: "{{ item }}"
     follow: false
@@ -35,6 +36,7 @@
     fail_msg: Run playbooks/host.yml before connecting the runner to GitHub.
 
 - name: Inspect runner registration files
+  become: true
   ansible.builtin.stat:
     path: "{{ agent_relay_runner_root }}/{{ item }}"
     follow: false
@@ -117,6 +119,7 @@
   when: agent_relay_connection_registration_state == 'absent'
 
 - name: Protect runner registration files
+  become: true
   ansible.builtin.file:
     path: "{{ agent_relay_runner_root }}/{{ item }}"
     state: file
@@ -130,6 +133,7 @@
   no_log: true
 
 - name: Enable and start runner listener
+  become: true
   ansible.builtin.systemd_service:
     name: "{{ agent_relay_service_name }}"
     enabled: true

@@ -2,7 +2,7 @@
 - name: Connect a prepared Agent Relay host to GitHub
   hosts: agent_relay
   gather_facts: false
-  become: true
+  become: false
 
   roles:
     - role: agent_relay_github_connection

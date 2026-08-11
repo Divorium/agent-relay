@@ -13,11 +13,12 @@ The same change must leave the complete `ansible/` tree consistent with Ansible'
 ## Progress
 
 - [x] (2026-08-11 19:59Z) Read the complete `.agent/PLANS.md`, PR #65 diff, repository instructions, every file under `ansible/`, and every repository script directly invoked by Ansible.
-- [ ] Remove the duplicate host toolchain validation path while retaining the required latest-Codex installation behavior.
-- [ ] Reconcile the remaining PR #65 Ansible changes against the necessity rules in this plan, including privilege scope and deletion of completed one-time work.
-- [ ] Reduce tests and documentation to the contracts required by this plan.
-- [ ] Run local Ansible and repository validation.
-- [ ] Run the real host acceptance scenario twice and record the observed recaps and listener state.
+- [x] (2026-08-11 20:10Z) Removed the duplicate host toolchain validation path while retaining the required latest-Codex installation behavior.
+- [x] (2026-08-11 20:10Z) Reconciled the remaining PR #65 Ansible changes against the necessity rules in this plan, restored task-scoped privilege escalation, and deleted the completed one-time workspace playbook.
+- [x] (2026-08-11 20:10Z) Reduced tests and documentation to the durable host, workspace, and GitHub-connection contracts required by this plan.
+- [x] (2026-08-11 20:10Z) Ran `ansible-playbook --syntax-check` for both permanent playbooks, the focused Node contract test, shell syntax checks, and JSON parsing successfully.
+- [ ] (blocked: the connector-provided local repository surface does not contain the complete TypeScript source, lockfile, or build configuration) Run the complete `npm run check` command from a full repository checkout.
+- [ ] (blocked: this execution environment has no real `runner-host` inventory, SSH access, or privilege) Run the real host acceptance scenario twice and record the observed recaps and listener state.
 
 ## Surprises & Discoveries
 
@@ -32,6 +33,12 @@ The same change must leave the complete `ansible/` tree consistent with Ansible'
 
 - Observation: `ansible/playbooks/replace-runner-workspace.yml` performed a one-time replacement that has already been executed on the installed host. It is not part of the permanent desired state.
   Evidence: The permanent role already declares `runner/_work` as a real `github-runner`-owned directory in `ansible/roles/agent_relay_host/tasks/filesystem.yml`.
+
+- Observation: The available local repository surface contains the complete Ansible tree and directly related scripts, configuration, documentation, and focused test, but not the complete TypeScript application checkout needed by `npm run check`.
+  Evidence: Both permanent playbooks pass `ansible-core 2.19.12` syntax checking and the three focused contract tests pass, while the missing application files prevent a truthful complete repository check in this environment.
+
+- Observation: This execution environment has no real `runner-host` inventory or SSH path to the installed host.
+  Evidence: Only `ansible/inventory/example.ini` is available locally, so the required two live `host.yml` runs and listener-state observation cannot be executed without inventing a substitute forbidden by this plan.
 
 ## Decision Log
 
@@ -65,7 +72,9 @@ The same change must leave the complete `ansible/` tree consistent with Ansible'
 
 ## Outcomes & Retrospective
 
-Implementation has not started under this ExecPlan. At completion, record whether both live `host.yml` runs succeeded, whether the second run was stable, whether the registered listener remained active, and any remaining command task that could not be represented by an `ansible.builtin` module.
+The repository implementation is complete at the current working head: host provisioning no longer invokes the duplicate toolchain validator, Codex remains an unconditional `@openai/codex@latest` npm reconciliation, GitHub connection privilege escalation is task-scoped, and the completed workspace migration entrypoint is removed. Both permanent playbooks pass `ansible-core 2.19.12` syntax checking, and the three focused repository contract tests pass.
+
+Acceptance remains incomplete. The available repository surface cannot run the full `npm run check`, and this environment has no real host inventory or SSH access for the required two live `host.yml` runs and listener-state check. No mock, regex-only substitute, GitHub Actions workflow change, or operator-assigned validation was introduced.
 
 ## Context and Orientation
 

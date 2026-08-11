@@ -45,20 +45,6 @@ All host deployment behavior is expressed as Ansible tasks and templates. The ho
 
 Ansible owns the checkout and deployment lifecycle. Do not manually clone, pull, edit Docker systemd drop-ins, replace runner binaries, register the runner, or mutate runtime directories on the target.
 
-## One-time runner workspace replacement
-
-Hosts installed before this change require one explicit replacement of the old workspace layout. Run this playbook once before the next `host.yml` deployment:
-
-```bash
-ANSIBLE_CONFIG="$PWD/ansible.cfg" \
-ANSIBLE_ROLES_PATH="$PWD/roles" \
-ansible-playbook \
-  --inventory "$PWD/inventory/runners.ini" \
-  "$PWD/playbooks/replace-runner-workspace.yml"
-```
-
-The playbook stops the runner service, removes `runner/_work` and the disposable `storage/work` tree, creates a real `runner/_work` directory, and starts the service. The playbook is temporary and can be removed after all installed hosts have completed this replacement.
-
 ## One-time GitHub connection
 
 After `host.yml` succeeds, export an organization credential:

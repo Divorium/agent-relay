@@ -57,7 +57,7 @@ ansible-playbook \
   "$PWD/playbooks/replace-runner-workspace.yml"
 ```
 
-The playbook acquires the lifecycle lock, stops the listener, waits for active `Runner.Worker` processes, removes only the managed `runner/_work -> ../work` link, creates the real `runner/_work` directory, deletes the disposable `storage/work` tree, and restores the listener when it was previously active. The playbook is temporary and can be removed after all installed hosts have completed this replacement.
+The playbook stops the runner service, removes `runner/_work` and the disposable `storage/work` tree, creates a real `runner/_work` directory, and starts the service. The playbook is temporary and can be removed after all installed hosts have completed this replacement.
 
 ## One-time GitHub connection
 

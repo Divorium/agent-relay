@@ -1,8 +1,8 @@
 ---
-- name: Replace the legacy Agent Relay runner workspace
+- name: Replace runner workspace symlink with a real directory
   hosts: agent_relay
   gather_facts: false
-  become: false
+  become: true
 
   vars:
     runner_workspace_contract: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../config/runner-host.json') | from_json }}"
@@ -12,122 +12,32 @@
     runner_workspace_obsolete_path: "{{ runner_workspace_storage_root }}/work"
     runner_workspace_user: "{{ runner_workspace_contract.runner_user }}"
     runner_workspace_service_name: "actions.runner.{{ runner_workspace_contract.organization }}.{{ runner_workspace_contract.runner_name }}.service"
-    runner_workspace_lifecycle_root: /var/lib/agent-relay/lifecycle
-    runner_workspace_lifecycle_lock: "{{ runner_workspace_lifecycle_root }}/active"
 
   tasks:
-    - name: Inspect Agent Relay lifecycle lock root
-      become: true
-      ansible.builtin.stat:
-        path: "{{ runner_workspace_lifecycle_root }}"
-        follow: false
-      register: runner_workspace_lifecycle_root_state
+    - name: Stop runner listener
+      ansible.builtin.systemd_service:
+        name: "{{ runner_workspace_service_name }}"
+        state: stopped
 
-    - name: Verify Agent Relay lifecycle lock root
-      ansible.builtin.assert:
-        that:
-          - runner_workspace_lifecycle_root_state.stat.exists
-          - runner_workspace_lifecycle_root_state.stat.isdir
-          - not runner_workspace_lifecycle_root_state.stat.islnk
-          - runner_workspace_lifecycle_root_state.stat.pw_name == 'root'
-          - runner_workspace_lifecycle_root_state.stat.gr_name == 'root'
-          - runner_workspace_lifecycle_root_state.stat.mode == '0755'
-        fail_msg: Run ansible/playbooks/host.yml before replacing the runner workspace.
+    - name: Remove runner workspace symlink
+      ansible.builtin.file:
+        path: "{{ runner_workspace_path }}"
+        state: absent
 
-    - name: Acquire Agent Relay lifecycle lock
-      become: true
-      ansible.builtin.command:
-        argv:
-          - /usr/bin/mkdir
-          - "{{ runner_workspace_lifecycle_lock }}"
-      changed_when: true
+    - name: Remove obsolete runner workspace
+      ansible.builtin.file:
+        path: "{{ runner_workspace_obsolete_path }}"
+        state: absent
 
-    - name: Replace runner workspace under the lifecycle lock
-      block:
-        - name: Inspect legacy runner workspace link
-          become: true
-          ansible.builtin.stat:
-            path: "{{ runner_workspace_path }}"
-            follow: false
-          register: runner_workspace_legacy_link
+    - name: Create runner workspace directory
+      ansible.builtin.file:
+        path: "{{ runner_workspace_path }}"
+        state: directory
+        owner: "{{ runner_workspace_user }}"
+        group: "{{ runner_workspace_user }}"
+        mode: "0700"
 
-        - name: Verify legacy runner workspace link
-          ansible.builtin.assert:
-            that:
-              - runner_workspace_legacy_link.stat.exists
-              - runner_workspace_legacy_link.stat.islnk
-              - runner_workspace_legacy_link.stat.lnk_target == '../work'
-            fail_msg: The runner workspace is not the managed legacy ../work link.
-
-        - name: Inspect runner listener state
-          become: true
-          ansible.builtin.command:
-            argv:
-              - systemctl
-              - is-active
-              - --quiet
-              - "{{ runner_workspace_service_name }}"
-          register: runner_workspace_service_state
-          changed_when: false
-          failed_when: false
-
-        - name: Stop runner listener
-          become: true
-          ansible.builtin.systemd_service:
-            name: "{{ runner_workspace_service_name }}"
-            state: stopped
-          when: runner_workspace_service_state.rc == 0
-
-        - name: Wait for active runner jobs to finish
-          become: true
-          ansible.builtin.shell: |
-            set -o pipefail
-            runner_uid="$(id -u "${RUNNER_USER}")"
-            ! ps -e -o euid=,comm= | awk -v uid="${runner_uid}" '$1 == uid && $2 == "Runner.Worker" { found=1 } END { exit !found }'
-          args:
-            executable: /bin/bash
-          environment:
-            RUNNER_USER: "{{ runner_workspace_user }}"
-          register: runner_workspace_worker_state
-          changed_when: false
-          until: runner_workspace_worker_state.rc == 0
-          retries: 150
-          delay: 2
-
-        - name: Remove legacy runner workspace link
-          become: true
-          ansible.builtin.file:
-            path: "{{ runner_workspace_path }}"
-            state: absent
-
-        - name: Create runner workspace directory
-          become: true
-          ansible.builtin.file:
-            path: "{{ runner_workspace_path }}"
-            state: directory
-            owner: "{{ runner_workspace_user }}"
-            group: "{{ runner_workspace_user }}"
-            mode: "0700"
-            follow: false
-
-        - name: Remove obsolete runner workspace
-          become: true
-          ansible.builtin.file:
-            path: "{{ runner_workspace_obsolete_path }}"
-            state: absent
-
-      always:
-        - name: Restore runner listener
-          become: true
-          ansible.builtin.systemd_service:
-            name: "{{ runner_workspace_service_name }}"
-            state: started
-          when:
-            - runner_workspace_service_state is defined
-            - runner_workspace_service_state.rc == 0
-
-        - name: Release Agent Relay lifecycle lock
-          become: true
-          ansible.builtin.file:
-            path: "{{ runner_workspace_lifecycle_lock }}"
-            state: absent
+    - name: Start runner listener
+      ansible.builtin.systemd_service:
+        name: "{{ runner_workspace_service_name }}"
+        state: started

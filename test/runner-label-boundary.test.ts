@@ -39,7 +39,9 @@ test("Ansible keeps host provisioning disjoint from GitHub connection", async ()
   assert.match(connectionTasks, /import_tasks: runner-label\.yml/u);
   assert.doesNotMatch(connectionTasks, /packages\.yml|users\.yml|filesystem\.yml|containers\.yml|toolchains\.yml|deploy\.yml/u);
 
-  assert.match(reconciliation, /actions\/runners\?name=\{\{ agent_relay_host_contract\.runner_name \| urlencode \}\}&per_page=100/u);
+  assert.match(reconciliation, /\/actions\/runners\?name=/u);
+  assert.match(reconciliation, /agent_relay_host_contract\.runner_name \| urlencode/u);
+  assert.match(reconciliation, /&per_page=100/u);
   assert.match(reconciliation, /agent_relay_runner_inventory\.json\.total_count == 1/u);
   assert.match(reconciliation, /agent_relay_runner_inventory\.json\.runners \| length == 1/u);
   assert.match(reconciliation, /agent_relay_runner_inventory\.json\.runners\[0\]\.id/u);

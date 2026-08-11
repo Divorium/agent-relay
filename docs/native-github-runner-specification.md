@@ -67,8 +67,8 @@ It never installs or updates host packages, Docker, toolchains, runner binaries,
 ```text
 /srv/github-runner/storage/agent-relay  administrator-owned source; root-owned dist
 /srv/github-runner/storage/agent-relay/dist/.agent-relay-source-revision
-/srv/github-runner/storage/work         github-runner-owned workflow workspaces
 /srv/github-runner/storage/runner       official GitHub Actions runner
+/srv/github-runner/storage/runner/_work github-runner-owned workflow workspaces
 /srv/github-runner/storage/home         github-runner home and Codex authentication
 /srv/github-runner/storage/build-home   builder home and temporary build state
 /srv/github-runner/storage/docker/engine
@@ -78,7 +78,7 @@ It never installs or updates host packages, Docker, toolchains, runner binaries,
 /var/lib/agent-relay/lifecycle/active
 ```
 
-`/srv/github-runner/storage/runner/_work` is a managed symlink to `../work`. `dist.previous` exists only during a successful swap or interrupted recovery. The runtime revision marker contains the exact 40-character source commit used to build the active `dist` tree.
+`/srv/github-runner/storage/runner/_work` is a real directory, not a symlink. `dist.previous` exists only during a successful swap or interrupted recovery. The runtime revision marker contains the exact 40-character source commit used to build the active `dist` tree.
 
 The Docker storage parent and containerd root are `root:root` mode `0711`. The daemon-owned Docker data root is `root:root` mode `0710`; Ansible declares this post-startup state rather than restoring a conflicting pre-startup mode.
 
@@ -90,7 +90,7 @@ The Docker storage parent and containerd root are `root:root` mode `0711`. The d
 - `github-runner` belongs to `docker`; this is intentional root-equivalent host trust.
 - Activated runtime files are `root:root`; directories are `0755`, and regular files are `0644`.
 
-Ansible changes only declared host paths and checkout permissions. It does not recursively rewrite runner-generated registration state, workspaces, runner home, Docker data, or activated runtime contents outside a controlled deployment transaction.
+Ansible changes only declared host paths and checkout permissions. During reconciliation it removes the obsolete `/srv/github-runner/storage/work` workspace path after the listener is stopped and workers are drained. Runner registration, runner home, Docker data, and activated runtime contents remain outside that disposable workspace.
 
 ## Lifecycle mutual exclusion
 
@@ -157,7 +157,7 @@ On every required host deployment, the host role:
 
 1. acquires the lifecycle lock;
 2. stops an active listener and waits for `Runner.Worker` processes;
-3. reconciles source, runner payload, service unit, toolchains, and Docker state;
+3. reconciles source, runner payload, the real `_work` directory, service unit, toolchains, and Docker state;
 4. rejects unresolved `dist.previous`;
 5. removes only a validated non-mounted stage path;
 6. creates a private stage owned by `agent-relay-builder`;

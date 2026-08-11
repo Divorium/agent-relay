@@ -65,32 +65,31 @@
         | length == 5
     fail_msg: GitHub Runner payload is incomplete or unsafe after reconciliation.
 
-- name: Inspect runner work link
+- name: Inspect runner work path before reconciliation
   ansible.builtin.stat:
-    path: "{{ agent_relay_runner_root }}/_work"
+    path: "{{ agent_relay_work_root }}"
     follow: false
-  register: agent_relay_runner_work_link
+  register: agent_relay_runner_work_path
 
-- name: Reject conflicting runner work path
-  ansible.builtin.assert:
-    that:
-      - >-
-        not agent_relay_runner_work_link.stat.exists
-        or (
-          agent_relay_runner_work_link.stat.islnk | default(false)
-          and agent_relay_runner_work_link.stat.lnk_target == '../work'
-        )
-    fail_msg: Runner work path must be the managed ../work symlink.
-
-- name: Create runner work link
+- name: Remove runner work symlink
   ansible.builtin.file:
-    src: ../work
-    dest: "{{ agent_relay_runner_root }}/_work"
-    state: link
-    follow: false
+    path: "{{ agent_relay_work_root }}"
+    state: absent
+  when: agent_relay_runner_work_path.stat.islnk | default(false)
+
+- name: Create real runner work directory
+  ansible.builtin.file:
+    path: "{{ agent_relay_work_root }}"
+    state: directory
     owner: "{{ agent_relay_runner_user }}"
     group: "{{ agent_relay_runner_user }}"
-  when: not agent_relay_runner_work_link.stat.exists
+    mode: "0700"
+    recurse: false
+
+- name: Remove obsolete runner workspace path
+  ansible.builtin.file:
+    path: "{{ agent_relay_obsolete_work_root }}"
+    state: absent
 
 - name: Install runner systemd unit
   ansible.builtin.template:

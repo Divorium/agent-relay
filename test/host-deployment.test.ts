@@ -67,6 +67,41 @@ test("host lifecycle uses one credential-free mutual exclusion boundary", async 
   assert.doesNotMatch(connection, /install\.lock|flock/u);
 });
 
+test("runner workspaces use one real directory reconciled after listener drain", async () => {
+  const vars = await text("ansible/roles/agent_relay_host/vars/main.yml");
+  const filesystem = await text("ansible/roles/agent_relay_host/tasks/filesystem.yml");
+  const deploy = await text("ansible/roles/agent_relay_host/tasks/deploy.yml");
+  const prepare = await text("ansible/roles/agent_relay_host/tasks/deployment-prepare.yml");
+  const runner = await text("ansible/roles/agent_relay_host/tasks/runner-installation.yml");
+  const connection = await text("scripts/github-connect");
+  const transaction = `${prepare}\n${runner}`;
+
+  assert.match(vars, /agent_relay_work_root: "\{\{ agent_relay_runner_root \}\}\/_work"/u);
+  assert.match(vars, /agent_relay_obsolete_work_root: "\{\{ agent_relay_storage_root \}\}\/work"/u);
+  assert.doesNotMatch(filesystem, /agent_relay_work_root/u);
+  assert.match(deploy, /name: Inspect runner work directory/u);
+  assert.match(deploy, /name: Inspect obsolete runner work path/u);
+  assert.match(deploy, /or \(agent_relay_obsolete_work_path\.stat\.exists \| default\(false\)\)/u);
+
+  const stop = transaction.indexOf("name: Stop runner listener before host mutation");
+  const drain = transaction.indexOf("name: Wait for active runner jobs to finish");
+  const inspect = transaction.indexOf("name: Inspect runner work path before reconciliation");
+  const unlink = transaction.indexOf("name: Remove runner work symlink");
+  const create = transaction.indexOf("name: Create real runner work directory");
+  const removeObsolete = transaction.indexOf("name: Remove obsolete runner workspace path");
+
+  assert.ok(stop >= 0);
+  assert.ok(drain > stop);
+  assert.ok(inspect > drain);
+  assert.ok(unlink > inspect);
+  assert.ok(create > unlink);
+  assert.ok(removeObsolete > create);
+  assert.doesNotMatch(runner, /state: link|src: \.\.\/work/u);
+  assert.match(connection, /RUNNER_WORK_DIR=\$\{RUNNER_DIR\}\/_work/u);
+  assert.match(connection, /Runner work directory must not be a symlink/u);
+  assert.match(connection, /Obsolete runner work path remains/u);
+});
+
 test("Docker data directories declare the daemon-owned final modes", async () => {
   const filesystem = await text("ansible/roles/agent_relay_host/tasks/filesystem.yml");
 

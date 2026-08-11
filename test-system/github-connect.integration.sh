@@ -25,12 +25,13 @@ mkdir -p \
   "${source_root}/scripts" \
   "${source_root}/dist/src" \
   "${runner_root}/bin" \
+  "${runner_root}/_work" \
   "${runner_home}" \
   "${lifecycle_root}" \
   "${service_root}" \
   "${fake_bin}" \
   "${state_root}"
-chmod 0700 "${runner_root}" "${runner_home}"
+chmod 0700 "${runner_root}" "${runner_root}/_work" "${runner_home}"
 chmod 0755 "${lifecycle_root}"
 
 cp "${repository_root}/config/runner-host.json" "${source_root}/config/runner-host.json"
@@ -171,10 +172,29 @@ if run_connection first-token; then
 fi
 mv "${source_root}/dist/src/run-codex.js.missing" "${source_root}/dist/src/run-codex.js"
 
+mv "${runner_root}/_work" "${runner_root}/_work.real"
+mkdir "${storage_root}/work"
+ln -s ../work "${runner_root}/_work"
+if run_connection symlink-token; then
+  echo 'GitHub connection unexpectedly accepted a symlinked runner work directory' >&2
+  exit 1
+fi
+rm "${runner_root}/_work"
+rmdir "${storage_root}/work"
+mv "${runner_root}/_work.real" "${runner_root}/_work"
+
+mkdir "${storage_root}/work"
+if run_connection obsolete-work-token; then
+  echo 'GitHub connection unexpectedly accepted the obsolete runner work directory' >&2
+  exit 1
+fi
+rmdir "${storage_root}/work"
+
 run_connection first-token
 [[ -f "${state_root}/service-active" ]]
 [[ "$(grep -c registration-token "${state_root}/curl.log")" == 1 ]]
 [[ "$(wc -l < "${state_root}/config.log")" == 1 ]]
+grep -q -- '--work _work' "${state_root}/config.log"
 [[ -f "${runner_root}/.runner" ]]
 [[ "$(stat -c '%a' -- "${runner_root}/.runner")" == 600 ]]
 [[ ! -e "${lifecycle_root}/active" ]]

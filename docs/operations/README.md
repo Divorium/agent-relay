@@ -155,6 +155,8 @@ The host role previews repository reconciliation before changing the target. It 
 
 When deployment is required, it acquires the lifecycle lock, stops an active listener, drains `Runner.Worker` processes, updates the checkout, verifies toolchains and Docker, reconciles runner binaries and the systemd unit, builds a private runtime stage in a clean environment, records the checked-out source revision, imports the entrypoint, rejects special files, finalizes exact owner and mode postconditions, and performs an atomic directory swap.
 
+The host role reconciles `runner/_work` as a real `github-runner:github-runner` mode `0700` directory. After listener stop and worker drain, it removes any existing `_work` symlink, creates the directory, and removes the obsolete `storage/work` path. Workflow checkouts are disposable; runner registration, credentials, home, and Codex authentication are stored elsewhere and remain unchanged.
+
 A build or import failure leaves the active runtime unchanged. An activation failure restores `dist.previous` when possible. When a previously active registered listener was stopped and deployment fails before replacement, Ansible restarts the preserved listener when the old runtime remains valid. A later run detects the old runtime marker and retries the failed build.
 
 The Docker role keeps `/run/docker.sock` and adds `/srv/github-runner/storage/docker-socket/docker.sock`. When listener configuration changes, it stops `docker.service`, restarts `docker.socket`, and then starts Docker so `dockerd -H fd://` receives both descriptors.
@@ -201,8 +203,8 @@ When the dedicated socket is missing or stale, rerun `host.yml`. Do not create a
 ```text
 /srv/github-runner/storage/agent-relay
 /srv/github-runner/storage/agent-relay/dist/.agent-relay-source-revision
-/srv/github-runner/storage/work
 /srv/github-runner/storage/runner
+/srv/github-runner/storage/runner/_work
 /srv/github-runner/storage/home
 /srv/github-runner/storage/build-home
 /srv/github-runner/storage/docker/engine

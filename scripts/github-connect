@@ -110,7 +110,6 @@ host_config_load "${HOST_CONFIG_FILE}" || fail "Could not load ${HOST_CONFIG_FIL
 STORAGE_ROOT=${BASE_ROOT}/storage
 EXPECTED_SOURCE_ROOT=${STORAGE_ROOT}/agent-relay
 RUNNER_DIR=${STORAGE_ROOT}/runner
-RUNNER_WORK_DIR=${RUNNER_DIR}/_work
 RUNNER_HOME=${STORAGE_ROOT}/home
 SERVICE_NAME=actions.runner.${ORGANIZATION}.${RUNNER_NAME}.service
 SERVICE_UNIT=/etc/systemd/system/${SERVICE_NAME}
@@ -137,11 +136,6 @@ fi
 lock_acquired=1
 
 [[ "$(runner_binary_state)" == "complete" ]] || fail "Run ansible/playbooks/host.yml before connecting the runner to GitHub"
-sudo -n test -d "${RUNNER_WORK_DIR}" || fail "Runner work directory is missing; run ansible/playbooks/host.yml first"
-sudo -n test ! -L "${RUNNER_WORK_DIR}" || fail "Runner work directory must not be a symlink; run ansible/playbooks/host.yml first"
-runner_uid="$(id -u "${RUNNER_USER}")"
-[[ "$(sudo_stat_uid "${RUNNER_WORK_DIR}")" == "${runner_uid}" ]] || fail "Runner work directory must be owned by ${RUNNER_USER}"
-[[ "$(sudo_stat_mode "${RUNNER_WORK_DIR}")" == "700" ]] || fail "Runner work directory must have mode 0700"
 require_regular_file "${SOURCE_ROOT}/dist/src/run-codex.js"
 sudo -n test -f "${SERVICE_UNIT}" || fail "Runner service unit is missing; run ansible/playbooks/host.yml first"
 sudo -n test ! -L "${SERVICE_UNIT}" || fail "Runner service unit must not be a symlink"

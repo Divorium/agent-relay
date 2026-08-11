@@ -8,7 +8,7 @@ Maintain this document in accordance with `.agent/PLANS.md` from the repository 
 
 Running `ansible/playbooks/host.yml` must reconcile the Agent Relay host without rejecting an otherwise valid installation because a second script has its own version contract. In particular, an installed Codex CLI version such as `codex-cli 0.146.0` must not cause provisioning to fail. Every `host.yml` run must ask npm to install `@openai/codex@latest`, and the npm task result must be the only host-provisioning result for that installation.
 
-The same change must leave the complete `ansible/` tree consistent with Ansible's desired-state model. Native `ansible.builtin` modules own files, packages, users, services, templates, downloads, and other state they can represent. Commands remain only for tools without a suitable built-in module or for the existing atomic runtime directory swap. Those commands must have task-local conditions or accurate changed-state handling. The result is observable by running the normal host playbook twice: both runs succeed, the toolchain validator task is absent, the second run does not report false drift when external package state has not changed, and the registered runner listener remains active.
+The same change must leave the complete `ansible/` tree consistent with Ansible's desired-state model. Native `ansible.builtin` modules own files, packages, users, services, templates, downloads, and other state they can represent. Commands remain only for tools without a suitable built-in module or for the existing atomic runtime directory swap. Those commands must have task-local conditions or accurate changed-state handling. The result is observable by running the normal host playbook twice: both runs succeed, the toolchain validator task is absent, the second run does not report false drift when external package state has not changed, and the registered runner listener remains active. Repository CI must validate that implementation without invoking scripts deleted by this plan.
 
 ## Progress
 
@@ -23,6 +23,9 @@ The same change must leave the complete `ansible/` tree consistent with Ansible'
 - [x] (2026-08-12 10:47Z) Ran `ansible-lint` across the complete Ansible tree at the `production` profile with only `var-naming` excluded to preserve the existing public `agent_relay_*` variable contract.
 - [x] (2026-08-12 11:02Z) Corrected the follow-up operational audit: interrupted runner and Go activations now recover preserved payloads before another update, failed version probes trigger repair, Java resolves the configured Temurin major directly, repository keys are activated only after staged fingerprint validation, and Docker socket changes use a controlled Docker stop/socket restart/Docker start sequence.
 - [x] (2026-08-12 11:02Z) Re-ran both playbook syntax checks, all three focused contract tests, JSON parsing, and `ansible-lint` 25.12.2 across the complete Ansible tree at the `production` profile with only `var-naming` excluded.
+- [x] (2026-08-12 12:25Z) Corrected three repository tests that still asserted the deleted GitHub connection wrapper, pre-handler Docker socket sequence, old task names, and removed runner filtering implementation.
+- [x] (2026-08-12 12:25Z) Removed the dead `check:system` CI step after the corresponding package script and dedicated shell integration test were deleted by this plan.
+- [x] (2026-08-12 12:30Z) Verified TypeScript syntax for the three corrected test files and executed their changed contract assertions against the current Ansible, workflow, and package files.
 - [ ] (blocked: the connector-provided local repository surface does not contain the complete TypeScript source, lockfile, or build configuration) Run the complete `npm run check` command from a full repository checkout.
 - [ ] (blocked: this execution environment has no real `runner-host` inventory, SSH access, or privilege) Run the real host acceptance scenario twice and record the observed recaps and listener state.
 
@@ -64,6 +67,9 @@ The same change must leave the complete `ansible/` tree consistent with Ansible'
 - Observation: Validating a repository key after writing it to `/etc/apt/keyrings` protects the current run but not the host's last known-good APT configuration.
   Evidence: `packages.yml` now downloads all three keys below root-only `/var/tmp/agent-relay-apt-keys`, validates every configured fingerprint, and only then copies any key into `/etc/apt/keyrings`.
 
+- Observation: The existing CI test suite retained assertions for files and implementation details deleted or moved by this plan, and the workflow retained a call to the removed `check:system` package script.
+  Evidence: GitHub Actions run 31545192774 job 93956044348 completed checkout, dependency installation, and typechecking, then reported three failed tests after 120 passed; `.github/workflows/ci.yml` would subsequently invoke `npm run check:system`, which no longer exists in `package.json`.
+
 ## Decision Log
 
 - Decision: Remove `scripts/host-toolchain-check.sh` from host provisioning instead of weakening or repairing its Codex comparison.
@@ -94,6 +100,10 @@ The same change must leave the complete `ansible/` tree consistent with Ansible'
   Rationale: The reported failure and the desired-state correction are entirely inside host provisioning. Existing local repository commands and the real Ansible entrypoint provide the required proof.
   Date/Author: 2026-08-11 / Codex
 
+- Decision: Supersede the blanket workflow restriction only to remove the dead `check:system` step and its failure-artifact upload.
+  Rationale: This plan deleted the package script and its dedicated integration test. Retaining a workflow invocation of the deleted command guarantees a CI failure and does not provide validation. No runner, trigger, permission, or remaining validation behavior changes.
+  Date/Author: 2026-08-12 / Codex
+
 - Decision: Do not represent runner or deployment state with calculated enums, aggregate booleans, filtered copies of API results, or ternary service states.
   Rationale: Registered module results already expose the required local state. Direct task conditions are easier to audit and avoid a second state model inside the playbook.
   Date/Author: 2026-08-11 / Codex
@@ -120,9 +130,9 @@ The same change must leave the complete `ansible/` tree consistent with Ansible'
 
 ## Outcomes & Retrospective
 
-The repository implementation now also incorporates both follow-up full Ansible audits. Host mutation begins only after the registered listener is stopped and active work has drained. Container templates have task-specific validation and handlers, including a Docker-aware socket restart sequence. Node, Java, Go, Rust, TypeScript, Git LFS, repository keys, and the runner payload report or replace state without the identified false-success, partial-installation, and interrupted-activation paths. Both permanent playbooks pass `ansible-core 2.19.12` syntax checking, the three focused repository contract tests pass, and `ansible-lint` reaches its `production` profile with only the established public variable-prefix convention excluded.
+The repository implementation now also incorporates both follow-up full Ansible audits. Host mutation begins only after the registered listener is stopped and active work has drained. Container templates have task-specific validation and handlers, including a Docker-aware socket restart sequence. Node, Java, Go, Rust, TypeScript, Git LFS, repository keys, and the runner payload report or replace state without the identified false-success, partial-installation, and interrupted-activation paths. Repository tests now follow those current boundaries, and CI invokes only validation commands that remain defined in `package.json`. Both permanent playbooks pass `ansible-core 2.19.12` syntax checking, the focused repository contract tests pass, and `ansible-lint` reaches its `production` profile with only the established public variable-prefix convention excluded.
 
-Acceptance remains incomplete. The available repository surface cannot run the full `npm run check`, and this environment has no real host inventory or SSH access for the required two live `host.yml` runs and listener-state check. No mock, regex-only substitute, GitHub Actions workflow change, or operator-assigned validation was introduced.
+Acceptance remains incomplete. The available repository surface cannot run the full `npm run check`, and this environment has no real host inventory or SSH access for the required two live `host.yml` runs and listener-state check. The failing GitHub Actions job has not been manually rerun. No mock or operator-assigned validation was introduced.
 
 ## Context and Orientation
 
@@ -140,6 +150,8 @@ The current PR also contains an Ansible-wide refactor. Review it as part of this
 
 The one-time file `ansible/playbooks/replace-runner-workspace.yml` stopped the service, removed the former workspace layout, created the real `runner/_work` directory, and restarted the service. That action has already completed. Permanent workspace state belongs only in `ansible/roles/agent_relay_host/tasks/filesystem.yml`.
 
+`test/context-boundary.test.ts`, `test/docker-socket-boundary.test.ts`, and `test/runner-label-boundary.test.ts` protect repository-wide boundaries around CI, Docker socket exposure, and GitHub runner registration. They must follow the current Ansible ownership model: registration runs the official runner `config.sh`, socket lifecycle is implemented by notified handlers, and runner lookup relies on the GitHub API name filter plus an exact-result assertion. `.github/workflows/ci.yml` may invoke only validation scripts defined in `package.json`.
+
 ## Plan of Work
 
 Start by re-reading every file under `ansible/` and every script referenced by an Ansible `command`, `shell`, `raw`, `script`, or `include` task at the current PR head. Classify each non-module operation into one of three groups: an operation that a built-in module can own, an external tool invocation with no suitable built-in module, or a read-only observation needed to decide whether the external invocation is necessary. Replace the first group with the built-in module. Keep the second and third groups only when they directly support the existing host or connection flow, and give every retained command accurate `when`, `creates`, `removes`, `changed_when`, and `failed_when` behavior as applicable. Do not create a new wrapper, validation framework, custom module, collection dependency, or global deployment decision.
@@ -155,6 +167,8 @@ Review `ansible/roles/agent_relay_host/tasks/deploy.yml`, `runtime-deployment.ym
 Review the GitHub connection boundary separately. In `ansible/playbooks/github-connect.yml`, set `become: false`. In `ansible/roles/agent_relay_github_connection/tasks/main.yml`, apply `become: true` to target-side prerequisite and registration-file inspection when access below the protected runner directory requires it, to `systemd_service`, and to file ownership tasks. Run the official `config.sh` with `become: true` and `become_user` set to the configured runner user. Keep GitHub API `uri` tasks delegated to `localhost` with `become: false`. Assertions and facts must not acquire broad privilege. Keep the host and GitHub connection roles separate.
 
 Delete `scripts/github-connect` and its dedicated shell integration test after the connection role directly owns registration, service state, and label reconciliation. Keep only the official `config.sh` invocation as a command. Remove the deleted files from `package.json` validation instead of replacing them with another orchestration script.
+
+Update the three pre-existing boundary tests to remove expectations tied to the deleted wrapper, deleted integration test, old task names, and the former inline Docker socket sequence. Preserve assertions for the actual durable boundaries. Remove the obsolete `check:system` step and its dedicated failure artifact from `.github/workflows/ci.yml`; do not add replacement validation because `npm test` already runs the repository tests and the remaining package checks cover the retained scripts.
 
 Delete `ansible/playbooks/replace-runner-workspace.yml`. Do not move its historical cleanup into a permanent role. Keep only the permanent `ansible.builtin.file` declaration for `runner/_work` in `ansible/roles/agent_relay_host/tasks/filesystem.yml`.
 
@@ -222,7 +236,7 @@ If the execution environment does not have the real inventory, SSH access, or re
 
 Acceptance is one normal end-to-end host reconciliation scenario. Begin with the installed Agent Relay runner, regardless of its currently installed Codex CLI version. Run `host.yml` from the PR branch. Ansible must reconcile the latest Codex package through npm, update runner or runtime state only when their task-local conditions require it, and complete with `failed=0`. The former toolchain validator task and `EXPECTED_CODEX_VERSION` failure must be absent. Run the same playbook again without changing inputs. It must complete with `failed=0`, preserve registration, and leave the listener service active. When npm reports that `@openai/codex@latest` is already installed, the Codex task must not report a change.
 
-Local acceptance also requires zero exits from syntax checks for both permanent playbooks and from `npm run check`. The repository diff must contain no GitHub Actions workflow change, no Codex version pin, no host-side Codex validator, no global `become: true` in `github-connect.yml`, and no completed workspace replacement playbook.
+Local acceptance also requires zero exits from syntax checks for both permanent playbooks and from `npm run check`. The only GitHub Actions workflow change must be removal of the undefined `check:system` invocation and its dedicated failure-artifact upload. The repository diff must contain no Codex version pin, no host-side Codex validator, no global `become: true` in `github-connect.yml`, and no completed workspace replacement playbook.
 
 ## Idempotence and Recovery
 
@@ -256,4 +270,4 @@ Use only `ansible.builtin` modules, matching the existing repository contract. D
 
 The authoritative configuration remains `config/runner-host.json`. It pins the GitHub runner and reproducible build toolchains but must not define `codex_version`. The public entrypoints remain `ansible/playbooks/host.yml` and `ansible/playbooks/github-connect.yml`. The formal boundary between them remains GitHub runner registration files and the installed systemd service; neither playbook imports the other's role.
 
-Revision note: Created on 2026-08-11 to replace ad hoc Ansible refactoring with one bounded plan tied to the reported `EXPECTED_CODEX_VERSION` failure, the explicit latest-Codex requirement, the completed workspace cleanup, and least-privilege GitHub connection behavior. Updated on 2026-08-12 after the operational audit to define cross-run recovery for interrupted runner and Go activation, staged APT trust rotation, direct configured-Java selection, repair probes, and Docker socket lifecycle handling.
+Revision note: Created on 2026-08-11 to replace ad hoc Ansible refactoring with one bounded plan tied to the reported `EXPECTED_CODEX_VERSION` failure, the explicit latest-Codex requirement, the completed workspace cleanup, and least-privilege GitHub connection behavior. Updated on 2026-08-12 after the operational audit to define cross-run recovery for interrupted runner and Go activation, staged APT trust rotation, direct configured-Java selection, repair probes, and Docker socket lifecycle handling. Updated again on 2026-08-12 after CI exposed stale repository tests and an undefined `check:system` workflow command; the correction aligns tests and CI with the already accepted implementation without adding a replacement validation path.

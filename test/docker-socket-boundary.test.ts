@@ -21,6 +21,7 @@ test("host provisioning, launcher, and sandbox share one directory-based Docker 
   const vars = await text("ansible/roles/agent_relay_host/vars/main.yml");
   const filesystem = await text("ansible/roles/agent_relay_host/tasks/filesystem.yml");
   const containers = await text("ansible/roles/agent_relay_host/tasks/containers.yml");
+  const handlers = await text("ansible/roles/agent_relay_host/handlers/main.yml");
   const socketUnit = await text("ansible/roles/agent_relay_host/templates/docker-socket.conf.j2");
   const hostConfig = await text("scripts/host-config.sh");
   const launcher = await text("scripts/codex-run");
@@ -31,14 +32,11 @@ test("host provisioning, launcher, and sandbox share one directory-based Docker 
   assert.match(filesystem, /owner: "\{\{ agent_relay_runner_user \}\}"[\s\S]*mode: "0700"/u);
   assert.match(containers, /\/etc\/systemd\/system\/docker\.socket\.d/u);
   assert.match(containers, /src: docker-socket\.conf\.j2/u);
-  assert.match(containers, /Stop Docker before changing socket listeners[\s\S]*name: docker\.service[\s\S]*state: stopped[\s\S]*when: agent_relay_docker_socket_config\.changed/u);
-  const stopDockerIndex = containers.indexOf("- name: Stop Docker before changing socket listeners");
-  const startSocketIndex = containers.indexOf("- name: Enable and start Docker socket");
-  const startDockerIndex = containers.indexOf("- name: Enable and start Docker\n");
-  assert.ok(stopDockerIndex >= 0);
-  assert.ok(startSocketIndex > stopDockerIndex);
-  assert.ok(startDockerIndex > startSocketIndex);
-  assert.match(containers, /agent_relay_docker_socket_config\.changed/u);
+  assert.match(containers, /notify: agent_relay_host restart Docker socket/u);
+  assert.match(
+    handlers,
+    /name: docker\.service[\s\S]*state: stopped[\s\S]*listen: agent_relay_host restart Docker socket[\s\S]*name: docker\.socket[\s\S]*state: restarted[\s\S]*listen: agent_relay_host restart Docker socket[\s\S]*name: docker\.service[\s\S]*state: started[\s\S]*listen: agent_relay_host restart Docker socket/u,
+  );
   assert.match(socketUnit, /ListenStream=\nListenStream=\/run\/docker\.sock/u);
   assert.match(socketUnit, /ListenStream=\{\{ agent_relay_docker_socket_path \}\}/u);
   assert.match(socketUnit, /SocketGroup=docker/u);

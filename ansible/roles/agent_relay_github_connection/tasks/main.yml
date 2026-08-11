@@ -35,49 +35,12 @@
       - not (agent_relay_connection_prerequisites.results[4].stat.islnk | default(false))
     fail_msg: Run playbooks/host.yml before connecting the runner to GitHub.
 
-- name: Inspect runner registration files
+- name: Inspect runner registration marker
   become: true
   ansible.builtin.stat:
-    path: "{{ agent_relay_runner_root }}/{{ item }}"
+    path: "{{ agent_relay_runner_root }}/.runner"
     follow: false
-  loop:
-    - .runner
-    - .credentials
-    - .credentials_rsaparams
-  register: agent_relay_connection_registration_files
-  no_log: true
-
-- name: Determine runner registration state
-  ansible.builtin.set_fact:
-    agent_relay_connection_registration_state: >-
-      {{
-        'absent'
-        if (
-          agent_relay_connection_registration_files.results
-          | selectattr('stat.exists', 'equalto', true)
-          | list
-          | length
-        ) == 0
-        else (
-          'complete'
-          if (
-            agent_relay_connection_registration_files.results
-            | selectattr('stat.exists', 'equalto', true)
-            | selectattr('stat.isreg', 'equalto', true)
-            | selectattr('stat.islnk', 'equalto', false)
-            | list
-            | length
-          ) == 3
-          else 'partial'
-        )
-      }}
-  no_log: true
-
-- name: Reject partial runner registration
-  ansible.builtin.assert:
-    that:
-      - agent_relay_connection_registration_state != 'partial'
-    fail_msg: Runner registration is incomplete or unsafe.
+  register: agent_relay_connection_registration_marker
 
 - name: Create organization runner registration token
   ansible.builtin.uri:
@@ -94,7 +57,7 @@
   delegate_to: localhost
   become: false
   no_log: true
-  when: agent_relay_connection_registration_state == 'absent'
+  when: not (agent_relay_connection_registration_marker.stat.exists | default(false))
 
 - name: Register organization runner
   become: true
@@ -113,10 +76,32 @@
       - --work
       - _work
     chdir: "{{ agent_relay_runner_root }}"
+    creates: "{{ agent_relay_runner_root }}/.runner"
   environment:
     HOME: "{{ agent_relay_storage_root }}/home"
   no_log: true
-  when: agent_relay_connection_registration_state == 'absent'
+  when: not (agent_relay_connection_registration_marker.stat.exists | default(false))
+
+- name: Inspect runner registration files
+  become: true
+  ansible.builtin.stat:
+    path: "{{ agent_relay_runner_root }}/{{ item }}"
+    follow: false
+  loop:
+    - .runner
+    - .credentials
+    - .credentials_rsaparams
+  register: agent_relay_connection_registration_files
+
+- name: Require complete runner registration
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg | default(false)
+      - not (item.stat.islnk | default(false))
+    fail_msg: "Runner registration file {{ item.item }} is missing or unsafe."
+  loop: "{{ agent_relay_connection_registration_files.results }}"
+  loop_control:
+    label: "{{ item.item }}"
 
 - name: Protect runner registration files
   become: true
@@ -130,7 +115,6 @@
     - .runner
     - .credentials
     - .credentials_rsaparams
-  no_log: true
 
 - name: Enable and start runner listener
   become: true

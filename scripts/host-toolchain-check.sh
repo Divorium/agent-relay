@@ -13,7 +13,7 @@ set -euo pipefail
 : "${TOOLCHAIN_RUST_CARGO_HOME:?TOOLCHAIN_RUST_CARGO_HOME is required}"
 
 for command in \
-  node npm java javac go rustc cargo rustup tsc codex \
+  node npm java javac go rustc cargo rustup tsc \
   python3 git gcc g++ clang make cmake pkg-config bash curl wget jq \
   zip unzip tar gzip xz zstd file find diff; do
   command -v "${command}" >/dev/null 2>&1 || {
@@ -43,7 +43,6 @@ node_version="$(node --version)"
 java_version="$(java -version 2>&1 | head -n 1)"
 go_version="$(go version)"
 tsc_version="$(tsc --version)"
-codex --version >/dev/null
 
 [[ "${node_version}" == v"${EXPECTED_NODE_MAJOR}".* ]] || {
   echo "Node.js ${EXPECTED_NODE_MAJOR} is required: ${node_version}" >&2

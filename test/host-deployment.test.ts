@@ -156,8 +156,7 @@ test("host contract pins reproducible toolchains while Codex tracks latest", asy
   assert.match(toolchains, /name: Install latest Codex CLI[\s\S]*"@openai\/codex@latest"/u);
   assert.doesNotMatch(toolchains, /agent_relay_codex_version/u);
   assert.doesNotMatch(deploymentPrepare, /EXPECTED_CODEX_VERSION/u);
-  assert.doesNotMatch(toolchainCheck, /EXPECTED_CODEX_VERSION|Unexpected Codex version/u);
-  assert.match(toolchainCheck, /codex --version >\/dev\/null/u);
+  assert.doesNotMatch(toolchainCheck, /codex|Codex|EXPECTED_CODEX_VERSION/u);
 });
 
 test("legacy host installer entrypoints are absent from validation", async () => {

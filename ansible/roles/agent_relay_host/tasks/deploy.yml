@@ -70,6 +70,7 @@
       - --version
   register: agent_relay_runner_current_version
   changed_when: false
+  failed_when: false
   when:
     - agent_relay_runner_listener.stat.isreg | default(false)
     - not (agent_relay_runner_listener.stat.islnk | default(false))
@@ -107,7 +108,8 @@
 - name: Install GitHub Runner payload
   ansible.builtin.import_tasks: runner-installation.yml
   when: >-
-    (agent_relay_runner_current_version.stdout | default('') | trim)
+    (agent_relay_runner_current_version.rc | default(1)) != 0
+    or (agent_relay_runner_current_version.stdout | default('') | trim)
       != agent_relay_host_contract.runner_version
 
 - name: Build and activate Agent Relay runtime

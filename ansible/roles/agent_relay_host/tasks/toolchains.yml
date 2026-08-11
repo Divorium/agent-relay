@@ -1,9 +1,16 @@
 ---
-- name: Resolve installed Java home
-  ansible.builtin.command:
-    argv: ["/usr/bin/readlink", "-f", "/usr/bin/javac"]
-  register: agent_relay_javac_path
-  changed_when: false
+- name: Inspect configured Java toolchain
+  ansible.builtin.stat:
+    path: "/usr/lib/jvm/temurin-{{ agent_relay_java_major }}-jdk-amd64"
+    follow: false
+  register: agent_relay_java_root
+
+- name: Require configured Java toolchain
+  ansible.builtin.assert:
+    that:
+      - agent_relay_java_root.stat.isdir | default(false)
+      - not (agent_relay_java_root.stat.islnk | default(false))
+    fail_msg: "Configured Temurin {{ agent_relay_java_major }} JDK is not installed."
 
 - name: Create Java toolchain root
   ansible.builtin.file:
@@ -13,14 +20,61 @@
     group: root
     mode: "0755"
 
-- name: Link Java toolchain root
+- name: Link configured Java toolchain root
   ansible.builtin.file:
-    src: "{{ agent_relay_javac_path.stdout | dirname | dirname }}"
+    src: "/usr/lib/jvm/temurin-{{ agent_relay_java_major }}-jdk-amd64"
     dest: /opt/java/openjdk
     state: link
     owner: root
     group: root
     force: true
+
+- name: Inspect active Go installation before recovery
+  ansible.builtin.stat:
+    path: /usr/local/go
+    follow: false
+  register: agent_relay_go_before_recovery
+
+- name: Inspect preserved Go installation
+  ansible.builtin.stat:
+    path: "{{ agent_relay_go_previous_root }}"
+    follow: false
+  register: agent_relay_preserved_go_before_recovery
+
+- name: Require safe Go installation directories
+  ansible.builtin.assert:
+    that:
+      - >-
+        not (agent_relay_go_before_recovery.stat.exists | default(false))
+        or (
+          agent_relay_go_before_recovery.stat.isdir | default(false)
+          and not (agent_relay_go_before_recovery.stat.islnk | default(false))
+        )
+      - >-
+        not (agent_relay_preserved_go_before_recovery.stat.exists | default(false))
+        or (
+          agent_relay_preserved_go_before_recovery.stat.isdir | default(false)
+          and not (agent_relay_preserved_go_before_recovery.stat.islnk | default(false))
+        )
+    fail_msg: Go installation paths must be absent or regular directories.
+
+- name: Recover Go left by an interrupted activation
+  when: agent_relay_preserved_go_before_recovery.stat.isdir | default(false)
+  block:
+    - name: Validate preserved Go installation
+      ansible.builtin.command:
+        argv: ["{{ agent_relay_go_previous_root }}/bin/go", "version"]
+      changed_when: false
+
+    - name: Remove interrupted Go installation
+      ansible.builtin.file:
+        path: /usr/local/go
+        state: absent
+
+    - name: Restore preserved Go installation after interrupted activation
+      ansible.builtin.command:
+        argv: ["/usr/bin/mv", "{{ agent_relay_go_previous_root }}", "/usr/local/go"]
+      changed_when: true
 
 - name: Inspect installed Go executable
   ansible.builtin.stat:
@@ -33,6 +87,7 @@
     argv: ["/usr/local/go/bin/go", "version"]
   register: agent_relay_go_current
   changed_when: false
+  failed_when: false
   when:
     - agent_relay_go_executable.stat.isreg | default(false)
     - not (agent_relay_go_executable.stat.islnk | default(false))
@@ -40,7 +95,8 @@
 
 - name: Reconcile configured Go toolchain
   when: >-
-    (agent_relay_go_current.stdout | default('') | trim)
+    (agent_relay_go_current.rc | default(1)) != 0
+    or (agent_relay_go_current.stdout | default('') | trim)
       != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
   block:
     - name: Download configured Go archive
@@ -100,18 +156,21 @@
             )
         fail_msg: /usr/local/go must be absent or a regular directory.
 
-    - name: Remove stale previous Go installation
-      ansible.builtin.file:
-        path: "{{ agent_relay_go_previous_root }}"
-        state: absent
-
     - name: Activate staged Go toolchain
       block:
-        - name: Preserve active Go installation
+        - name: Remove invalid active Go installation
+          ansible.builtin.file:
+            path: /usr/local/go
+            state: absent
+          when:
+            - agent_relay_go_root.stat.isdir | default(false)
+            - (agent_relay_go_current.rc | default(1)) != 0
+
+        - name: Preserve valid active Go installation
           ansible.builtin.command:
             argv: ["/usr/bin/mv", "/usr/local/go", "{{ agent_relay_go_previous_root }}"]
           changed_when: true
-          when: agent_relay_go_root.stat.isdir | default(false)
+          when: (agent_relay_go_current.rc | default(1)) == 0
 
         - name: Move staged Go toolchain into place
           ansible.builtin.command:
@@ -138,11 +197,11 @@
           ansible.builtin.command:
             argv: ["/usr/bin/mv", "{{ agent_relay_go_previous_root }}", "/usr/local/go"]
           changed_when: true
-          when: agent_relay_go_root.stat.isdir | default(false)
+          when: (agent_relay_go_current.rc | default(1)) == 0
 
         - name: Report Go activation failure
           ansible.builtin.fail:
-            msg: Go activation failed and the previous installation was restored when present.
+            msg: Go activation failed. The previous valid installation was restored when available.
 
     - name: Remove previous Go installation after successful activation
       ansible.builtin.file:

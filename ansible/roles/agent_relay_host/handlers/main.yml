@@ -11,12 +11,11 @@
     state: restarted
   listen: agent_relay_host restart containerd
 
-- name: Agent Relay host | Restart Docker after configuration change
+- name: Agent Relay host | Stop Docker before socket change
   ansible.builtin.systemd_service:
     name: docker.service
-    enabled: true
-    state: restarted
-  listen: agent_relay_host restart Docker
+    state: stopped
+  listen: agent_relay_host restart Docker socket
 
 - name: Agent Relay host | Reload systemd and restart Docker socket
   ansible.builtin.systemd_service:
@@ -25,3 +24,17 @@
     daemon_reload: true
     state: restarted
   listen: agent_relay_host restart Docker socket
+
+- name: Agent Relay host | Start Docker after socket change
+  ansible.builtin.systemd_service:
+    name: docker.service
+    enabled: true
+    state: started
+  listen: agent_relay_host restart Docker socket
+
+- name: Agent Relay host | Restart Docker after configuration change
+  ansible.builtin.systemd_service:
+    name: docker.service
+    enabled: true
+    state: restarted
+  listen: agent_relay_host restart Docker

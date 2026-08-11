@@ -21,6 +21,8 @@ The same change must leave the complete `ansible/` tree consistent with Ansible'
 - [x] (2026-08-12 10:40Z) Applied the follow-up audit: drain the listener before host mutation, split container handlers, validate container templates, enforce the configured Node major, stage and roll back Go and runner payloads, use Debian's rustup package, pin repository-key fingerprints, and report Git LFS changes accurately.
 - [x] (2026-08-12 10:42Z) Re-ran both playbook syntax checks, the three focused contract tests, retained shell syntax checks, and host-contract JSON parsing successfully.
 - [x] (2026-08-12 10:47Z) Ran `ansible-lint` across the complete Ansible tree at the `production` profile with only `var-naming` excluded to preserve the existing public `agent_relay_*` variable contract.
+- [x] (2026-08-12 11:02Z) Corrected the follow-up operational audit: interrupted runner and Go activations now recover preserved payloads before another update, failed version probes trigger repair, Java resolves the configured Temurin major directly, repository keys are activated only after staged fingerprint validation, and Docker socket changes use a controlled Docker stop/socket restart/Docker start sequence.
+- [x] (2026-08-12 11:02Z) Re-ran both playbook syntax checks, all three focused contract tests, JSON parsing, and `ansible-lint` 25.12.2 across the complete Ansible tree at the `production` profile with only `var-naming` excluded.
 - [ ] (blocked: the connector-provided local repository surface does not contain the complete TypeScript source, lockfile, or build configuration) Run the complete `npm run check` command from a full repository checkout.
 - [ ] (blocked: this execution environment has no real `runner-host` inventory, SSH access, or privilege) Run the real host acceptance scenario twice and record the observed recaps and listener state.
 
@@ -55,6 +57,12 @@ The same change must leave the complete `ansible/` tree consistent with Ansible'
 
 - Observation: The full repository check still cannot start in the connector-provided source surface.
   Evidence: After installing the configured TypeScript compiler in an isolated temporary prefix, `npm run check` stops with `TS5058` because `tsconfig.json` is absent from this local source surface.
+
+- Observation: A `rescue` block restores state only when Ansible remains alive long enough to execute it. The former runner and Go activation flows could lose their rollback material after a process or host interruption because the next run deleted the preserved payload before recovery.
+  Evidence: `runner-installation.yml` now validates and restores an existing backup archive before creating a new backup, while `toolchains.yml` validates and restores `agent_relay_go_previous_root` before probing or replacing Go.
+
+- Observation: Validating a repository key after writing it to `/etc/apt/keyrings` protects the current run but not the host's last known-good APT configuration.
+  Evidence: `packages.yml` now downloads all three keys below root-only `/var/tmp/agent-relay-apt-keys`, validates every configured fingerprint, and only then copies any key into `/etc/apt/keyrings`.
 
 ## Decision Log
 
@@ -102,9 +110,17 @@ The same change must leave the complete `ansible/` tree consistent with Ansible'
   Rationale: TLS transport alone does not establish the long-lived repository signing identity and must not silently authorize an unexpected replacement key.
   Date/Author: 2026-08-12 / Codex
 
+- Decision: Treat an existing runner backup archive or preserved Go directory as evidence of an interrupted activation and recover it before attempting another update.
+  Rationale: `block` and `rescue` cannot run after process termination or host loss. Preserving rollback material across runs prevents a retry from replacing the last known-good payload with partial state.
+  Date/Author: 2026-08-12 / Codex
+
+- Decision: Stage and validate every repository signing key before changing any active keyring file.
+  Rationale: A failed fingerprint check must leave the host's working APT trust configuration unchanged. Validating the complete staged set before activation also prevents a partially rotated set.
+  Date/Author: 2026-08-12 / Codex
+
 ## Outcomes & Retrospective
 
-The repository implementation now also incorporates the follow-up full Ansible audit. Host mutation begins only after the registered listener is stopped and active work has drained. Container templates have task-specific validation and handlers. Node, Go, Rust, TypeScript, Git LFS, and the runner payload report or replace state without the previously identified false-success and partial-installation paths. Both permanent playbooks pass `ansible-core 2.19.12` syntax checking, the three focused repository contract tests pass, and `ansible-lint` reaches its `production` profile with only the established public variable-prefix convention excluded.
+The repository implementation now also incorporates both follow-up full Ansible audits. Host mutation begins only after the registered listener is stopped and active work has drained. Container templates have task-specific validation and handlers, including a Docker-aware socket restart sequence. Node, Java, Go, Rust, TypeScript, Git LFS, repository keys, and the runner payload report or replace state without the identified false-success, partial-installation, and interrupted-activation paths. Both permanent playbooks pass `ansible-core 2.19.12` syntax checking, the three focused repository contract tests pass, and `ansible-lint` reaches its `production` profile with only the established public variable-prefix convention excluded.
 
 Acceptance remains incomplete. The available repository surface cannot run the full `npm run check`, and this environment has no real host inventory or SSH access for the required two live `host.yml` runs and listener-state check. No mock, regex-only substitute, GitHub Actions workflow change, or operator-assigned validation was introduced.
 
@@ -212,7 +228,7 @@ Local acceptance also requires zero exits from syntax checks for both permanent 
 
 All permanent file, directory, package, user, template, and service tasks must remain safely repeatable. Commands that install pinned external tools must run only when their adjacent observation shows a mismatch. The explicit exception is the Codex npm command, which runs on every host reconciliation by requirement and relies on npm to decide whether the installed package already matches `latest`.
 
-Stopping the listener before full host reconciliation is safe to repeat. If runtime activation fails after preserving the previous `dist`, restore the preserved directory before reporting failure. If a host run fails before mutation, the existing registered listener must be restarted when the existing runtime is still safe. Do not restore `host-toolchain-check.sh`, a global lifecycle lock, or the one-time workspace cleanup as a recovery mechanism.
+Stopping the listener before full host reconciliation is safe to repeat. If runtime activation fails after preserving the previous `dist`, restore the preserved directory before reporting failure. Runner and Go activation must retain their previous valid payload until the replacement passes validation. A later run must detect, validate, and restore that preserved payload before creating new rollback material. If a host run fails before mutation, the existing registered listener must be restarted when the existing runtime is still safe. Do not restore `host-toolchain-check.sh`, a global lifecycle lock, or the one-time workspace cleanup as a recovery mechanism.
 
 The plan does not authorize deleting registration files, unregistering the runner, changing the configured runner name, or replacing the existing `_work` directory. If repository evidence shows that satisfying the plan requires one of those actions, record the exact conflict and stop for a new user decision.
 
@@ -240,4 +256,4 @@ Use only `ansible.builtin` modules, matching the existing repository contract. D
 
 The authoritative configuration remains `config/runner-host.json`. It pins the GitHub runner and reproducible build toolchains but must not define `codex_version`. The public entrypoints remain `ansible/playbooks/host.yml` and `ansible/playbooks/github-connect.yml`. The formal boundary between them remains GitHub runner registration files and the installed systemd service; neither playbook imports the other's role.
 
-Revision note: Created on 2026-08-11 to replace ad hoc Ansible refactoring with one bounded plan tied to the reported `EXPECTED_CODEX_VERSION` failure, the explicit latest-Codex requirement, the completed workspace cleanup, and least-privilege GitHub connection behavior.
+Revision note: Created on 2026-08-11 to replace ad hoc Ansible refactoring with one bounded plan tied to the reported `EXPECTED_CODEX_VERSION` failure, the explicit latest-Codex requirement, the completed workspace cleanup, and least-privilege GitHub connection behavior. Updated on 2026-08-12 after the operational audit to define cross-run recovery for interrupted runner and Go activation, staged APT trust rotation, direct configured-Java selection, repair probes, and Docker socket lifecycle handling.

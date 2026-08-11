@@ -43,7 +43,7 @@ ansible-playbook \
   "$PWD/playbooks/host.yml"
 ```
 
-This playbook requires no GitHub PAT and performs the complete idempotent host reconciliation directly through Ansible:
+This playbook requires no GitHub PAT and reconciles the complete host directly through Ansible:
 
 - bootstraps Python 3;
 - installs packages and pinned language toolchains, then updates Codex CLI to the latest available release;
@@ -51,14 +51,16 @@ This playbook requires no GitHub PAT and performs the complete idempotent host r
 - configures Docker and containerd;
 - creates the ordinary and dedicated Docker sockets;
 - drains the registered listener before changing packages, container services, toolchains, runner files, or runtime files;
-- stages and verifies the official GitHub Runner payload before activation and restores the previous payload after a failed activation;
+- stages and verifies the official GitHub Runner payload before activation;
+- preserves the valid runner and Go payloads until the replacements pass validation;
+- restores preserved payloads before continuing a run interrupted during activation;
 - installs the runner systemd unit from an Ansible template;
 - checks out the configured Agent Relay revision;
 - builds the runtime as `agent-relay-builder` in a private stage;
 - validates and atomically activates the runtime;
 - restarts a completely registered runner or leaves an unregistered runner disabled.
 
-Every `host.yml` run creates one maintenance window for a registered runner: Ansible stops the listener, waits for the active `Runner.Worker` process to exit, reconciles the host, and starts the listener again. A failed reconciliation restarts the previous listener only when the prior runtime remains usable.
+Every `host.yml` run creates one maintenance window for a registered runner: Ansible stops the listener, waits for the active `Runner.Worker` process to exit, reconciles the host, and starts the listener again. A handled activation failure restores the previous valid payload in the same run. If the process or host stops during activation, the next run validates and restores the preserved payload before attempting another update.
 
 `host.yml` does not invoke `install.sh`, read `AGENT_RELAY_GITHUB_CREDENTIAL`, obtain a runner registration token, invoke `config.sh`, or call a GitHub runner-label API.
 

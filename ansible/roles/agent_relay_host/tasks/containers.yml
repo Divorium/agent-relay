@@ -18,7 +18,8 @@
     owner: root
     group: root
     mode: "0644"
-  notify: Reconfigure container services
+    validate: /usr/bin/dockerd --validate --config-file=%s
+  notify: agent_relay_host restart Docker
 
 - name: Configure containerd
   ansible.builtin.template:
@@ -27,7 +28,10 @@
     owner: root
     group: root
     mode: "0644"
-  notify: Reconfigure container services
+    validate: /usr/bin/containerd --config %s config dump
+  notify:
+    - agent_relay_host restart containerd
+    - agent_relay_host restart Docker
 
 - name: Configure Docker sockets
   ansible.builtin.template:
@@ -36,7 +40,7 @@
     owner: root
     group: root
     mode: "0644"
-  notify: Reconfigure container services
+  notify: agent_relay_host restart Docker socket
 
 - name: Enable and start containerd
   ansible.builtin.systemd_service:

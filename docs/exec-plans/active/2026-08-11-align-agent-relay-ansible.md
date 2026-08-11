@@ -18,6 +18,9 @@ The same change must leave the complete `ansible/` tree consistent with Ansible'
 - [x] (2026-08-11 20:10Z) Reduced tests and documentation to the durable host, workspace, and GitHub-connection contracts required by this plan.
 - [x] (2026-08-11 20:10Z) Ran `ansible-playbook --syntax-check` for both permanent playbooks, the focused Node contract test, shell syntax checks, and JSON parsing successfully.
 - [x] (2026-08-11 21:23Z) Re-audited all 28 files under `ansible/` and removed the remaining calculated registration, payload, deployment, listener, and runner-label state while retaining direct safety checks and task-local external-tool observations.
+- [x] (2026-08-12 10:40Z) Applied the follow-up audit: drain the listener before host mutation, split container handlers, validate container templates, enforce the configured Node major, stage and roll back Go and runner payloads, use Debian's rustup package, pin repository-key fingerprints, and report Git LFS changes accurately.
+- [x] (2026-08-12 10:42Z) Re-ran both playbook syntax checks, the three focused contract tests, retained shell syntax checks, and host-contract JSON parsing successfully.
+- [x] (2026-08-12 10:47Z) Ran `ansible-lint` across the complete Ansible tree at the `production` profile with only `var-naming` excluded to preserve the existing public `agent_relay_*` variable contract.
 - [ ] (blocked: the connector-provided local repository surface does not contain the complete TypeScript source, lockfile, or build configuration) Run the complete `npm run check` command from a full repository checkout.
 - [ ] (blocked: this execution environment has no real `runner-host` inventory, SSH access, or privilege) Run the real host acceptance scenario twice and record the observed recaps and listener state.
 
@@ -43,6 +46,15 @@ The same change must leave the complete `ansible/` tree consistent with Ansible'
 
 - Observation: The later review found that `deploy.yml`, `listener-state.yml`, and `runner-label.yml` still encoded intermediate state through `set_fact`, counts, and a ternary service state even though direct registered results were sufficient.
   Evidence: The corrected tree contains no `ansible.builtin.set_fact`; `.runner`, `Runner.Listener --version`, the runtime revision marker, the template result, and the GitHub API `name` filter now drive only the task that consumes each result.
+
+- Observation: Stopping the listener only inside `deploy.yml` was too late because package, Docker, and toolchain reconciliation had already run.
+  Evidence: The host role imported `packages.yml`, `containers.yml`, and `toolchains.yml` before `deploy.yml`; preparation is now the first mutating step after input validation.
+
+- Observation: Debian 13 provides `rustup`, so downloading a moving `rustup-init` executable and its checksum from the same origin is unnecessary.
+  Evidence: `packages.yml` now installs `rustup`, and `toolchains.yml` invokes `/usr/bin/rustup` while retaining the repository-pinned Rust toolchain and targets.
+
+- Observation: The full repository check still cannot start in the connector-provided source surface.
+  Evidence: After installing the configured TypeScript compiler in an isolated temporary prefix, `npm run check` stops with `TS5058` because `tsconfig.json` is absent from this local source surface.
 
 ## Decision Log
 
@@ -78,9 +90,21 @@ The same change must leave the complete `ansible/` tree consistent with Ansible'
   Rationale: Registered module results already expose the required local state. Direct task conditions are easier to audit and avoid a second state model inside the playbook.
   Date/Author: 2026-08-11 / Codex
 
+- Decision: Drain a registered runner for the full host reconciliation instead of predicting which host mutation will be required.
+  Rationale: Package upgrades, Docker changes, and toolchain replacement can invalidate an active job. A direct stop-and-wait sequence is simpler and safer than another calculated deployment state.
+  Date/Author: 2026-08-12 / Codex
+
+- Decision: Stage and validate Go and GitHub Runner payloads and retain rollback material until the activated executable reports the configured version.
+  Rationale: Updating an active directory in place or deleting the previous toolchain before validation can leave the host without a usable installation after a partial failure.
+  Date/Author: 2026-08-12 / Codex
+
+- Decision: Validate downloaded APT repository keys against explicit vendor fingerprints.
+  Rationale: TLS transport alone does not establish the long-lived repository signing identity and must not silently authorize an unexpected replacement key.
+  Date/Author: 2026-08-12 / Codex
+
 ## Outcomes & Retrospective
 
-The repository implementation at the current working head no longer invokes the duplicate toolchain validator, keeps Codex as an unconditional `@openai/codex@latest` npm reconciliation, scopes GitHub connection privilege escalation per task, removes the completed workspace migration entrypoint, and contains no `set_fact`-based state machines. Runner registration uses `.runner`, runner payload and runtime decisions use their adjacent observations directly, listener state is declarative, and runner lookup uses GitHub's `name` query result without rebuilding a filtered list. Both permanent playbooks pass `ansible-core 2.19.12` syntax checking, and the three focused repository contract tests pass.
+The repository implementation now also incorporates the follow-up full Ansible audit. Host mutation begins only after the registered listener is stopped and active work has drained. Container templates have task-specific validation and handlers. Node, Go, Rust, TypeScript, Git LFS, and the runner payload report or replace state without the previously identified false-success and partial-installation paths. Both permanent playbooks pass `ansible-core 2.19.12` syntax checking, the three focused repository contract tests pass, and `ansible-lint` reaches its `production` profile with only the established public variable-prefix convention excluded.
 
 Acceptance remains incomplete. The available repository surface cannot run the full `npm run check`, and this environment has no real host inventory or SSH access for the required two live `host.yml` runs and listener-state check. No mock, regex-only substitute, GitHub Actions workflow change, or operator-assigned validation was introduced.
 
@@ -110,7 +134,7 @@ In `ansible/roles/agent_relay_host/tasks/toolchains.yml`, preserve pinned reconc
 
 Remove `scripts/host-toolchain-check.sh`. Remove its entry from `package.json` shell validation and remove every environment variable or parser field that existed only to supply that script. `config/runner-host.json`, `ansible/roles/agent_relay_host/vars/main.yml`, and `scripts/host-config.sh` must contain no Codex version pin. Keep `scripts/toolchain-smoke.sh` and `scripts/ci-toolchain-smoke.sh` as the consumer compatibility path.
 
-Review `ansible/roles/agent_relay_host/tasks/deploy.yml`, `runtime-deployment.yml`, `runner-installation.yml`, `listener-state.yml`, `containers.yml`, and `handlers/main.yml` as one control flow. The checkout module result must directly drive source revision handling. Runner installation may be gated by required payload files and `Runner.Listener --version`. Runtime build may be gated by the checked-out revision and the deployed revision marker. Service preparation must execute only when runner payload, runtime, or unit state actually changes. Template changes must notify handlers instead of manually reconstructing changed-state branching. Preserve the stopped-service build window and atomic `dist` replacement with rollback. Remove only preview facts, aggregate global decisions, duplicate validators, shell-based file reconciliation that a built-in module safely replaces, and the unused lifecycle lock.
+Review `ansible/roles/agent_relay_host/tasks/deploy.yml`, `runtime-deployment.yml`, `runner-installation.yml`, `listener-state.yml`, `containers.yml`, and `handlers/main.yml` as one control flow. The checkout module result must directly drive source revision handling. Runner installation may be gated by required payload files and `Runner.Listener --version`. Runtime build may be gated by the checked-out revision and the deployed revision marker. The registered listener must be drained before any package, container-service, toolchain, runner-payload, runtime, or unit mutation. Template changes must notify handlers instead of manually reconstructing changed-state branching. Preserve the stopped-service build window and atomic `dist` replacement with rollback. Remove only preview facts, aggregate global decisions, duplicate validators, shell-based file reconciliation that a built-in module safely replaces, and the unused lifecycle lock.
 
 Review the GitHub connection boundary separately. In `ansible/playbooks/github-connect.yml`, set `become: false`. In `ansible/roles/agent_relay_github_connection/tasks/main.yml`, apply `become: true` to target-side prerequisite and registration-file inspection when access below the protected runner directory requires it, to `systemd_service`, and to file ownership tasks. Run the official `config.sh` with `become: true` and `become_user` set to the configured runner user. Keep GitHub API `uri` tasks delegated to `localhost` with `become: false`. Assertions and facts must not acquire broad privilege. Keep the host and GitHub connection roles separate.
 
@@ -188,7 +212,7 @@ Local acceptance also requires zero exits from syntax checks for both permanent 
 
 All permanent file, directory, package, user, template, and service tasks must remain safely repeatable. Commands that install pinned external tools must run only when their adjacent observation shows a mismatch. The explicit exception is the Codex npm command, which runs on every host reconciliation by requirement and relies on npm to decide whether the installed package already matches `latest`.
 
-Stopping the listener before runner or runtime mutation is safe to repeat. If runtime activation fails after preserving the previous `dist`, restore the preserved directory before reporting failure. If a host run fails before mutation, the existing registered listener must be restarted when the existing runtime is still safe. Do not restore `host-toolchain-check.sh`, a global lifecycle lock, or the one-time workspace cleanup as a recovery mechanism.
+Stopping the listener before full host reconciliation is safe to repeat. If runtime activation fails after preserving the previous `dist`, restore the preserved directory before reporting failure. If a host run fails before mutation, the existing registered listener must be restarted when the existing runtime is still safe. Do not restore `host-toolchain-check.sh`, a global lifecycle lock, or the one-time workspace cleanup as a recovery mechanism.
 
 The plan does not authorize deleting registration files, unregistering the runner, changing the configured runner name, or replacing the existing `_work` directory. If repository evidence shows that satisfying the plan requires one of those actions, record the exact conflict and stop for a new user decision.
 
@@ -212,7 +236,7 @@ The necessity rule for every retained non-module task is: without that task, the
 
 ## Interfaces and Dependencies
 
-Use only `ansible.builtin` modules, matching the existing repository contract. Do not add Galaxy collections or custom modules. Use `ansible.builtin.apt`, `file`, `get_url`, `git`, `group`, `template`, `unarchive`, `uri`, `user`, and `systemd_service` for the state they own. Use `ansible.builtin.command` only for the official GitHub runner CLI, npm global installation, rustup operations, compiler/import checks, version observations for opaque installed artifacts, Git LFS initialization, and atomic `mv` operations. The existing `shell` polling task may remain because it needs a pipeline to detect `Runner.Worker`; it must stay read-only with `changed_when: false`.
+Use only `ansible.builtin` modules, matching the existing repository contract. Do not add Galaxy collections or custom modules. Use `ansible.builtin.apt`, `file`, `get_url`, `git`, `group`, `template`, `unarchive`, `uri`, `user`, and `systemd_service` for the state they own. Use `ansible.builtin.command` only for the official GitHub runner CLI, npm global installation, rustup operations, compiler/import checks, version observations for opaque installed artifacts, Git LFS initialization, and atomic `mv` operations. Use `ansible.builtin.command` with `pgrep` to detect `Runner.Worker`; the observation must stay read-only with `changed_when: false` and accept only the documented found/not-found exit codes.
 
 The authoritative configuration remains `config/runner-host.json`. It pins the GitHub runner and reproducible build toolchains but must not define `codex_version`. The public entrypoints remain `ansible/playbooks/host.yml` and `ansible/playbooks/github-connect.yml`. The formal boundary between them remains GitHub runner registration files and the installed systemd service; neither playbook imports the other's role.
 

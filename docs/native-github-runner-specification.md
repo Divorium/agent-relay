@@ -61,7 +61,7 @@ A fine-grained PAT needs `Self-hosted runners: Read and write`. A classic PAT ne
 /srv/github-runner/storage/.agent-relay-dist-stage
 ```
 
-`/srv/github-runner/storage/runner/_work` is a real directory, not a symlink. `dist.previous` exists only during a successful swap or interrupted recovery. The runtime revision marker contains the exact 40-character source commit used to build the active `dist` tree.
+`/srv/github-runner/storage/runner/_work` is a real directory, not a symlink. Runner payload updates use a verified staging directory and a temporary backup while preserving `_work` and registration files. `dist.previous` exists only during a successful swap or interrupted recovery. The runtime revision marker contains the exact 40-character source commit used to build the active `dist` tree.
 
 The Docker storage parent and containerd root are `root:root` mode `0711`. The daemon-owned Docker data root is `root:root` mode `0710`; Ansible declares this post-startup state rather than restoring a conflicting pre-startup mode.
 

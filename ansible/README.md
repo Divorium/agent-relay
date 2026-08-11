@@ -50,12 +50,15 @@ This playbook requires no GitHub PAT and performs the complete idempotent host r
 - creates the administrator, runner, and builder accounts;
 - configures Docker and containerd;
 - creates the ordinary and dedicated Docker sockets;
-- downloads and verifies the official GitHub Runner payload;
+- drains the registered listener before changing packages, container services, toolchains, runner files, or runtime files;
+- stages and verifies the official GitHub Runner payload before activation and restores the previous payload after a failed activation;
 - installs the runner systemd unit from an Ansible template;
 - checks out the configured Agent Relay revision;
 - builds the runtime as `agent-relay-builder` in a private stage;
 - validates and atomically activates the runtime;
 - restarts a completely registered runner or leaves an unregistered runner disabled.
+
+Every `host.yml` run creates one maintenance window for a registered runner: Ansible stops the listener, waits for the active `Runner.Worker` process to exit, reconciles the host, and starts the listener again. A failed reconciliation restarts the previous listener only when the prior runtime remains usable.
 
 `host.yml` does not invoke `install.sh`, read `AGENT_RELAY_GITHUB_CREDENTIAL`, obtain a runner registration token, invoke `config.sh`, or call a GitHub runner-label API.
 

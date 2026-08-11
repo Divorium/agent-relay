@@ -146,7 +146,7 @@ When runner files, the pinned runner version, the service unit, or the runtime r
 
 The host role declares `runner/_work` as a real `github-runner:github-runner` mode `0700` directory. It does not contain compatibility cleanup for the previous symlink layout.
 
-A build or import failure leaves the active runtime unchanged. An activation failure restores `dist.previous` when possible. When a previously active registered listener was stopped and deployment fails before replacement, Ansible restarts the preserved listener when the old runtime remains valid. A later run detects the old runtime marker and retries the failed build.
+A host reconciliation stops the registered listener before changing packages, container services, toolchains, runner files, or runtime files, then waits for the active `Runner.Worker` process to exit. A build or import failure leaves the active runtime unchanged. A runtime activation failure restores `dist.previous` when possible. A runner update is extracted and validated in a private staging directory; activation preserves `_work` and registration files and restores the previous payload when validation fails. When reconciliation fails, Ansible restarts the preserved listener only when the old runtime remains valid. A later run retries the failed reconciliation.
 
 The Docker role keeps `/run/docker.sock` and adds `/srv/github-runner/storage/docker-socket/docker.sock`. When container configuration changes, handlers stop Docker, restart containerd and `docker.socket`, and then start Docker so `dockerd -H fd://` receives both descriptors.
 

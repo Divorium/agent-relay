@@ -27,7 +27,7 @@ test("host provisioning and GitHub connection remain separate Ansible boundaries
   assert.doesNotMatch(connection, /scripts\/github-connect/u);
 });
 
-test("runner workspace is a real directory inside the runner installation", async () => {
+test("runner updates preserve the real workspace and use validated rollback state", async () => {
   const vars = await text("ansible/roles/agent_relay_host/vars/main.yml");
   const filesystem = await text("ansible/roles/agent_relay_host/tasks/filesystem.yml");
   const runner = await text("ansible/roles/agent_relay_host/tasks/runner-installation.yml");
@@ -35,6 +35,11 @@ test("runner workspace is a real directory inside the runner installation", asyn
   assert.match(vars, /agent_relay_work_root: "\{\{ agent_relay_runner_root \}\}\/_work"/u);
   assert.match(filesystem, /name: Create runner workspace[\s\S]*state: directory[\s\S]*mode: "0700"/u);
   assert.doesNotMatch(runner, /state: link|src: \.\.\/work/u);
+  assert.match(runner, /agent_relay_runner_stage_root/u);
+  assert.match(runner, /agent_relay_runner_backup_archive/u);
+  assert.match(runner, /--exclude=\.\/_work/u);
+  assert.match(runner, /Validate staged GitHub Runner version/u);
+  assert.match(runner, /Restore previous runner payload/u);
 });
 
 test("Ansible installs latest Codex without a second host validator", async () => {

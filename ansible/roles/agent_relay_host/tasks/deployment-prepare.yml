@@ -1,4 +1,56 @@
 ---
+- name: Inspect runner registration marker
+  ansible.builtin.stat:
+    path: "{{ agent_relay_runner_root }}/.runner"
+    follow: false
+  register: agent_relay_registration_marker
+
+- name: Require safe runner registration marker
+  ansible.builtin.assert:
+    that:
+      - >-
+        not (agent_relay_registration_marker.stat.exists | default(false))
+        or (
+          agent_relay_registration_marker.stat.isreg | default(false)
+          and not (agent_relay_registration_marker.stat.islnk | default(false))
+        )
+    fail_msg: Runner registration marker must be a regular file.
+
+- name: Inspect runner credential files
+  ansible.builtin.stat:
+    path: "{{ agent_relay_runner_root }}/{{ item }}"
+    follow: false
+  loop:
+    - .credentials
+    - .credentials_rsaparams
+  register: agent_relay_runner_credentials
+  when: agent_relay_registration_marker.stat.isreg | default(false)
+
+- name: Require complete runner credentials
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg | default(false)
+      - not (item.stat.islnk | default(false))
+    fail_msg: "Runner credential file {{ item.item }} must be a regular file."
+  loop: "{{ agent_relay_runner_credentials.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: not (item.skipped | default(false))
+
+- name: Protect runner registration files
+  ansible.builtin.file:
+    path: "{{ agent_relay_runner_root }}/{{ item }}"
+    state: file
+    owner: "{{ agent_relay_runner_user }}"
+    group: "{{ agent_relay_runner_user }}"
+    mode: "0600"
+    follow: false
+  loop:
+    - .runner
+    - .credentials
+    - .credentials_rsaparams
+  when: agent_relay_registration_marker.stat.isreg | default(false)
+
 - name: Stop registered runner listener before mutation
   ansible.builtin.systemd_service:
     name: "{{ agent_relay_service_name }}"

@@ -22,67 +22,137 @@
     group: root
     force: true
 
-- name: Inspect installed Go version
+- name: Inspect installed Go executable
+  ansible.builtin.stat:
+    path: /usr/local/go/bin/go
+    follow: false
+  register: agent_relay_go_executable
+
+- name: Read installed Go version
   ansible.builtin.command:
     argv: ["/usr/local/go/bin/go", "version"]
   register: agent_relay_go_current
   changed_when: false
-  failed_when: false
+  when:
+    - agent_relay_go_executable.stat.isreg | default(false)
+    - not (agent_relay_go_executable.stat.islnk | default(false))
+    - agent_relay_go_executable.stat.executable | default(false)
 
-- name: Download configured Go archive
-  ansible.builtin.get_url:
-    url: "https://go.dev/dl/go{{ agent_relay_go_version }}.linux-amd64.tar.gz"
-    dest: "/var/tmp/go{{ agent_relay_go_version }}.linux-amd64.tar.gz"
-    owner: root
-    group: root
-    mode: "0644"
-    checksum: "sha256:{{ agent_relay_go_sha256 }}"
-  when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
+- name: Reconcile configured Go toolchain
+  when: >-
+    (agent_relay_go_current.stdout | default('') | trim)
+      != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
+  block:
+    - name: Download configured Go archive
+      ansible.builtin.get_url:
+        url: "https://go.dev/dl/go{{ agent_relay_go_version }}.linux-amd64.tar.gz"
+        dest: "/var/tmp/go{{ agent_relay_go_version }}.linux-amd64.tar.gz"
+        owner: root
+        group: root
+        mode: "0644"
+        checksum: "sha256:{{ agent_relay_go_sha256 }}"
 
-- name: Remove stale Go staging directory
-  ansible.builtin.file:
-    path: "/usr/local/.agent-relay-go-{{ agent_relay_go_version }}"
-    state: absent
-  when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
+    - name: Remove stale Go staging directory
+      ansible.builtin.file:
+        path: "{{ agent_relay_go_stage_root }}"
+        state: absent
 
-- name: Create Go staging directory
-  ansible.builtin.file:
-    path: "/usr/local/.agent-relay-go-{{ agent_relay_go_version }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-  when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
+    - name: Create Go staging directory
+      ansible.builtin.file:
+        path: "{{ agent_relay_go_stage_root }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
 
-- name: Extract configured Go archive to staging
-  ansible.builtin.unarchive:
-    src: "/var/tmp/go{{ agent_relay_go_version }}.linux-amd64.tar.gz"
-    dest: "/usr/local/.agent-relay-go-{{ agent_relay_go_version }}"
-    remote_src: true
-    owner: root
-    group: root
-  when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
+    - name: Extract configured Go archive to staging
+      ansible.builtin.unarchive:
+        src: "/var/tmp/go{{ agent_relay_go_version }}.linux-amd64.tar.gz"
+        dest: "{{ agent_relay_go_stage_root }}"
+        remote_src: true
+        owner: root
+        group: root
 
-- name: Remove a different Go installation
-  ansible.builtin.file:
-    path: /usr/local/go
-    state: absent
-  when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
+    - name: Validate staged Go toolchain
+      ansible.builtin.command:
+        argv: ["{{ agent_relay_go_stage_root }}/go/bin/go", "version"]
+      register: agent_relay_staged_go_version
+      changed_when: false
+      failed_when: >-
+        agent_relay_staged_go_version.rc != 0
+        or (agent_relay_staged_go_version.stdout | trim)
+          != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
 
-- name: Activate staged Go toolchain
-  ansible.builtin.command:
-    argv:
-      - /usr/bin/mv
-      - "/usr/local/.agent-relay-go-{{ agent_relay_go_version }}/go"
-      - /usr/local/go
-    creates: /usr/local/go/bin/go
-  when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
+    - name: Inspect active Go installation
+      ansible.builtin.stat:
+        path: /usr/local/go
+        follow: false
+      register: agent_relay_go_root
 
-- name: Remove empty Go staging directory
-  ansible.builtin.file:
-    path: "/usr/local/.agent-relay-go-{{ agent_relay_go_version }}"
-    state: absent
-  when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
+    - name: Require safe active Go installation
+      ansible.builtin.assert:
+        that:
+          - >-
+            not (agent_relay_go_root.stat.exists | default(false))
+            or (
+              agent_relay_go_root.stat.isdir | default(false)
+              and not (agent_relay_go_root.stat.islnk | default(false))
+            )
+        fail_msg: /usr/local/go must be absent or a regular directory.
+
+    - name: Remove stale previous Go installation
+      ansible.builtin.file:
+        path: "{{ agent_relay_go_previous_root }}"
+        state: absent
+
+    - name: Activate staged Go toolchain
+      block:
+        - name: Preserve active Go installation
+          ansible.builtin.command:
+            argv: ["/usr/bin/mv", "/usr/local/go", "{{ agent_relay_go_previous_root }}"]
+          changed_when: true
+          when: agent_relay_go_root.stat.isdir | default(false)
+
+        - name: Move staged Go toolchain into place
+          ansible.builtin.command:
+            argv: ["/usr/bin/mv", "{{ agent_relay_go_stage_root }}/go", "/usr/local/go"]
+          changed_when: true
+
+        - name: Validate activated Go toolchain
+          ansible.builtin.command:
+            argv: ["/usr/local/go/bin/go", "version"]
+          register: agent_relay_activated_go_version
+          changed_when: false
+          failed_when: >-
+            agent_relay_activated_go_version.rc != 0
+            or (agent_relay_activated_go_version.stdout | trim)
+              != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
+
+      rescue:
+        - name: Remove failed Go activation
+          ansible.builtin.file:
+            path: /usr/local/go
+            state: absent
+
+        - name: Restore previous Go installation
+          ansible.builtin.command:
+            argv: ["/usr/bin/mv", "{{ agent_relay_go_previous_root }}", "/usr/local/go"]
+          changed_when: true
+          when: agent_relay_go_root.stat.isdir | default(false)
+
+        - name: Report Go activation failure
+          ansible.builtin.fail:
+            msg: Go activation failed and the previous installation was restored when present.
+
+    - name: Remove previous Go installation after successful activation
+      ansible.builtin.file:
+        path: "{{ agent_relay_go_previous_root }}"
+        state: absent
+
+    - name: Remove empty Go staging directory
+      ansible.builtin.file:
+        path: "{{ agent_relay_go_stage_root }}"
+        state: absent
 
 - name: Create Rust toolchain roots
   ansible.builtin.file:
@@ -95,45 +165,34 @@
     - /opt/rust
     - /opt/rust/cargo
     - /opt/rust/rustup
-    - /usr/local/libexec/agent-relay
 
-- name: Download verified rustup-init
-  ansible.builtin.get_url:
-    url: https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init
-    dest: /usr/local/libexec/agent-relay/rustup-init
-    owner: root
-    group: root
-    mode: "0755"
-    checksum: sha256:https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init.sha256
+- name: Inspect Rust settings
+  ansible.builtin.stat:
+    path: /opt/rust/rustup/settings.toml
+    follow: false
+  register: agent_relay_rust_settings
 
-- name: Initialize rustup
+- name: Initialize configured Rust toolchain
   ansible.builtin.command:
-    argv:
-      - /usr/local/libexec/agent-relay/rustup-init
-      - -y
-      - --default-toolchain
-      - "{{ agent_relay_rust_toolchain }}"
-      - --profile
-      - minimal
-      - --no-modify-path
-    creates: /opt/rust/cargo/bin/rustup
+    argv: ["/usr/bin/rustup", "default", "{{ agent_relay_rust_toolchain }}"]
   environment:
     CARGO_HOME: /opt/rust/cargo
     RUSTUP_HOME: /opt/rust/rustup
+  changed_when: true
+  when: not (agent_relay_rust_settings.stat.isreg | default(false))
 
 - name: Inspect configured Rust toolchain
   ansible.builtin.command:
-    argv: ["/opt/rust/cargo/bin/rustup", "show", "active-toolchain"]
+    argv: ["/usr/bin/rustup", "show", "active-toolchain"]
   environment:
     CARGO_HOME: /opt/rust/cargo
     RUSTUP_HOME: /opt/rust/rustup
   register: agent_relay_rust_active
   changed_when: false
-  failed_when: false
 
 - name: Select configured Rust toolchain
   ansible.builtin.command:
-    argv: ["/opt/rust/cargo/bin/rustup", "default", "{{ agent_relay_rust_toolchain }}"]
+    argv: ["/usr/bin/rustup", "default", "{{ agent_relay_rust_toolchain }}"]
   environment:
     CARGO_HOME: /opt/rust/cargo
     RUSTUP_HOME: /opt/rust/rustup
@@ -142,7 +201,7 @@
 
 - name: Read installed Rust targets
   ansible.builtin.command:
-    argv: ["/opt/rust/cargo/bin/rustup", "target", "list", "--installed", "--toolchain", "{{ agent_relay_rust_toolchain }}"]
+    argv: ["/usr/bin/rustup", "target", "list", "--installed", "--toolchain", "{{ agent_relay_rust_toolchain }}"]
   environment:
     CARGO_HOME: /opt/rust/cargo
     RUSTUP_HOME: /opt/rust/rustup
@@ -151,7 +210,7 @@
 
 - name: Install configured Rust targets
   ansible.builtin.command:
-    argv: ["/opt/rust/cargo/bin/rustup", "target", "add", "--toolchain", "{{ agent_relay_rust_toolchain }}", "{{ item }}"]
+    argv: ["/usr/bin/rustup", "target", "add", "--toolchain", "{{ agent_relay_rust_toolchain }}", "{{ item }}"]
   environment:
     CARGO_HOME: /opt/rust/cargo
     RUSTUP_HOME: /opt/rust/rustup
@@ -171,21 +230,20 @@
     - cargo
     - rustc
     - rustdoc
-    - rustup
 
-- name: Check configured TypeScript version
-  ansible.builtin.command:
-    argv:
-      - /usr/bin/npm
-      - list
-      - --global
-      - --prefix
-      - /usr/local
-      - --depth=0
-      - "typescript@{{ agent_relay_typescript_version }}"
+- name: Inspect installed TypeScript package metadata
+  ansible.builtin.stat:
+    path: /usr/local/lib/node_modules/typescript/package.json
+    follow: false
   register: agent_relay_typescript_package
-  changed_when: false
-  failed_when: false
+
+- name: Read installed TypeScript package metadata
+  ansible.builtin.slurp:
+    src: /usr/local/lib/node_modules/typescript/package.json
+  register: agent_relay_typescript_package_metadata
+  when:
+    - agent_relay_typescript_package.stat.isreg | default(false)
+    - not (agent_relay_typescript_package.stat.islnk | default(false))
 
 - name: Install configured TypeScript version
   ansible.builtin.command:
@@ -196,7 +254,17 @@
       - --prefix
       - /usr/local
       - "typescript@{{ agent_relay_typescript_version }}"
-  when: agent_relay_typescript_package.rc != 0
+  when: >-
+    not (agent_relay_typescript_package.stat.isreg | default(false))
+    or (
+      (
+        agent_relay_typescript_package_metadata.content
+        | default('e30=')
+        | b64decode
+        | from_json
+      ).version
+      | default('')
+    ) != agent_relay_typescript_version
   changed_when: true
 
 - name: Install latest Codex CLI
@@ -211,7 +279,15 @@
   register: agent_relay_codex_install
   changed_when: "'up to date' not in agent_relay_codex_install.stdout"
 
+- name: Inspect system Git LFS configuration
+  ansible.builtin.command:
+    argv: ["/usr/bin/git", "config", "--system", "--get", "filter.lfs.process"]
+  register: agent_relay_git_lfs_filter
+  changed_when: false
+  failed_when: agent_relay_git_lfs_filter.rc not in [0, 1]
+
 - name: Initialize system Git LFS configuration
   ansible.builtin.command:
     argv: ["/usr/bin/git", "lfs", "install", "--system", "--skip-repo"]
-  changed_when: false
+  when: (agent_relay_git_lfs_filter.stdout | trim) != 'git-lfs filter-process'
+  changed_when: true

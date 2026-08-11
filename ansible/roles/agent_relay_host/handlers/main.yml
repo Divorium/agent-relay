@@ -1,32 +1,27 @@
 ---
-- name: Reload systemd after runner unit change
+- name: Agent Relay host | Reload systemd after runner unit change
   ansible.builtin.systemd_service:
     daemon_reload: true
+  listen: agent_relay_host reload runner systemd unit
 
-- name: Stop Docker before container reconfiguration
-  ansible.builtin.systemd_service:
-    name: docker.service
-    state: stopped
-  listen: Reconfigure container services
-
-- name: Restart containerd after configuration change
+- name: Agent Relay host | Restart containerd after configuration change
   ansible.builtin.systemd_service:
     name: containerd.service
     enabled: true
     state: restarted
-  listen: Reconfigure container services
+  listen: agent_relay_host restart containerd
 
-- name: Restart Docker sockets after configuration change
+- name: Agent Relay host | Restart Docker after configuration change
+  ansible.builtin.systemd_service:
+    name: docker.service
+    enabled: true
+    state: restarted
+  listen: agent_relay_host restart Docker
+
+- name: Agent Relay host | Reload systemd and restart Docker socket
   ansible.builtin.systemd_service:
     name: docker.socket
     enabled: true
     daemon_reload: true
     state: restarted
-  listen: Reconfigure container services
-
-- name: Start Docker after container reconfiguration
-  ansible.builtin.systemd_service:
-    name: docker.service
-    enabled: true
-    state: started
-  listen: Reconfigure container services
+  listen: agent_relay_host restart Docker socket

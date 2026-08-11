@@ -23,6 +23,10 @@ agent_relay_runtime_stage_root: "{{ agent_relay_storage_root }}/.agent-relay-dis
 agent_relay_runtime_previous_root: "{{ agent_relay_source_root }}/dist.previous"
 agent_relay_runtime_revision_marker: .agent-relay-source-revision
 agent_relay_runner_archive: "/var/tmp/actions-runner-linux-x64-{{ agent_relay_host_contract.runner_version }}.tar.gz"
+agent_relay_runner_stage_root: "{{ agent_relay_storage_root }}/.runner-stage"
+agent_relay_runner_backup_archive: "{{ agent_relay_storage_root }}/.runner-payload-backup.tar.gz"
+agent_relay_go_stage_root: "/usr/local/.agent-relay-go-{{ agent_relay_go_version }}"
+agent_relay_go_previous_root: /usr/local/.agent-relay-go-previous
 agent_relay_toolchain_path: /opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin
 agent_relay_service_name: "actions.runner.{{ agent_relay_host_contract.organization }}.{{ agent_relay_host_contract.runner_name }}.service"
 agent_relay_service_unit: "/etc/systemd/system/{{ agent_relay_service_name }}"
@@ -58,6 +62,7 @@ agent_relay_required_apt_packages:
   - procps
   - python3-pip
   - python3-venv
+  - rustup
   - tar
   - unzip
   - util-linux

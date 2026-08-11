@@ -37,6 +37,16 @@
     - "{{ agent_relay_docker_socket_root }}"
   register: agent_relay_runner_paths
 
+- name: Create runner workspace
+  ansible.builtin.file:
+    path: "{{ agent_relay_work_root }}"
+    state: directory
+    owner: "{{ agent_relay_runner_user }}"
+    group: "{{ agent_relay_runner_user }}"
+    mode: "0700"
+    follow: false
+    recurse: false
+
 - name: Create builder home
   ansible.builtin.file:
     path: "{{ agent_relay_build_home }}"

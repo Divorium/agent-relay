@@ -183,13 +183,6 @@ rm "${runner_root}/_work"
 rmdir "${storage_root}/work"
 mv "${runner_root}/_work.real" "${runner_root}/_work"
 
-mkdir "${storage_root}/work"
-if run_connection obsolete-work-token; then
-  echo 'GitHub connection unexpectedly accepted the obsolete runner work directory' >&2
-  exit 1
-fi
-rmdir "${storage_root}/work"
-
 run_connection first-token
 [[ -f "${state_root}/service-active" ]]
 [[ "$(grep -c registration-token "${state_root}/curl.log")" == 1 ]]

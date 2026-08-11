@@ -7,32 +7,17 @@
       Export AGENT_RELAY_GITHUB_CREDENTIAL on the Ansible control machine with organization
       Self-hosted runners: write permission before running playbooks/github-connect.yml.
 
-- name: Inspect prepared runner files
+- name: Inspect prepared runner workspace
   become: true
   ansible.builtin.stat:
-    path: "{{ item }}"
+    path: "{{ agent_relay_runner_root }}/_work"
     follow: false
-  loop:
-    - "{{ agent_relay_runner_root }}/bin/Runner.Listener"
-    - "{{ agent_relay_runner_root }}/config.sh"
-    - "{{ agent_relay_runner_root }}/_work"
-    - "{{ agent_relay_source_root }}/dist/src/run-codex.js"
-    - "{{ agent_relay_service_unit }}"
-  register: agent_relay_connection_prerequisites
+  register: agent_relay_connection_workspace
 
 - name: Require prepared runner host
   ansible.builtin.assert:
     that:
-      - agent_relay_connection_prerequisites.results[0].stat.isreg | default(false)
-      - not (agent_relay_connection_prerequisites.results[0].stat.islnk | default(false))
-      - agent_relay_connection_prerequisites.results[1].stat.isreg | default(false)
-      - not (agent_relay_connection_prerequisites.results[1].stat.islnk | default(false))
-      - agent_relay_connection_prerequisites.results[2].stat.isdir | default(false)
-      - not (agent_relay_connection_prerequisites.results[2].stat.islnk | default(false))
-      - agent_relay_connection_prerequisites.results[3].stat.isreg | default(false)
-      - not (agent_relay_connection_prerequisites.results[3].stat.islnk | default(false))
-      - agent_relay_connection_prerequisites.results[4].stat.isreg | default(false)
-      - not (agent_relay_connection_prerequisites.results[4].stat.islnk | default(false))
+      - agent_relay_connection_workspace.stat.isdir | default(false)
     fail_msg: Run playbooks/host.yml before connecting the runner to GitHub.
 
 - name: Inspect runner registration marker

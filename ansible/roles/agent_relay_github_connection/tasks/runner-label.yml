@@ -16,36 +16,21 @@
   changed_when: false
   no_log: true
   until: >-
-    agent_relay_runner_inventory.json.runners is defined
-    and (
-      agent_relay_runner_inventory.json.runners
-      | selectattr('name', 'equalto', agent_relay_host_contract.runner_name)
-      | list
-      | length
-    ) >= 1
+    agent_relay_runner_inventory.json.total_count | default(0) >= 1
   retries: 12
   delay: 5
-
-- name: Select configured organization runner
-  ansible.builtin.set_fact:
-    agent_relay_runner_matches: >-
-      {{
-        agent_relay_runner_inventory.json.runners
-        | selectattr('name', 'equalto', agent_relay_host_contract.runner_name)
-        | list
-      }}
-  no_log: true
 
 - name: Require unambiguous organization runner
   ansible.builtin.assert:
     that:
-      - agent_relay_runner_matches | length == 1
+      - agent_relay_runner_inventory.json.total_count == 1
+      - agent_relay_runner_inventory.json.runners | length == 1
     fail_msg: The configured organization runner name must resolve to exactly one runner.
 
 - name: Add managed Agent Relay runner label
   ansible.builtin.uri:
     url: >-
-      https://api.github.com/orgs/{{ agent_relay_host_contract.organization }}/actions/runners/{{ agent_relay_runner_matches[0].id | int }}/labels
+      https://api.github.com/orgs/{{ agent_relay_host_contract.organization }}/actions/runners/{{ agent_relay_runner_inventory.json.runners[0].id | int }}/labels
     method: POST
     headers:
       Accept: application/vnd.github+json
@@ -62,7 +47,7 @@
   no_log: true
   when: >-
     agent_relay_runner_label | lower not in (
-      agent_relay_runner_matches[0].labels
+      agent_relay_runner_inventory.json.runners[0].labels
       | map(attribute='name')
       | map('lower')
       | list

@@ -1,4 +1,8 @@
 ---
+- name: Reload systemd after runner unit change
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
 - name: Stop Docker before container reconfiguration
   ansible.builtin.systemd_service:
     name: docker.service

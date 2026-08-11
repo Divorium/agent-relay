@@ -3,20 +3,20 @@
   ansible.builtin.systemd_service:
     name: "{{ agent_relay_service_name }}"
     state: stopped
-  when: agent_relay_registration_state == 'complete'
+  when: agent_relay_registration_marker.stat.isreg | default(false)
 
 - name: Wait for active runner jobs to finish
-  ansible.builtin.shell: |
-    set -o pipefail
-    runner_uid="$(id -u "${RUNNER_USER}")"
-    ! ps -e -o euid=,comm= | awk -v uid="${runner_uid}" '$1 == uid && $2 == "Runner.Worker" { found=1 } END { exit !found }'
-  args:
-    executable: /bin/bash
-  environment:
-    RUNNER_USER: "{{ agent_relay_runner_user }}"
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/pgrep
+      - -u
+      - "{{ agent_relay_runner_user }}"
+      - -x
+      - Runner.Worker
   register: agent_relay_worker_state
   changed_when: false
-  until: agent_relay_worker_state.rc == 0
+  failed_when: agent_relay_worker_state.rc not in [0, 1]
+  until: agent_relay_worker_state.rc == 1
   retries: 150
   delay: 2
-  when: agent_relay_registration_state == 'complete'
+  when: agent_relay_registration_marker.stat.isreg | default(false)

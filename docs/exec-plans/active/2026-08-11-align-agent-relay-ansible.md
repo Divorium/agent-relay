@@ -17,6 +17,7 @@ The same change must leave the complete `ansible/` tree consistent with Ansible'
 - [x] (2026-08-11 20:10Z) Reconciled the remaining PR #65 Ansible changes against the necessity rules in this plan, restored task-scoped privilege escalation, and deleted the completed one-time workspace playbook.
 - [x] (2026-08-11 20:10Z) Reduced tests and documentation to the durable host, workspace, and GitHub-connection contracts required by this plan.
 - [x] (2026-08-11 20:10Z) Ran `ansible-playbook --syntax-check` for both permanent playbooks, the focused Node contract test, shell syntax checks, and JSON parsing successfully.
+- [x] (2026-08-11 21:23Z) Re-audited all 28 files under `ansible/` and removed the remaining calculated registration, payload, deployment, listener, and runner-label state while retaining direct safety checks and task-local external-tool observations.
 - [ ] (blocked: the connector-provided local repository surface does not contain the complete TypeScript source, lockfile, or build configuration) Run the complete `npm run check` command from a full repository checkout.
 - [ ] (blocked: this execution environment has no real `runner-host` inventory, SSH access, or privilege) Run the real host acceptance scenario twice and record the observed recaps and listener state.
 
@@ -39,6 +40,9 @@ The same change must leave the complete `ansible/` tree consistent with Ansible'
 
 - Observation: This execution environment has no real `runner-host` inventory or SSH path to the installed host.
   Evidence: Only `ansible/inventory/example.ini` is available locally, so the required two live `host.yml` runs and listener-state observation cannot be executed without inventing a substitute forbidden by this plan.
+
+- Observation: The later review found that `deploy.yml`, `listener-state.yml`, and `runner-label.yml` still encoded intermediate state through `set_fact`, counts, and a ternary service state even though direct registered results were sufficient.
+  Evidence: The corrected tree contains no `ansible.builtin.set_fact`; `.runner`, `Runner.Listener --version`, the runtime revision marker, the template result, and the GitHub API `name` filter now drive only the task that consumes each result.
 
 ## Decision Log
 
@@ -70,9 +74,13 @@ The same change must leave the complete `ansible/` tree consistent with Ansible'
   Rationale: The reported failure and the desired-state correction are entirely inside host provisioning. Existing local repository commands and the real Ansible entrypoint provide the required proof.
   Date/Author: 2026-08-11 / Codex
 
+- Decision: Do not represent runner or deployment state with calculated enums, aggregate booleans, filtered copies of API results, or ternary service states.
+  Rationale: Registered module results already expose the required local state. Direct task conditions are easier to audit and avoid a second state model inside the playbook.
+  Date/Author: 2026-08-11 / Codex
+
 ## Outcomes & Retrospective
 
-The repository implementation is complete at the current working head: host provisioning no longer invokes the duplicate toolchain validator, Codex remains an unconditional `@openai/codex@latest` npm reconciliation, GitHub connection privilege escalation is task-scoped, and the completed workspace migration entrypoint is removed. Both permanent playbooks pass `ansible-core 2.19.12` syntax checking, and the three focused repository contract tests pass.
+The repository implementation at the current working head no longer invokes the duplicate toolchain validator, keeps Codex as an unconditional `@openai/codex@latest` npm reconciliation, scopes GitHub connection privilege escalation per task, removes the completed workspace migration entrypoint, and contains no `set_fact`-based state machines. Runner registration uses `.runner`, runner payload and runtime decisions use their adjacent observations directly, listener state is declarative, and runner lookup uses GitHub's `name` query result without rebuilding a filtered list. Both permanent playbooks pass `ansible-core 2.19.12` syntax checking, and the three focused repository contract tests pass.
 
 Acceptance remains incomplete. The available repository surface cannot run the full `npm run check`, and this environment has no real host inventory or SSH access for the required two live `host.yml` runs and listener-state check. No mock, regex-only substitute, GitHub Actions workflow change, or operator-assigned validation was introduced.
 

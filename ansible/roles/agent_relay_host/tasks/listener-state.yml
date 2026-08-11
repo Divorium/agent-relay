@@ -3,23 +3,12 @@
   ansible.builtin.systemd_service:
     name: "{{ agent_relay_service_name }}"
     enabled: true
-    daemon_reload: true
-    state: >-
-      {{
-        'restarted'
-        if (
-          agent_relay_runner_install_required
-          or agent_relay_runtime_deployment_required
-          or agent_relay_service_unit_result.changed
-        )
-        else 'started'
-      }}
-  when: agent_relay_registration_state == 'complete'
+    state: started
+  when: agent_relay_registration_marker.stat.isreg | default(false)
 
 - name: Keep unregistered runner listener disabled
   ansible.builtin.systemd_service:
     name: "{{ agent_relay_service_name }}"
     enabled: false
     state: stopped
-    daemon_reload: true
-  when: agent_relay_registration_state == 'absent'
+  when: not (agent_relay_registration_marker.stat.exists | default(false))

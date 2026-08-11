@@ -35,6 +35,7 @@
       - --
       - "{{ agent_relay_runtime_previous_root }}"
       - "{{ agent_relay_source_root }}/dist"
+  changed_when: true
   when:
     - not agent_relay_active_runtime_before_recovery.stat.exists
     - agent_relay_previous_runtime_before_recovery.stat.isdir | default(false)
@@ -82,6 +83,7 @@
           - "{{ agent_relay_source_root }}/tsconfig.runtime.json"
           - --outDir
           - "{{ agent_relay_runtime_stage_root }}"
+      changed_when: true
 
     - name: Require checked out source revision
       ansible.builtin.assert:
@@ -148,6 +150,7 @@
               - --
               - "{{ agent_relay_source_root }}/dist"
               - "{{ agent_relay_runtime_previous_root }}"
+          changed_when: true
           when: agent_relay_active_runtime_state.stat.exists
 
         - name: Promote staged runtime
@@ -157,6 +160,7 @@
               - --
               - "{{ agent_relay_runtime_stage_root }}"
               - "{{ agent_relay_source_root }}/dist"
+          changed_when: true
 
       rescue:
         - name: Inspect runtime after failed activation
@@ -178,6 +182,7 @@
               - --
               - "{{ agent_relay_runtime_previous_root }}"
               - "{{ agent_relay_source_root }}/dist"
+          changed_when: true
           when:
             - not agent_relay_failed_activation_runtime.stat.exists
             - agent_relay_failed_activation_previous.stat.isdir | default(false)

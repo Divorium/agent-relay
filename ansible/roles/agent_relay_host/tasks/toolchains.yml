@@ -97,11 +97,6 @@
     - /opt/rust/rustup
     - /usr/local/libexec/agent-relay
 
-- name: Remove obsolete renamed rustup installer
-  ansible.builtin.file:
-    path: /usr/local/sbin/agent-relay-rustup-init
-    state: absent
-
 - name: Download verified rustup-init
   ansible.builtin.get_url:
     url: https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init
@@ -143,6 +138,7 @@
     CARGO_HOME: /opt/rust/cargo
     RUSTUP_HOME: /opt/rust/rustup
   when: "not agent_relay_rust_active.stdout.startswith(agent_relay_rust_toolchain)"
+  changed_when: true
 
 - name: Read installed Rust targets
   ansible.builtin.command:
@@ -201,6 +197,7 @@
       - /usr/local
       - "typescript@{{ agent_relay_typescript_version }}"
   when: agent_relay_typescript_package.rc != 0
+  changed_when: true
 
 - name: Install latest Codex CLI
   ansible.builtin.command:

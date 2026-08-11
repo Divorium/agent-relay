@@ -111,7 +111,6 @@ STORAGE_ROOT=${BASE_ROOT}/storage
 EXPECTED_SOURCE_ROOT=${STORAGE_ROOT}/agent-relay
 RUNNER_DIR=${STORAGE_ROOT}/runner
 RUNNER_WORK_DIR=${RUNNER_DIR}/_work
-OBSOLETE_WORK_DIR=${STORAGE_ROOT}/work
 RUNNER_HOME=${STORAGE_ROOT}/home
 SERVICE_NAME=actions.runner.${ORGANIZATION}.${RUNNER_NAME}.service
 SERVICE_UNIT=/etc/systemd/system/${SERVICE_NAME}
@@ -143,9 +142,6 @@ sudo -n test ! -L "${RUNNER_WORK_DIR}" || fail "Runner work directory must not b
 runner_uid="$(id -u "${RUNNER_USER}")"
 [[ "$(sudo_stat_uid "${RUNNER_WORK_DIR}")" == "${runner_uid}" ]] || fail "Runner work directory must be owned by ${RUNNER_USER}"
 [[ "$(sudo_stat_mode "${RUNNER_WORK_DIR}")" == "700" ]] || fail "Runner work directory must have mode 0700"
-if sudo -n test -e "${OBSOLETE_WORK_DIR}" || sudo -n test -L "${OBSOLETE_WORK_DIR}"; then
-  fail "Obsolete runner work path remains; run ansible/playbooks/host.yml first"
-fi
 require_regular_file "${SOURCE_ROOT}/dist/src/run-codex.js"
 sudo -n test -f "${SERVICE_UNIT}" || fail "Runner service unit is missing; run ansible/playbooks/host.yml first"
 sudo -n test ! -L "${SERVICE_UNIT}" || fail "Runner service unit must not be a symlink"

@@ -45,6 +45,20 @@ All host deployment behavior is expressed as Ansible tasks and templates. The ho
 
 Ansible owns the checkout and deployment lifecycle. Do not manually clone, pull, edit Docker systemd drop-ins, replace runner binaries, register the runner, or mutate runtime directories on the target.
 
+## One-time runner workspace replacement
+
+Hosts installed before this change require one explicit replacement of the old workspace layout. Run this playbook once before the next `host.yml` deployment:
+
+```bash
+ANSIBLE_CONFIG="$PWD/ansible.cfg" \
+ANSIBLE_ROLES_PATH="$PWD/roles" \
+ansible-playbook \
+  --inventory "$PWD/inventory/runners.ini" \
+  "$PWD/playbooks/replace-runner-workspace.yml"
+```
+
+The playbook acquires the lifecycle lock, stops the listener, waits for active `Runner.Worker` processes, removes only the managed `runner/_work -> ../work` link, creates the real `runner/_work` directory, deletes the disposable `storage/work` tree, and restores the listener when it was previously active. The playbook is temporary and can be removed after all installed hosts have completed this replacement.
+
 ## One-time GitHub connection
 
 After `host.yml` succeeds, export an organization credential:
@@ -155,7 +169,7 @@ The host role previews repository reconciliation before changing the target. It 
 
 When deployment is required, it acquires the lifecycle lock, stops an active listener, drains `Runner.Worker` processes, updates the checkout, verifies toolchains and Docker, reconciles runner binaries and the systemd unit, builds a private runtime stage in a clean environment, records the checked-out source revision, imports the entrypoint, rejects special files, finalizes exact owner and mode postconditions, and performs an atomic directory swap.
 
-The host role reconciles `runner/_work` as a real `github-runner:github-runner` mode `0700` directory. After listener stop and worker drain, it removes any existing `_work` symlink, creates the directory, and removes the obsolete `storage/work` path. Workflow checkouts are disposable; runner registration, credentials, home, and Codex authentication are stored elsewhere and remain unchanged.
+The host role declares `runner/_work` as a real `github-runner:github-runner` mode `0700` directory. It does not contain compatibility cleanup for the previous symlink layout.
 
 A build or import failure leaves the active runtime unchanged. An activation failure restores `dist.previous` when possible. When a previously active registered listener was stopped and deployment fails before replacement, Ansible restarts the preserved listener when the old runtime remains valid. A later run detects the old runtime marker and retries the failed build.
 

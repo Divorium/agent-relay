@@ -37,7 +37,6 @@ mapping = {
     "GO_SHA256": "go_sha256",
     "RUST_TOOLCHAIN": "rust_toolchain",
     "TYPESCRIPT_VERSION": "typescript_version",
-    "CODEX_VERSION": "codex_version",
     "BASE_ROOT": "base_root",
     "DOCKER_SOCKET_PATH": "docker_socket_path",
     "RUNNER_USER": "runner_user",

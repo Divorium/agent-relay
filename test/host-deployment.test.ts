@@ -144,6 +144,7 @@ test("host contract pins reproducible toolchains while Codex tracks latest", asy
   const toolchains = await text("ansible/roles/agent_relay_host/tasks/toolchains.yml");
   const deploymentPrepare = await text("ansible/roles/agent_relay_host/tasks/deployment-prepare.yml");
   const toolchainCheck = await text("scripts/host-toolchain-check.sh");
+  const hostConfig = await text("scripts/host-config.sh");
 
   assert.equal(contract.runner_version, "2.335.1");
   assert.equal(contract.go_version, "1.24.5");
@@ -157,6 +158,7 @@ test("host contract pins reproducible toolchains while Codex tracks latest", asy
   assert.doesNotMatch(toolchains, /agent_relay_codex_version/u);
   assert.doesNotMatch(deploymentPrepare, /EXPECTED_CODEX_VERSION/u);
   assert.doesNotMatch(toolchainCheck, /codex|Codex|EXPECTED_CODEX_VERSION/u);
+  assert.doesNotMatch(hostConfig, /CODEX_VERSION|codex_version/u);
 });
 
 test("legacy host installer entrypoints are absent from validation", async () => {

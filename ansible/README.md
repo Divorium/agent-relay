@@ -5,7 +5,7 @@ This directory has two disjoint Ansible entrypoints:
 - `playbooks/host.yml` prepares and updates the complete Debian host and Agent Relay runtime;
 - `playbooks/github-connect.yml` connects that prepared runner to GitHub.
 
-The GitHub connection playbook does not import, include, or rerun the host playbook. Manual clone, pull, runner registration, direct lifecycle script invocation, or PAT use during host deployment is not part of the supported flow.
+The GitHub connection playbook does not import, include, or rerun the host playbook. Manual clone, pull, runner registration, or PAT use during host deployment is not part of the supported flow.
 
 ## Control machine
 
@@ -59,8 +59,6 @@ This playbook requires no GitHub PAT and performs the complete idempotent host r
 
 `host.yml` does not invoke `install.sh`, read `AGENT_RELAY_GITHUB_CREDENTIAL`, obtain a runner registration token, invoke `config.sh`, or call a GitHub runner-label API.
 
-The host role and `scripts/github-connect` share `/var/lib/agent-relay/lifecycle/active` as an atomic lifecycle lock. Concurrent host deployment and GitHub connection fail closed. An interrupted Ansible operation may leave the lock directory; remove it only after confirming no host or connection operation is active.
-
 Docker keeps `/run/docker.sock` and also receives `/srv/github-runner/storage/docker-socket/docker.sock`. The dedicated directory is owned by `github-runner`, the socket is `root:docker` mode `0660`, and Codex receives only that directory as a writable sandbox root.
 
 The parent Docker storage directory and the containerd root are `root:root` mode `0711`. The Docker daemon data root at `/srv/github-runner/storage/docker/engine` is `root:root` mode `0710`, matching the final mode enforced by Docker after startup.
@@ -86,16 +84,15 @@ A fine-grained token needs the organization permission `Self-hosted runners: Rea
 
 `github-connect.yml` performs only GitHub connection work:
 
-- verifies that `host.yml` already installed runner binaries, runtime, and the service unit;
+- requires that `host.yml` already installed runner binaries, runtime, workspace, and the service unit;
 - creates organization runner registration when absent;
 - starts the registered runner service;
 - locates exactly one runner named `gh-runner`;
-- adds the custom `agent-relay` label without replacing unrelated labels;
-- verifies the resulting label set.
+- adds the custom `agent-relay` label without replacing unrelated labels.
 
 It does not install packages, users, Docker, toolchains, source code, runner binaries, systemd units, or the Agent Relay runtime. It does not call `host.yml` or the host role.
 
-The PAT is passed through standard input to the dedicated connection script and through authenticated GitHub API requests. It is hidden from Ansible output and is not stored on the target.
+Ansible uses the PAT only for authenticated GitHub API requests delegated to the control machine. Tasks handling the PAT and short-lived registration token use `no_log`; neither credential is stored on the target.
 
 ## Later releases
 

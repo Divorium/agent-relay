@@ -1,5 +1,60 @@
 ---
-- name: Preview Agent Relay checkout reconciliation
+- name: Inspect runner registration files
+  ansible.builtin.stat:
+    path: "{{ agent_relay_runner_root }}/{{ item }}"
+    follow: false
+  loop:
+    - .runner
+    - .credentials
+    - .credentials_rsaparams
+  register: agent_relay_registration_files
+
+- name: Determine runner registration state
+  ansible.builtin.set_fact:
+    agent_relay_registration_state: >-
+      {{
+        'absent'
+        if (
+          agent_relay_registration_files.results
+          | selectattr('stat.exists', 'equalto', true)
+          | list
+          | length
+        ) == 0
+        else (
+          'complete'
+          if (
+            agent_relay_registration_files.results
+            | selectattr('stat.exists', 'equalto', true)
+            | selectattr('stat.isreg', 'equalto', true)
+            | selectattr('stat.islnk', 'equalto', false)
+            | list
+            | length
+          ) == 3
+          else 'partial'
+        )
+      }}
+
+- name: Reject partial runner registration
+  ansible.builtin.assert:
+    that:
+      - agent_relay_registration_state != 'partial'
+    fail_msg: Runner registration is incomplete or has unsafe ownership or permissions.
+
+- name: Protect runner registration files
+  ansible.builtin.file:
+    path: "{{ agent_relay_runner_root }}/{{ item }}"
+    state: file
+    owner: "{{ agent_relay_runner_user }}"
+    group: "{{ agent_relay_runner_user }}"
+    mode: "0600"
+  loop:
+    - .runner
+    - .credentials
+    - .credentials_rsaparams
+  no_log: true
+  when: agent_relay_registration_state == 'complete'
+
+- name: Checkout Agent Relay source
   become: true
   become_user: "{{ agent_relay_admin_user }}"
   ansible.builtin.git:
@@ -12,16 +67,9 @@
   environment:
     HOME: "/home/{{ agent_relay_admin_user }}"
     GIT_TERMINAL_PROMPT: "0"
-  check_mode: true
-  register: agent_relay_checkout_preview
+  register: agent_relay_checkout_result
 
-- name: Inspect existing source checkout
-  ansible.builtin.stat:
-    path: "{{ agent_relay_source_root }}/.git"
-    follow: false
-  register: agent_relay_source_checkout
-
-- name: Detect writable source checkout entries
+- name: Remove group and other write permissions from source
   become: true
   become_user: "{{ agent_relay_admin_user }}"
   ansible.builtin.command:
@@ -55,15 +103,33 @@
       - -perm
       - /022
       - -print
-      - -quit
-  register: agent_relay_writable_source_entry
-  changed_when: false
-  when:
-    - agent_relay_source_checkout.stat.exists | default(false)
-    - agent_relay_source_checkout.stat.isdir | default(false)
-    - not (agent_relay_source_checkout.stat.islnk | default(false))
+      - -exec
+      - chmod
+      - go-w
+      - --
+      - "{}"
+      - +
+  register: agent_relay_checkout_permissions
+  changed_when: agent_relay_checkout_permissions.stdout | length > 0
 
-- name: Inspect runner binary files
+- name: Inspect runner binary directory
+  ansible.builtin.stat:
+    path: "{{ agent_relay_runner_root }}/bin"
+    follow: false
+  register: agent_relay_runner_binary_directory
+
+- name: Require regular runner binary directory
+  ansible.builtin.assert:
+    that:
+      - >-
+        not agent_relay_runner_binary_directory.stat.exists
+        or (
+          agent_relay_runner_binary_directory.stat.isdir | default(false)
+          and not (agent_relay_runner_binary_directory.stat.islnk | default(false))
+        )
+    fail_msg: Runner binary path must be a regular directory.
+
+- name: Inspect runner payload files
   ansible.builtin.stat:
     path: "{{ agent_relay_runner_root }}/{{ item }}"
     follow: false
@@ -73,113 +139,42 @@
     - bin/runsvc.sh
     - config.sh
     - runsvc.sh
-  register: agent_relay_runner_binary_files
+  register: agent_relay_runner_payload_files
 
-- name: Inspect runner directory contents
-  ansible.builtin.command:
-    argv:
-      - find
-      - -P
-      - "{{ agent_relay_runner_root }}"
-      - -mindepth
-      - "1"
-      - -maxdepth
-      - "1"
-      - "!"
-      - -name
-      - _work
-      - -print
-      - -quit
-  register: agent_relay_runner_directory_contents
-  changed_when: false
-
-- name: Count safe and existing runner binary files
+- name: Determine runner payload completeness
   ansible.builtin.set_fact:
-    agent_relay_runner_safe_binary_count: >-
+    agent_relay_runner_payload_complete: >-
       {{
-        agent_relay_runner_binary_files.results
-        | selectattr('stat.exists', 'equalto', true)
-        | selectattr('stat.isreg', 'equalto', true)
-        | selectattr('stat.islnk', 'equalto', false)
-        | selectattr('stat.executable', 'equalto', true)
-        | selectattr('stat.pw_name', 'equalto', agent_relay_runner_user)
-        | list
-        | length
-      }}
-    agent_relay_runner_existing_binary_count: >-
-      {{
-        agent_relay_runner_binary_files.results
-        | selectattr('stat.exists', 'equalto', true)
-        | list
-        | length
-      }}
-
-- name: Determine runner binary state
-  ansible.builtin.set_fact:
-    agent_relay_runner_binary_state: >-
-      {{
-        'complete'
-        if agent_relay_runner_safe_binary_count | int == 5
-        else (
-          'absent'
-          if (
-            agent_relay_runner_existing_binary_count | int == 0
-            and (agent_relay_runner_directory_contents.stdout | trim | length) == 0
-          )
-          else 'partial'
-        )
-      }}
-
-- name: Reject partial or unsafe runner binaries
-  ansible.builtin.assert:
-    that:
-      - agent_relay_runner_binary_state != 'partial'
-    fail_msg: >-
-      Runner binaries are partial or unsafe. Rebuild the host or remove the runner payload deliberately.
-
-- name: Inspect runner registration files
-  ansible.builtin.stat:
-    path: "{{ agent_relay_runner_root }}/{{ item }}"
-    follow: false
-  loop:
-    - .runner
-    - .credentials
-    - .credentials_rsaparams
-  register: agent_relay_registration_files
-
-- name: Determine runner registration state
-  ansible.builtin.set_fact:
-    agent_relay_registration_state: >-
-      {{
-        'absent'
-        if (
-          agent_relay_registration_files.results
+        (
+          agent_relay_runner_payload_files.results
           | selectattr('stat.exists', 'equalto', true)
+          | selectattr('stat.isreg', 'equalto', true)
+          | selectattr('stat.islnk', 'equalto', false)
+          | selectattr('stat.executable', 'equalto', true)
+          | selectattr('stat.pw_name', 'equalto', agent_relay_runner_user)
           | list
           | length
-        ) == 0
-        else (
-          'complete'
-          if (
-            agent_relay_registration_files.results
-            | selectattr('stat.exists', 'equalto', true)
-            | selectattr('stat.isreg', 'equalto', true)
-            | selectattr('stat.islnk', 'equalto', false)
-            | selectattr('stat.pw_name', 'equalto', agent_relay_runner_user)
-            | selectattr('stat.mode', 'equalto', '0600')
-            | list
-            | length
-          ) == 3
-          else 'partial'
-        )
+        ) == 5
       }}
 
-- name: Reject partial or unsafe runner registration
-  ansible.builtin.assert:
-    that:
-      - agent_relay_registration_state != 'partial'
-    fail_msg: >-
-      Runner registration is partial or unsafe. Rebuild the host or remove the registration state deliberately.
+- name: Read installed runner version
+  ansible.builtin.command:
+    argv:
+      - "{{ agent_relay_runner_root }}/bin/Runner.Listener"
+      - --version
+  register: agent_relay_runner_current_version
+  changed_when: false
+  failed_when: false
+  when: agent_relay_runner_payload_complete
+
+- name: Determine whether the runner payload requires reconciliation
+  ansible.builtin.set_fact:
+    agent_relay_runner_install_required: >-
+      {{
+        not agent_relay_runner_payload_complete
+        or (agent_relay_runner_current_version.stdout | default('') | trim)
+          != agent_relay_host_contract.runner_version
+      }}
 
 - name: Inspect deployed runtime entrypoint
   ansible.builtin.stat:
@@ -198,94 +193,65 @@
     src: "{{ agent_relay_source_root }}/dist/{{ agent_relay_runtime_revision_marker }}"
   register: agent_relay_runtime_revision_content
   when:
-    - agent_relay_runtime_revision_marker_state.stat.exists | default(false)
     - agent_relay_runtime_revision_marker_state.stat.isreg | default(false)
     - not (agent_relay_runtime_revision_marker_state.stat.islnk | default(false))
-    - agent_relay_runtime_revision_marker_state.stat.pw_name | default('') == 'root'
-    - agent_relay_runtime_revision_marker_state.stat.gr_name | default('') == 'root'
-    - agent_relay_runtime_revision_marker_state.stat.mode | default('') == '0644'
 
-- name: Determine deployed runtime state
+- name: Determine whether the runtime requires activation
   ansible.builtin.set_fact:
-    agent_relay_runtime_entrypoint_safe: >-
+    agent_relay_runtime_deployment_required: >-
       {{
-        agent_relay_runtime_entrypoint.stat.exists | default(false)
-        and agent_relay_runtime_entrypoint.stat.isreg | default(false)
-        and not (agent_relay_runtime_entrypoint.stat.islnk | default(false))
-        and agent_relay_runtime_entrypoint.stat.pw_name | default('') == 'root'
-        and agent_relay_runtime_entrypoint.stat.gr_name | default('') == 'root'
-        and agent_relay_runtime_entrypoint.stat.mode | default('') == '0644'
-      }}
-    agent_relay_runtime_revision_matches: >-
-      {{
-        agent_relay_checkout_preview.after is defined
-        and agent_relay_runtime_revision_marker_state.stat.exists | default(false)
-        and agent_relay_runtime_revision_marker_state.stat.isreg | default(false)
-        and not (agent_relay_runtime_revision_marker_state.stat.islnk | default(false))
-        and agent_relay_runtime_revision_marker_state.stat.pw_name | default('') == 'root'
-        and agent_relay_runtime_revision_marker_state.stat.gr_name | default('') == 'root'
-        and agent_relay_runtime_revision_marker_state.stat.mode | default('') == '0644'
-        and (
+        not (agent_relay_runtime_entrypoint.stat.isreg | default(false))
+        or (agent_relay_runtime_entrypoint.stat.islnk | default(false))
+        or (agent_relay_runtime_entrypoint.stat.pw_name | default('')) != 'root'
+        or (agent_relay_runtime_entrypoint.stat.gr_name | default('')) != 'root'
+        or (agent_relay_runtime_entrypoint.stat.mode | default('')) != '0644'
+        or not (agent_relay_runtime_revision_marker_state.stat.isreg | default(false))
+        or (agent_relay_runtime_revision_marker_state.stat.islnk | default(false))
+        or (agent_relay_runtime_revision_marker_state.stat.pw_name | default('')) != 'root'
+        or (agent_relay_runtime_revision_marker_state.stat.gr_name | default('')) != 'root'
+        or (agent_relay_runtime_revision_marker_state.stat.mode | default('')) != '0644'
+        or (
           agent_relay_runtime_revision_content.content
           | default('')
           | b64decode
           | trim
-        ) == agent_relay_checkout_preview.after
+        ) != agent_relay_checkout_result.after
       }}
 
-- name: Preview runner service unit reconciliation
+- name: Install runner systemd unit
   ansible.builtin.template:
     src: actions-runner.service.j2
     dest: "{{ agent_relay_service_unit }}"
     owner: root
     group: root
     mode: "0644"
-  check_mode: true
-  register: agent_relay_service_unit_preview
+  register: agent_relay_service_unit_result
 
-- name: Inspect runner service state
-  ansible.builtin.command:
-    argv:
-      - systemctl
-      - is-active
-      - --quiet
-      - "{{ agent_relay_service_name }}"
-  register: agent_relay_service_state
-  changed_when: false
-  failed_when: false
-
-- name: Determine whether deployment is required
-  ansible.builtin.set_fact:
-    agent_relay_deployment_required: >-
-      {{
-        agent_relay_checkout_preview.changed
-        or (agent_relay_writable_source_entry.stdout | default('') | length > 0)
-        or (agent_relay_runner_paths.changed | default(false))
-        or agent_relay_runner_binary_state == 'absent'
-        or not agent_relay_runtime_entrypoint_safe
-        or not agent_relay_runtime_revision_matches
-        or agent_relay_service_unit_preview.changed
-        or (agent_relay_registration_state == 'complete' and agent_relay_service_state.rc != 0)
-        or (agent_relay_registration_state == 'absent' and agent_relay_service_state.rc == 0)
-      }}
-
-- name: Reconcile Agent Relay host deployment
-  when: agent_relay_deployment_required
+- name: Reconcile runner payload and runtime
+  when:
+    - agent_relay_runner_install_required
+      or agent_relay_runtime_deployment_required
+      or agent_relay_service_unit_result.changed
   block:
-    - name: Prepare host deployment
+    - name: Prepare runner mutation
       ansible.builtin.import_tasks: deployment-prepare.yml
 
-    - name: Install GitHub Runner host payload
+    - name: Install GitHub Runner payload
       ansible.builtin.import_tasks: runner-installation.yml
+      when: agent_relay_runner_install_required
 
     - name: Build and activate Agent Relay runtime
       ansible.builtin.import_tasks: runtime-deployment.yml
-
-    - name: Reconcile runner listener state
-      ansible.builtin.import_tasks: listener-state.yml
+      when: agent_relay_runtime_deployment_required
 
   rescue:
-    - name: Restore previously active registered listener after deployment failure
+    - name: Inspect runtime available after failed mutation
+      ansible.builtin.stat:
+        path: "{{ agent_relay_source_root }}/dist/src/run-codex.js"
+        follow: false
+      register: agent_relay_runtime_after_failed_mutation
+
+    - name: Restore registered runner listener after failed mutation
       ansible.builtin.systemd_service:
         name: "{{ agent_relay_service_name }}"
         enabled: true
@@ -293,10 +259,12 @@
         daemon_reload: true
       when:
         - agent_relay_registration_state == 'complete'
-        - agent_relay_service_state.rc == 0
-        - agent_relay_runtime_entrypoint_safe
+        - agent_relay_runtime_after_failed_mutation.stat.isreg | default(false)
+        - not (agent_relay_runtime_after_failed_mutation.stat.islnk | default(false))
 
-    - name: Report host deployment failure
+    - name: Report runner mutation failure
       ansible.builtin.fail:
-        msg: >-
-          Agent Relay host deployment failed. Existing registration was preserved and the previous listener was restarted when safe.
+        msg: Agent Relay runner or runtime reconciliation failed.
+
+- name: Reconcile runner listener state
+  ansible.builtin.import_tasks: listener-state.yml

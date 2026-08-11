@@ -1,28 +1,19 @@
 ---
-- name: Enable and restart registered runner listener
+- name: Enable registered runner listener
   ansible.builtin.systemd_service:
     name: "{{ agent_relay_service_name }}"
     enabled: true
-    state: restarted
     daemon_reload: true
-  when: agent_relay_registration_state == 'complete'
-
-- name: Wait for registered runner listener readiness
-  ansible.builtin.shell: |
-    set -o pipefail
-    runner_uid="$(id -u "${RUNNER_USER}")"
-    systemctl is-active --quiet "${SERVICE_NAME}" && \
-      ps -e -o euid=,comm= | awk -v uid="${runner_uid}" '$1 == uid && $2 == "Runner.Listener" { found=1 } END { exit !found }'
-  args:
-    executable: /bin/bash
-  environment:
-    RUNNER_USER: "{{ agent_relay_runner_user }}"
-    SERVICE_NAME: "{{ agent_relay_service_name }}"
-  register: agent_relay_listener_readiness
-  changed_when: false
-  until: agent_relay_listener_readiness.rc == 0
-  retries: 60
-  delay: 1
+    state: >-
+      {{
+        'restarted'
+        if (
+          agent_relay_runner_install_required
+          or agent_relay_runtime_deployment_required
+          or agent_relay_service_unit_result.changed
+        )
+        else 'started'
+      }}
   when: agent_relay_registration_state == 'complete'
 
 - name: Keep unregistered runner listener disabled

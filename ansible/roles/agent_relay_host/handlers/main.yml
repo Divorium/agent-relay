@@ -1,0 +1,28 @@
+---
+- name: Stop Docker before container reconfiguration
+  ansible.builtin.systemd_service:
+    name: docker.service
+    state: stopped
+  listen: Reconfigure container services
+
+- name: Restart containerd after configuration change
+  ansible.builtin.systemd_service:
+    name: containerd.service
+    enabled: true
+    state: restarted
+  listen: Reconfigure container services
+
+- name: Restart Docker sockets after configuration change
+  ansible.builtin.systemd_service:
+    name: docker.socket
+    enabled: true
+    daemon_reload: true
+    state: restarted
+  listen: Reconfigure container services
+
+- name: Start Docker after container reconfiguration
+  ansible.builtin.systemd_service:
+    name: docker.service
+    enabled: true
+    state: started
+  listen: Reconfigure container services

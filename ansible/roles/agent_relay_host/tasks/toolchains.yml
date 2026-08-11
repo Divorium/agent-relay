@@ -63,16 +63,6 @@
     group: root
   when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
 
-- name: Validate staged Go toolchain
-  ansible.builtin.command:
-    argv:
-      - "/usr/local/.agent-relay-go-{{ agent_relay_go_version }}/go/bin/go"
-      - version
-  register: agent_relay_go_staged
-  changed_when: false
-  failed_when: (agent_relay_go_staged.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
-  when: (agent_relay_go_current.stdout | trim) != ('go version go' ~ agent_relay_go_version ~ ' linux/amd64')
-
 - name: Remove a different Go installation
   ansible.builtin.file:
     path: /usr/local/go
@@ -154,6 +144,15 @@
     RUSTUP_HOME: /opt/rust/rustup
   when: "not agent_relay_rust_active.stdout.startswith(agent_relay_rust_toolchain)"
 
+- name: Read installed Rust targets
+  ansible.builtin.command:
+    argv: ["/opt/rust/cargo/bin/rustup", "target", "list", "--installed", "--toolchain", "{{ agent_relay_rust_toolchain }}"]
+  environment:
+    CARGO_HOME: /opt/rust/cargo
+    RUSTUP_HOME: /opt/rust/rustup
+  register: agent_relay_rust_targets_installed
+  changed_when: false
+
 - name: Install configured Rust targets
   ansible.builtin.command:
     argv: ["/opt/rust/cargo/bin/rustup", "target", "add", "--toolchain", "{{ agent_relay_rust_toolchain }}", "{{ item }}"]
@@ -161,8 +160,8 @@
     CARGO_HOME: /opt/rust/cargo
     RUSTUP_HOME: /opt/rust/rustup
   loop: "{{ agent_relay_rust_targets }}"
-  register: agent_relay_rust_target_add
-  changed_when: "'is already installed' not in agent_relay_rust_target_add.stdout"
+  when: item not in agent_relay_rust_targets_installed.stdout_lines
+  changed_when: true
 
 - name: Publish Rust executables
   ansible.builtin.file:

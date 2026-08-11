@@ -85,10 +85,9 @@ This playbook does not rerun host provisioning and does not import `host.yml`. I
 2. creates runner registration when absent;
 3. enables and starts the listener;
 4. finds the organization runner named `gh-runner`;
-5. adds `agent-relay` through the additive labels endpoint;
-6. verifies the final label set.
+5. adds `agent-relay` through the additive labels endpoint when absent.
 
-The PAT is passed through standard input to `scripts/github-connect` and through authenticated GitHub API calls. It is hidden from Ansible output and is not stored on the target.
+Ansible uses the PAT only in authenticated GitHub API calls delegated to the control machine. Tasks handling the PAT and short-lived registration token use `no_log`; the PAT is never sent to the target, and neither credential is stored there.
 
 Rerun `github-connect.yml` only to repair registration service state or the managed label. Ordinary releases use only `host.yml` without a PAT.
 
@@ -123,16 +122,6 @@ ansible-playbook \
   "$PWD/playbooks/host.yml"
 ```
 
-## Lifecycle lock
-
-Host deployment and GitHub connection both use the atomic directory lock:
-
-```text
-/var/lib/agent-relay/lifecycle/active
-```
-
-A concurrent operation fails without mutation. Ansible removes its lock in an `always` block, and `scripts/github-connect` removes its lock through an exit trap. When an interrupted process leaves the directory, verify that no Ansible or connection process is active before removing only the empty `active` directory.
-
 ## If Ansible cannot find a role
 
 From the repository `ansible` directory, verify both roles:
@@ -161,19 +150,19 @@ ssh agent-relay-admin@HOST
 sudo -u github-runner -H /usr/local/bin/codex login
 ```
 
-Neither host deployment nor `scripts/github-connect` authenticates Codex.
+Neither host deployment nor GitHub connection authenticates Codex.
 
 ## Deployment behavior
 
-The host role previews repository reconciliation before changing the target. It also compares the desired checkout commit with `dist/.agent-relay-source-revision`; a missing, unsafe, or mismatched marker forces a rebuild even when the checkout already points at the desired revision.
+The host role reconciles the configured repository revision and compares its commit with `dist/.agent-relay-source-revision`; a missing, unsafe, or mismatched marker requires a rebuild.
 
-When deployment is required, it acquires the lifecycle lock, stops an active listener, drains `Runner.Worker` processes, updates the checkout, verifies toolchains and Docker, reconciles runner binaries and the systemd unit, builds a private runtime stage in a clean environment, records the checked-out source revision, imports the entrypoint, rejects special files, finalizes exact owner and mode postconditions, and performs an atomic directory swap.
+When runner files, the pinned runner version, the service unit, or the runtime revision require reconciliation, the role stops an active listener, drains `Runner.Worker` processes, applies the required tasks, and restores the listener for complete registration. Runtime activation remains an atomic directory swap.
 
 The host role declares `runner/_work` as a real `github-runner:github-runner` mode `0700` directory. It does not contain compatibility cleanup for the previous symlink layout.
 
 A build or import failure leaves the active runtime unchanged. An activation failure restores `dist.previous` when possible. When a previously active registered listener was stopped and deployment fails before replacement, Ansible restarts the preserved listener when the old runtime remains valid. A later run detects the old runtime marker and retries the failed build.
 
-The Docker role keeps `/run/docker.sock` and adds `/srv/github-runner/storage/docker-socket/docker.sock`. When listener configuration changes, it stops `docker.service`, restarts `docker.socket`, and then starts Docker so `dockerd -H fd://` receives both descriptors.
+The Docker role keeps `/run/docker.sock` and adds `/srv/github-runner/storage/docker-socket/docker.sock`. When container configuration changes, handlers stop Docker, restart containerd and `docker.socket`, and then start Docker so `dockerd -H fd://` receives both descriptors.
 
 Ansible declares the final daemon-owned filesystem modes: `/srv/github-runner/storage/docker` and the containerd root are `root:root` mode `0711`, while Docker data root `/srv/github-runner/storage/docker/engine` is `root:root` mode `0710`.
 
@@ -181,20 +170,7 @@ For each Codex execution, `scripts/codex-run` routes `worker-run` command logs i
 
 ## Interrupted runtime swap
 
-Normally `dist.previous` exists only between two rename operations and is deleted after successful activation.
-
-When an interrupted run leaves `dist.previous`:
-
-1. keep the runner stopped;
-2. inspect `dist` and `dist.previous` as root-owned regular directory trees;
-3. when `dist` is absent, restore the validated previous tree:
-   ```bash
-   sudo mv /srv/github-runner/storage/agent-relay/dist.previous \
-     /srv/github-runner/storage/agent-relay/dist
-   ```
-4. when a valid `dist` exists, deliberately remove the stale previous tree;
-5. rerun `host.yml` when state is safe;
-6. rebuild the host when state cannot be established safely.
+Normally `dist.previous` exists only between two rename operations and is deleted after successful activation. A later `host.yml` run restores it when `dist` is absent or removes it when `dist` already exists. Ansible stops only when either path is not a regular directory.
 
 ## Status
 
@@ -225,7 +201,6 @@ When the dedicated socket is missing or stale, rerun `host.yml`. Do not create a
 /srv/github-runner/storage/docker/containerd
 /srv/github-runner/storage/docker-socket/docker.sock
 /srv/github-runner/storage/.agent-relay-dist-stage
-/var/lib/agent-relay/lifecycle
 ```
 
 ## Codex output

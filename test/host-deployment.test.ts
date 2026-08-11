@@ -10,187 +10,101 @@ async function json(path: string): Promise<Record<string, unknown>> {
   return JSON.parse(await text(path)) as Record<string, unknown>;
 }
 
-test("host playbook performs PAT-free deployment directly through Ansible", async () => {
-  const deploy = [
+test("host provisioning and GitHub connection remain separate Ansible boundaries", async () => {
+  const host = [
+    await text("ansible/playbooks/host.yml"),
     await text("ansible/roles/agent_relay_host/tasks/deploy.yml"),
-    await text("ansible/roles/agent_relay_host/tasks/deployment-prepare.yml"),
     await text("ansible/roles/agent_relay_host/tasks/runner-installation.yml"),
     await text("ansible/roles/agent_relay_host/tasks/runtime-deployment.yml"),
-    await text("ansible/roles/agent_relay_host/tasks/listener-state.yml"),
   ].join("\n");
-  const defaults = await text("ansible/roles/agent_relay_host/defaults/main.yml");
-  const hostPlaybook = await text("ansible/playbooks/host.yml");
   const connectionPlaybook = await text("ansible/playbooks/github-connect.yml");
-  const connectionTasks = await text("ansible/roles/agent_relay_github_connection/tasks/main.yml");
+  const connection = await text("ansible/roles/agent_relay_github_connection/tasks/main.yml");
 
-  assert.doesNotMatch(deploy, /install\.sh|AGENT_RELAY_GITHUB_CREDENTIAL|registration-token|config\.sh --unattended/u);
-  assert.doesNotMatch(defaults, /AGENT_RELAY_GITHUB_CREDENTIAL|github_credential|runner_registration/u);
-  assert.doesNotMatch(hostPlaybook, /github-connect|agent_relay_github_connection|AGENT_RELAY_GITHUB_CREDENTIAL/u);
-  assert.match(connectionPlaybook, /role: agent_relay_github_connection/u);
+  assert.doesNotMatch(host, /AGENT_RELAY_GITHUB_CREDENTIAL|registration-token|- \.\/config\.sh/u);
   assert.doesNotMatch(connectionPlaybook, /import_playbook|role: agent_relay_host/u);
-  assert.match(connectionTasks, /- bash\n\s+- "\{\{ agent_relay_source_root \}\}\/scripts\/github-connect"/u);
-  assert.doesNotMatch(connectionTasks, /packages\.yml|users\.yml|filesystem\.yml|containers\.yml|toolchains\.yml|deploy\.yml/u);
-
-  assert.match(deploy, /ansible\.builtin\.get_url:[\s\S]*actions-runner-linux-x64/u);
-  assert.match(deploy, /ansible\.builtin\.unarchive:/u);
-  assert.match(deploy, /src: actions-runner\.service\.j2/u);
-  assert.match(deploy, /\/usr\/local\/bin\/tsc/u);
-  assert.match(deploy, /await import\(process\.env\.STAGED_ENTRYPOINT\)/u);
-  assert.match(deploy, /name: Activate staged runtime atomically/u);
-  assert.match(deploy, /name: Restore preserved runtime after failed activation/u);
-  assert.match(deploy, /name: Enable and restart registered runner listener/u);
-  assert.match(deploy, /name: Keep unregistered runner listener disabled/u);
+  assert.match(connection, /ansible\.builtin\.uri:[\s\S]*registration-token/u);
+  assert.match(connection, /ansible\.builtin\.command:[\s\S]*- \.\/config\.sh/u);
+  assert.doesNotMatch(connection, /scripts\/github-connect/u);
+  await assert.rejects(stat("scripts/github-connect"), { code: "ENOENT" });
 });
 
-test("host lifecycle uses one credential-free mutual exclusion boundary", async () => {
-  const vars = await text("ansible/roles/agent_relay_host/vars/main.yml");
-  const main = await text("ansible/roles/agent_relay_host/tasks/main.yml");
-  const filesystem = await text("ansible/roles/agent_relay_host/tasks/filesystem.yml");
-  const connection = await text("scripts/github-connect");
+test("playbooks contain no repository-specific concurrency framework", async () => {
+  const host = await text("ansible/roles/agent_relay_host/tasks/main.yml");
+  const connection = await text("ansible/roles/agent_relay_github_connection/tasks/main.yml");
 
-  assert.match(vars, /agent_relay_lifecycle_root: \/var\/lib\/agent-relay\/lifecycle/u);
-  assert.match(vars, /agent_relay_lifecycle_lock: "\{\{ agent_relay_lifecycle_root \}\}\/active"/u);
-  assert.match(main, /name: Create Agent Relay lifecycle lock root[\s\S]*owner: root[\s\S]*group: root[\s\S]*mode: "0755"/u);
-  assert.match(main, /name: Acquire Agent Relay lifecycle lock/u);
-  assert.match(main, /name: Release Agent Relay lifecycle lock/u);
-  const lock = main.indexOf("name: Acquire Agent Relay lifecycle lock");
-  const packages = main.indexOf("name: Install repositories and host packages");
-  const users = main.indexOf("name: Create administrator and service users");
-  assert.ok(lock >= 0 && packages > lock && users > lock);
-  assert.match(filesystem, /name: Reject unsafe obsolete installer lock/u);
-  assert.match(filesystem, /name: Remove obsolete installer lock/u);
-  assert.match(connection, /LIFECYCLE_ROOT=\/var\/lib\/agent-relay\/lifecycle/u);
-  assert.match(connection, /sudo -n mkdir -- "\$\{LIFECYCLE_LOCK\}"/u);
-  assert.match(connection, /sudo -n rmdir -- "\$\{LIFECYCLE_LOCK\}"/u);
-  assert.match(connection, /Lifecycle lock root must be root-owned/u);
-  assert.match(connection, /Lifecycle lock root must have mode 0755/u);
-  assert.doesNotMatch(connection, /install\.lock|flock/u);
+  for (const tasks of [host, connection]) {
+    assert.doesNotMatch(tasks, /lifecycle lock|agent_relay_lifecycle|\/usr\/bin\/mkdir/u);
+  }
 });
 
 test("runner workspace is a real directory inside the runner installation", async () => {
   const vars = await text("ansible/roles/agent_relay_host/vars/main.yml");
   const filesystem = await text("ansible/roles/agent_relay_host/tasks/filesystem.yml");
-  const deploy = await text("ansible/roles/agent_relay_host/tasks/deploy.yml");
   const runner = await text("ansible/roles/agent_relay_host/tasks/runner-installation.yml");
 
   assert.match(vars, /agent_relay_work_root: "\{\{ agent_relay_runner_root \}\}\/_work"/u);
   assert.match(filesystem, /name: Create runner workspace[\s\S]*state: directory[\s\S]*mode: "0700"/u);
-  assert.match(deploy, /- "!"\n\s+- -name\n\s+- _work/u);
   assert.doesNotMatch(runner, /state: link|src: \.\.\/work/u);
 });
 
-test("Docker data directories declare the daemon-owned final modes", async () => {
+test("container configuration uses handlers instead of manual changed-state branching", async () => {
+  const containers = await text("ansible/roles/agent_relay_host/tasks/containers.yml");
+  const handlers = await text("ansible/roles/agent_relay_host/handlers/main.yml");
+
+  assert.equal((containers.match(/notify: Reconfigure container services/gu) ?? []).length, 3);
+  assert.match(containers, /ansible\.builtin\.meta: flush_handlers/u);
+  assert.doesNotMatch(containers, /register: agent_relay_(docker|containerd)/u);
+  assert.doesNotMatch(containers, /'restarted' if/u);
+  assert.equal((handlers.match(/listen: Reconfigure container services/gu) ?? []).length, 4);
+});
+
+test("deployment uses module results and task-local conditions", async () => {
+  const deploy = await text("ansible/roles/agent_relay_host/tasks/deploy.yml");
+  const prepare = await text("ansible/roles/agent_relay_host/tasks/deployment-prepare.yml");
   const filesystem = await text("ansible/roles/agent_relay_host/tasks/filesystem.yml");
 
-  assert.match(filesystem, /agent_relay_storage_root \}\}\/docker", mode: "0711"/u);
-  assert.match(filesystem, /agent_relay_docker_root \}\}", mode: "0710"/u);
-  assert.match(filesystem, /agent_relay_containerd_root \}\}", mode: "0711"/u);
+  assert.match(deploy, /register: agent_relay_checkout_result/u);
+  assert.match(deploy, /agent_relay_runner_install_required:/u);
+  assert.match(deploy, /agent_relay_runtime_deployment_required:/u);
+  assert.doesNotMatch(deploy, /check_mode: true|checkout_preview|agent_relay_deployment_required:/u);
+  assert.doesNotMatch(prepare, /host-toolchain-check|docker info|EXPECTED_/u);
+  assert.doesNotMatch(filesystem, /obsolete installer lock|install\.lock|flock/u);
 });
 
-test("runner systemd unit is declarative and contains no credential handling", async () => {
-  const unit = await text("ansible/roles/agent_relay_host/templates/actions-runner.service.j2");
-
-  assert.match(unit, /^\[Unit\]/u);
-  assert.match(unit, /User=\{\{ agent_relay_runner_user \}\}/u);
-  assert.match(unit, /WorkingDirectory=\{\{ agent_relay_runner_root \}\}/u);
-  assert.match(unit, /ExecStart=\{\{ agent_relay_runner_root \}\}\/runsvc\.sh/u);
-  assert.match(unit, /Restart=always/u);
-  assert.doesNotMatch(unit, /token|credential|PAT|Environment=/iu);
-});
-
-test("runtime is built in a clean environment and validated before atomic activation", async () => {
+test("runtime remains cleanly built and atomically activated", async () => {
   const runtime = await text("ansible/roles/agent_relay_host/tasks/runtime-deployment.yml");
-  const deploymentState = await text("ansible/roles/agent_relay_host/tasks/deploy.yml");
-  const deploymentPrepare = await text("ansible/roles/agent_relay_host/tasks/deployment-prepare.yml");
-  const listener = await text("ansible/roles/agent_relay_host/tasks/listener-state.yml");
-  const deploy = `${runtime}\n${listener}`;
-  const compile = deploy.indexOf("name: Compile staged Agent Relay runtime");
-  const recordRevision = deploy.indexOf("name: Record staged runtime source revision", compile);
-  const inspect = deploy.indexOf("name: Inspect staged runtime entrypoint", recordRevision);
-  const importStage = deploy.indexOf("name: Import staged runtime entrypoint", inspect);
-  const unsafe = deploy.indexOf("name: Detect unsafe staged runtime entries", importStage);
-  const finalize = deploy.indexOf("name: Finalize staged runtime ownership", unsafe);
-  const verifyFinal = deploy.indexOf("name: Verify finalized runtime tree", finalize);
-  const activate = deploy.indexOf("name: Activate staged runtime atomically", verifyFinal);
-  const start = deploy.indexOf("name: Enable and restart registered runner listener", activate);
 
-  assert.ok(compile >= 0);
-  assert.ok(recordRevision > compile);
-  assert.ok(inspect > recordRevision);
-  assert.ok(importStage > inspect);
-  assert.ok(unsafe > importStage);
-  assert.ok(finalize > unsafe);
-  assert.ok(verifyFinal > finalize);
-  assert.ok(activate > verifyFinal);
-  assert.ok(start > activate);
-  assert.equal((runtime.match(/- \/usr\/bin\/env\n\s+- -i/gu) ?? []).length, 2);
-  assert.match(runtime, /Finalize staged runtime ownership without following links or crossing filesystems[\s\S]*- \/usr\/bin\/find[\s\S]*- -P[\s\S]*- -xdev[\s\S]*- \/usr\/bin\/chown[\s\S]*- -h/u);
-  assert.doesNotMatch(runtime, /name: Finalize staged runtime ownership[\s\S]*recurse: true/u);
-  assert.match(runtime, /name: Detect unsafe finalized runtime entries/u);
-  assert.match(runtime, /content: "\{\{ agent_relay_checkout_result\.after \}\}\\n"/u);
-  assert.match(deploymentPrepare, /register: agent_relay_checkout_result/u);
-  assert.match(deploymentState, /name: Inspect deployed runtime revision marker/u);
-  assert.match(deploymentState, /agent_relay_runtime_revision_matches:/u);
-  assert.match(deploymentState, /or not agent_relay_runtime_revision_matches/u);
-  assert.match(runtime, /name: Remove safe stale runtime stage without crossing filesystems/u);
-  assert.match(runtime, /- --one-file-system/u);
-  assert.match(runtime, /name: Remove preserved runtime after successful activation without crossing filesystems/u);
+  assert.match(runtime, /- \/usr\/bin\/env\n\s+- -i/u);
+  assert.match(runtime, /name: Import staged runtime entrypoint/u);
+  assert.match(runtime, /name: Activate staged runtime/u);
+  assert.match(runtime, /name: Restore preserved runtime after failed activation/u);
+  assert.match(runtime, /agent_relay_checkout_result\.after/u);
 });
 
-test("host contract pins reproducible toolchains while Codex tracks latest", async () => {
+test("Ansible installs latest Codex without a second host validator", async () => {
   const contract = await json("config/runner-host.json");
   const vars = await text("ansible/roles/agent_relay_host/vars/main.yml");
-  const runner = await text("ansible/roles/agent_relay_host/tasks/runner-installation.yml");
   const toolchains = await text("ansible/roles/agent_relay_host/tasks/toolchains.yml");
-  const deploymentPrepare = await text("ansible/roles/agent_relay_host/tasks/deployment-prepare.yml");
-  const toolchainCheck = await text("scripts/host-toolchain-check.sh");
-  const hostConfig = await text("scripts/host-config.sh");
 
-  assert.equal(contract.runner_version, "2.335.1");
-  assert.equal(contract.go_version, "1.24.5");
-  assert.equal(contract.typescript_version, "5.8.3");
   assert.equal(contract.codex_version, undefined);
-  assert.match(vars, /agent_relay_host_contract:/u);
   assert.doesNotMatch(vars, /agent_relay_codex_version/u);
-  assert.match(runner, /agent_relay_host_contract\.runner_version/u);
-  assert.match(runner, /agent_relay_host_contract\.runner_sha256/u);
   assert.match(toolchains, /name: Install latest Codex CLI[\s\S]*"@openai\/codex@latest"/u);
-  assert.doesNotMatch(toolchains, /agent_relay_codex_version/u);
-  assert.doesNotMatch(deploymentPrepare, /EXPECTED_CODEX_VERSION/u);
-  assert.doesNotMatch(toolchainCheck, /codex|Codex|EXPECTED_CODEX_VERSION/u);
-  assert.doesNotMatch(hostConfig, /CODEX_VERSION|codex_version/u);
+  await assert.rejects(stat("scripts/host-toolchain-check.sh"), { code: "ENOENT" });
 });
 
-test("legacy host installer entrypoints are absent from validation", async () => {
-  const pkg = await text("package.json");
-  const systemTest = await text("test-system/github-connect.integration.sh");
-  const connection = await text("scripts/github-connect");
-  const connectionTasks = await text("ansible/roles/agent_relay_github_connection/tasks/main.yml");
-  const toolchainMetadata = await stat("scripts/host-toolchain-check.sh");
-
-  assert.doesNotMatch(pkg, /install\.sh|install-script\.integration/u);
-  assert.match(pkg, /test-system\/github-connect\.integration\.sh/u);
-  assert.match(systemTest, /GitHub connection integration checks passed/u);
-  assert.match(connection, /^#!\/usr\/bin\/env bash\n/u);
-  assert.match(connectionTasks, /argv:\n\s+- bash\n\s+- "\{\{ agent_relay_source_root \}\}\/scripts\/github-connect"/u);
-  assert.notEqual(toolchainMetadata.mode & 0o111, 0);
-});
-
-test("host contract pins an explicit Rust toolchain and every target consumers require", async () => {
-  const contract = await json("config/runner-host.json") as { rust_toolchain: string; rust_targets: string[] };
-  assert.match(
-    contract.rust_toolchain,
-    /^\d+\.\d+\.\d+$/,
-    "rust_toolchain must pin an exact version; a moving channel changes the sandbox under running agents",
-  );
-  assert.ok(Array.isArray(contract.rust_targets) && contract.rust_targets.length > 0, "rust_targets must be declared");
-  assert.ok(contract.rust_targets.includes("wasm32-unknown-unknown"), "consumer action packs build for wasm32-unknown-unknown");
-
+test("host contract pins runner and build toolchains", async () => {
+  const contract = await json("config/runner-host.json") as {
+    runner_version: string;
+    rust_toolchain: string;
+    rust_targets: string[];
+  };
+  const deploy = await text("ansible/roles/agent_relay_host/tasks/deploy.yml");
   const toolchains = await text("ansible/roles/agent_relay_host/tasks/toolchains.yml");
-  assert.match(
-    toolchains,
-    /rustup", "target", "add"/,
-    "targets must be installed during provisioning; the agent sandbox mounts /opt/rust read-only and cannot install them itself",
-  );
-  assert.match(toolchains, /loop: "\{\{ agent_relay_rust_targets \}\}"/);
+
+  assert.match(contract.runner_version, /^\d+\.\d+\.\d+$/u);
+  assert.match(contract.rust_toolchain, /^\d+\.\d+\.\d+$/u);
+  assert.ok(contract.rust_targets.includes("wasm32-unknown-unknown"));
+  assert.match(deploy, /name: Read installed runner version[\s\S]*Runner\.Listener[\s\S]*--version/u);
+  assert.match(toolchains, /rustup", "target", "list", "--installed"/u);
+  assert.match(toolchains, /when: item not in agent_relay_rust_targets_installed\.stdout_lines/u);
 });

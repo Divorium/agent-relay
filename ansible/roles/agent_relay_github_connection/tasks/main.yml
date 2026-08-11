@@ -7,20 +7,134 @@
       Export AGENT_RELAY_GITHUB_CREDENTIAL on the Ansible control machine with organization
       Self-hosted runners: write permission before running playbooks/github-connect.yml.
 
-- name: Connect the prepared runner to GitHub
+- name: Inspect prepared runner files
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ agent_relay_runner_root }}/bin/Runner.Listener"
+    - "{{ agent_relay_runner_root }}/config.sh"
+    - "{{ agent_relay_runner_root }}/_work"
+    - "{{ agent_relay_source_root }}/dist/src/run-codex.js"
+    - "{{ agent_relay_service_unit }}"
+  register: agent_relay_connection_prerequisites
+
+- name: Require prepared runner host
+  ansible.builtin.assert:
+    that:
+      - agent_relay_connection_prerequisites.results[0].stat.isreg | default(false)
+      - not (agent_relay_connection_prerequisites.results[0].stat.islnk | default(false))
+      - agent_relay_connection_prerequisites.results[1].stat.isreg | default(false)
+      - not (agent_relay_connection_prerequisites.results[1].stat.islnk | default(false))
+      - agent_relay_connection_prerequisites.results[2].stat.isdir | default(false)
+      - not (agent_relay_connection_prerequisites.results[2].stat.islnk | default(false))
+      - agent_relay_connection_prerequisites.results[3].stat.isreg | default(false)
+      - not (agent_relay_connection_prerequisites.results[3].stat.islnk | default(false))
+      - agent_relay_connection_prerequisites.results[4].stat.isreg | default(false)
+      - not (agent_relay_connection_prerequisites.results[4].stat.islnk | default(false))
+    fail_msg: Run playbooks/host.yml before connecting the runner to GitHub.
+
+- name: Inspect runner registration files
+  ansible.builtin.stat:
+    path: "{{ agent_relay_runner_root }}/{{ item }}"
+    follow: false
+  loop:
+    - .runner
+    - .credentials
+    - .credentials_rsaparams
+  register: agent_relay_connection_registration_files
+  no_log: true
+
+- name: Determine runner registration state
+  ansible.builtin.set_fact:
+    agent_relay_connection_registration_state: >-
+      {{
+        'absent'
+        if (
+          agent_relay_connection_registration_files.results
+          | selectattr('stat.exists', 'equalto', true)
+          | list
+          | length
+        ) == 0
+        else (
+          'complete'
+          if (
+            agent_relay_connection_registration_files.results
+            | selectattr('stat.exists', 'equalto', true)
+            | selectattr('stat.isreg', 'equalto', true)
+            | selectattr('stat.islnk', 'equalto', false)
+            | list
+            | length
+          ) == 3
+          else 'partial'
+        )
+      }}
+  no_log: true
+
+- name: Reject partial runner registration
+  ansible.builtin.assert:
+    that:
+      - agent_relay_connection_registration_state != 'partial'
+    fail_msg: Runner registration is incomplete or unsafe.
+
+- name: Create organization runner registration token
+  ansible.builtin.uri:
+    url: >-
+      https://api.github.com/orgs/{{ agent_relay_host_contract.organization }}/actions/runners/registration-token
+    method: POST
+    headers:
+      Accept: application/vnd.github+json
+      Authorization: "Bearer {{ agent_relay_github_credential }}"
+      X-GitHub-Api-Version: "{{ agent_relay_host_contract.github_api_version }}"
+    return_content: true
+    status_code: 201
+  register: agent_relay_registration_token
+  delegate_to: localhost
+  become: false
+  no_log: true
+  when: agent_relay_connection_registration_state == 'absent'
+
+- name: Register organization runner
   become: true
-  become_user: "{{ agent_relay_admin_user }}"
+  become_user: "{{ agent_relay_host_contract.runner_user }}"
   ansible.builtin.command:
     argv:
-      - bash
-      - "{{ agent_relay_source_root }}/scripts/github-connect"
-    chdir: "{{ agent_relay_source_root }}"
-    stdin: "{{ agent_relay_github_credential }}"
-    stdin_add_newline: true
+      - ./config.sh
+      - --unattended
+      - --replace
+      - --url
+      - "{{ agent_relay_host_contract.organization_url }}"
+      - --token
+      - "{{ agent_relay_registration_token.json.token }}"
+      - --name
+      - "{{ agent_relay_host_contract.runner_name }}"
+      - --work
+      - _work
+    chdir: "{{ agent_relay_runner_root }}"
   environment:
-    HOME: "/home/{{ agent_relay_admin_user }}"
+    HOME: "{{ agent_relay_storage_root }}/home"
   no_log: true
-  changed_when: true
+  when: agent_relay_connection_registration_state == 'absent'
 
-- name: Reconcile the managed GitHub runner label
+- name: Protect runner registration files
+  ansible.builtin.file:
+    path: "{{ agent_relay_runner_root }}/{{ item }}"
+    state: file
+    owner: "{{ agent_relay_host_contract.runner_user }}"
+    group: "{{ agent_relay_host_contract.runner_user }}"
+    mode: "0600"
+  loop:
+    - .runner
+    - .credentials
+    - .credentials_rsaparams
+  no_log: true
+
+- name: Enable and start runner listener
+  ansible.builtin.systemd_service:
+    name: "{{ agent_relay_service_name }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Reconcile managed runner label
   ansible.builtin.import_tasks: runner-label.yml

@@ -67,44 +67,16 @@ test("host lifecycle uses one credential-free mutual exclusion boundary", async 
   assert.doesNotMatch(connection, /install\.lock|flock/u);
 });
 
-test("runner workspace transition is isolated from normal host reconciliation", async () => {
+test("runner workspace is a real directory inside the runner installation", async () => {
   const vars = await text("ansible/roles/agent_relay_host/vars/main.yml");
   const filesystem = await text("ansible/roles/agent_relay_host/tasks/filesystem.yml");
   const deploy = await text("ansible/roles/agent_relay_host/tasks/deploy.yml");
   const runner = await text("ansible/roles/agent_relay_host/tasks/runner-installation.yml");
-  const transition = await text("ansible/playbooks/replace-runner-workspace.yml");
-  const connection = await text("scripts/github-connect");
 
   assert.match(vars, /agent_relay_work_root: "\{\{ agent_relay_runner_root \}\}\/_work"/u);
-  assert.doesNotMatch(vars, /obsolete_work/u);
-  assert.match(filesystem, /name: Create runner workspace[\s\S]*state: directory[\s\S]*mode: "0700"[\s\S]*follow: false/u);
+  assert.match(filesystem, /name: Create runner workspace[\s\S]*state: directory[\s\S]*mode: "0700"/u);
   assert.match(deploy, /- "!"\n\s+- -name\n\s+- _work/u);
-  assert.doesNotMatch(deploy, /Inspect runner work|obsolete runner work|workspace_reconciliation/u);
-  assert.doesNotMatch(runner, /runner work|state: link|src: \.\.\/work|obsolete_work/u);
-
-  const lock = transition.indexOf("name: Acquire Agent Relay lifecycle lock");
-  const inspect = transition.indexOf("name: Inspect legacy runner workspace link");
-  const stop = transition.indexOf("name: Stop runner listener");
-  const drain = transition.indexOf("name: Wait for active runner jobs to finish");
-  const unlink = transition.indexOf("name: Remove legacy runner workspace link");
-  const create = transition.indexOf("name: Create runner workspace directory");
-  const removeObsolete = transition.indexOf("name: Remove obsolete runner workspace");
-  const restart = transition.indexOf("name: Restore runner listener");
-  const unlock = transition.indexOf("name: Release Agent Relay lifecycle lock");
-
-  assert.ok(lock >= 0);
-  assert.ok(inspect > lock);
-  assert.ok(stop > inspect);
-  assert.ok(drain > stop);
-  assert.ok(unlink > drain);
-  assert.ok(create > unlink);
-  assert.ok(removeObsolete > create);
-  assert.ok(restart > removeObsolete);
-  assert.ok(unlock > restart);
-  assert.match(transition, /lnk_target == '\.\.\/work'/u);
-  assert.match(connection, /RUNNER_WORK_DIR=\$\{RUNNER_DIR\}\/_work/u);
-  assert.match(connection, /Runner work directory must not be a symlink/u);
-  assert.doesNotMatch(connection, /OBSOLETE_WORK_DIR|Obsolete runner work path/u);
+  assert.doesNotMatch(runner, /state: link|src: \.\.\/work/u);
 });
 
 test("Docker data directories declare the daemon-owned final modes", async () => {

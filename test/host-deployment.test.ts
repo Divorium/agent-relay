@@ -137,18 +137,27 @@ test("runtime is built in a clean environment and validated before atomic activa
   assert.match(runtime, /name: Remove preserved runtime after successful activation without crossing filesystems/u);
 });
 
-test("host contract supplies runner and toolchain versions", async () => {
+test("host contract pins reproducible toolchains while Codex tracks latest", async () => {
   const contract = await json("config/runner-host.json");
   const vars = await text("ansible/roles/agent_relay_host/vars/main.yml");
   const runner = await text("ansible/roles/agent_relay_host/tasks/runner-installation.yml");
+  const toolchains = await text("ansible/roles/agent_relay_host/tasks/toolchains.yml");
+  const deploymentPrepare = await text("ansible/roles/agent_relay_host/tasks/deployment-prepare.yml");
+  const toolchainCheck = await text("scripts/host-toolchain-check.sh");
 
   assert.equal(contract.runner_version, "2.335.1");
   assert.equal(contract.go_version, "1.24.5");
   assert.equal(contract.typescript_version, "5.8.3");
-  assert.equal(contract.codex_version, "0.144.4");
+  assert.equal(contract.codex_version, undefined);
   assert.match(vars, /agent_relay_host_contract:/u);
+  assert.doesNotMatch(vars, /agent_relay_codex_version/u);
   assert.match(runner, /agent_relay_host_contract\.runner_version/u);
   assert.match(runner, /agent_relay_host_contract\.runner_sha256/u);
+  assert.match(toolchains, /name: Install latest Codex CLI[\s\S]*"@openai\/codex@latest"/u);
+  assert.doesNotMatch(toolchains, /agent_relay_codex_version/u);
+  assert.doesNotMatch(deploymentPrepare, /EXPECTED_CODEX_VERSION/u);
+  assert.doesNotMatch(toolchainCheck, /EXPECTED_CODEX_VERSION|Unexpected Codex version/u);
+  assert.match(toolchainCheck, /codex --version >\/dev\/null/u);
 });
 
 test("legacy host installer entrypoints are absent from validation", async () => {

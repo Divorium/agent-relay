@@ -8,7 +8,6 @@ agent_relay_go_sha256: "{{ agent_relay_host_contract.go_sha256 }}"
 agent_relay_rust_toolchain: "{{ agent_relay_host_contract.rust_toolchain }}"
 agent_relay_rust_targets: "{{ agent_relay_host_contract.rust_targets }}"
 agent_relay_typescript_version: "{{ agent_relay_host_contract.typescript_version }}"
-agent_relay_codex_version: "{{ agent_relay_host_contract.codex_version }}"
 
 agent_relay_storage_root: "{{ agent_relay_host_contract.base_root }}/storage"
 agent_relay_source_root: "{{ agent_relay_storage_root }}/agent-relay"

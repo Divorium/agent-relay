@@ -6,7 +6,6 @@ set -euo pipefail
 : "${EXPECTED_GO_VERSION:?EXPECTED_GO_VERSION is required}"
 : "${EXPECTED_RUST_TOOLCHAIN:?EXPECTED_RUST_TOOLCHAIN is required}"
 : "${EXPECTED_TYPESCRIPT_VERSION:?EXPECTED_TYPESCRIPT_VERSION is required}"
-: "${EXPECTED_CODEX_VERSION:?EXPECTED_CODEX_VERSION is required}"
 : "${TOOLCHAIN_JAVA_HOME:?TOOLCHAIN_JAVA_HOME is required}"
 : "${TOOLCHAIN_GO_ROOT:?TOOLCHAIN_GO_ROOT is required}"
 : "${TOOLCHAIN_RUST_BIN:?TOOLCHAIN_RUST_BIN is required}"
@@ -44,7 +43,7 @@ node_version="$(node --version)"
 java_version="$(java -version 2>&1 | head -n 1)"
 go_version="$(go version)"
 tsc_version="$(tsc --version)"
-codex_version="$(codex --version)"
+codex --version >/dev/null
 
 [[ "${node_version}" == v"${EXPECTED_NODE_MAJOR}".* ]] || {
   echo "Node.js ${EXPECTED_NODE_MAJOR} is required: ${node_version}" >&2
@@ -60,10 +59,6 @@ codex_version="$(codex --version)"
 }
 [[ "${tsc_version}" == "Version ${EXPECTED_TYPESCRIPT_VERSION}" ]] || {
   echo "Unexpected TypeScript version: ${tsc_version}" >&2
-  exit 1
-}
-[[ "${codex_version}" =~ (^|[[:space:]])${EXPECTED_CODEX_VERSION//./\.}$ ]] || {
-  echo "Unexpected Codex version: ${codex_version}" >&2
   exit 1
 }
 RUSTUP_HOME="${TOOLCHAIN_RUSTUP_HOME}" CARGO_HOME="${TOOLCHAIN_RUST_CARGO_HOME}" \

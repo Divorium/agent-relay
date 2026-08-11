@@ -126,7 +126,7 @@ The host role owns:
 - Go 1.24.5 under `/usr/local/go`;
 - stable Rust under `/opt/rust`;
 - TypeScript 5.8.3;
-- Codex CLI 0.144.4;
+- Codex CLI, updated to the latest available release on every `host.yml` run;
 - Docker Engine, containerd, Buildx, Compose, Git LFS, and native runner dependencies.
 
 `scripts/toolchain-environment.sh` defines the trusted runtime path layout, while `scripts/host-toolchain-check.sh` validates the installed versions during host deployment. Every GitHub Actions workflow executes on the managed self-hosted runner, and CI runs `npm run check:toolchain` against that installed environment.
@@ -230,7 +230,7 @@ All GitHub Actions workflows run only on the managed self-hosted organization ru
 - Node tests with mandatory 100 percent line, branch, and function coverage;
 - production runtime compilation;
 - shell and Node syntax checks;
-- exact managed-host toolchain validation through `npm run check:toolchain`;
+- managed-host toolchain compatibility validation through `npm run check:toolchain`;
 - behavioral GitHub connection tests;
 - static assertions for direct Ansible host deployment, atomic activation, lifecycle locking, PAT isolation, and disjoint roles.
 

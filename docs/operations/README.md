@@ -34,7 +34,7 @@ The host playbook does not require or read `AGENT_RELAY_GITHUB_CREDENTIAL`. It o
 - secure filesystem roots;
 - Docker and containerd configuration;
 - both Docker socket listeners;
-- language toolchains and Codex CLI;
+- pinned language toolchains and the latest available Codex CLI on every run;
 - official GitHub Runner binaries;
 - the runner systemd unit;
 - managed source checkout;

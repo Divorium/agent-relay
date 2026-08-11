@@ -178,7 +178,7 @@
     - rustdoc
     - rustup
 
-- name: Check configured global npm packages
+- name: Check configured TypeScript version
   ansible.builtin.command:
     argv:
       - /usr/bin/npm
@@ -188,12 +188,11 @@
       - /usr/local
       - --depth=0
       - "typescript@{{ agent_relay_typescript_version }}"
-      - "@openai/codex@{{ agent_relay_codex_version }}"
-  register: agent_relay_npm_packages
+  register: agent_relay_typescript_package
   changed_when: false
   failed_when: false
 
-- name: Install configured TypeScript and Codex CLI versions
+- name: Install configured TypeScript version
   ansible.builtin.command:
     argv:
       - /usr/bin/npm
@@ -202,8 +201,19 @@
       - --prefix
       - /usr/local
       - "typescript@{{ agent_relay_typescript_version }}"
-      - "@openai/codex@{{ agent_relay_codex_version }}"
-  when: agent_relay_npm_packages.rc != 0
+  when: agent_relay_typescript_package.rc != 0
+
+- name: Install latest Codex CLI
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/npm
+      - install
+      - --global
+      - --prefix
+      - /usr/local
+      - "@openai/codex@latest"
+  register: agent_relay_codex_install
+  changed_when: "'up to date' not in agent_relay_codex_install.stdout"
 
 - name: Initialize system Git LFS configuration
   ansible.builtin.command:

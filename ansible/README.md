@@ -46,7 +46,7 @@ ansible-playbook \
 This playbook requires no GitHub PAT and performs the complete idempotent host reconciliation directly through Ansible:
 
 - bootstraps Python 3;
-- installs packages and toolchains;
+- installs packages and pinned language toolchains, then updates Codex CLI to the latest available release;
 - creates the administrator, runner, and builder accounts;
 - configures Docker and containerd;
 - creates the ordinary and dedicated Docker sockets;
@@ -110,4 +110,4 @@ ssh agent-relay-admin@HOST
 sudo -u github-runner -H /usr/local/bin/codex login
 ```
 
-Runner, toolchain, and host constants come from `../config/runner-host.json`. Operational recovery procedures are documented in [`../docs/operations/README.md`](../docs/operations/README.md).
+Pinned runner, language-toolchain, and host constants come from `../config/runner-host.json`; Codex CLI intentionally has no version pin. Operational recovery procedures are documented in [`../docs/operations/README.md`](../docs/operations/README.md).

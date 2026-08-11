@@ -65,32 +65,6 @@
         | length == 5
     fail_msg: GitHub Runner payload is incomplete or unsafe after reconciliation.
 
-- name: Inspect runner work path before reconciliation
-  ansible.builtin.stat:
-    path: "{{ agent_relay_work_root }}"
-    follow: false
-  register: agent_relay_runner_work_path
-
-- name: Remove runner work symlink
-  ansible.builtin.file:
-    path: "{{ agent_relay_work_root }}"
-    state: absent
-  when: agent_relay_runner_work_path.stat.islnk | default(false)
-
-- name: Create real runner work directory
-  ansible.builtin.file:
-    path: "{{ agent_relay_work_root }}"
-    state: directory
-    owner: "{{ agent_relay_runner_user }}"
-    group: "{{ agent_relay_runner_user }}"
-    mode: "0700"
-    recurse: false
-
-- name: Remove obsolete runner workspace path
-  ansible.builtin.file:
-    path: "{{ agent_relay_obsolete_work_root }}"
-    state: absent
-
 - name: Install runner systemd unit
   ansible.builtin.template:
     src: actions-runner.service.j2

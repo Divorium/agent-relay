@@ -7,6 +7,7 @@
   pre_tasks:
     - name: Bootstrap Python and python3-apt when absent
       ansible.builtin.raw: |
+        set -eu
         if test -x /usr/bin/python3 && dpkg-query -W -f='${Status}' python3-apt 2>/dev/null | grep -q 'install ok installed'; then
           printf 'PYTHON_PRESENT\n'
         else

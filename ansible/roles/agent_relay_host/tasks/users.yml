@@ -61,7 +61,6 @@
     create_home: false
     password_lock: true
     state: present
-
 - name: Create runtime builder account
   ansible.builtin.user:
     name: "{{ agent_relay_builder_user }}"

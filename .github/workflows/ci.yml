@@ -74,23 +74,3 @@ jobs:
 
       - name: Validate toolchain
         run: npm run check:toolchain
-
-      - name: Validate system scripts
-        id: system
-        shell: bash
-        run: |
-          set +e
-          npm run check:system > "${RUNNER_TEMP}/agent-relay-system-output.log" 2>&1
-          status=$?
-          if (( status != 0 )); then
-            tail -n 120 "${RUNNER_TEMP}/agent-relay-system-output.log"
-          fi
-          exit "${status}"
-
-      - name: Upload system failure output
-        if: failure() && steps.system.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: agent-relay-system-output
-          path: ${{ runner.temp }}/agent-relay-system-output.log
-          if-no-files-found: error

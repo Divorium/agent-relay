@@ -1,29 +1,4 @@
 ---
-- name: Validate administrator variables
-  ansible.builtin.assert:
-    that:
-      - agent_relay_admin_user is match('^[a-z_][a-z0-9_-]*$')
-      - agent_relay_admin_user | length <= 32
-      - agent_relay_admin_user not in ['root', agent_relay_runner_user, agent_relay_builder_user]
-      - agent_relay_admin_authorized_keys is sequence
-      - agent_relay_admin_authorized_keys is not string
-      - agent_relay_admin_authorized_keys | length > 0
-      - agent_relay_extra_apt_packages is sequence
-      - agent_relay_extra_apt_packages is not string
-      - agent_relay_extra_apt_packages | intersect(agent_relay_docker_conflicting_packages) | length == 0
-    fail_msg: Configure a valid non-reserved administrator, SSH public keys, and non-conflicting package list.
-
-- name: Validate administrator public keys
-  ansible.builtin.assert:
-    that:
-      - item is string
-      - item | trim | length > 0
-      - "'\n' not in item"
-      - "'\r' not in item"
-    fail_msg: Each administrator authorized key must be one nonempty physical line.
-  loop: "{{ agent_relay_admin_authorized_keys }}"
-  no_log: true
-
 - name: Install repository bootstrap packages
   ansible.builtin.apt:
     name:
@@ -45,13 +20,87 @@
     group: root
     mode: "0755"
 
-- name: Install NodeSource signing key
-  ansible.builtin.get_url:
-    url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
-    dest: /etc/apt/keyrings/nodesource.asc
-    owner: root
-    group: root
-    mode: "0644"
+- name: Install verified repository signing keys
+  vars:
+    agent_relay_repository_signing_keys:
+      - name: NodeSource
+        url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+        destination: /etc/apt/keyrings/nodesource.asc
+        fingerprint: 6F71F525282841EEDAF851B42F59B5F99B1BE0B4
+      - name: Adoptium
+        url: https://packages.adoptium.net/artifactory/api/gpg/key/public
+        destination: /etc/apt/keyrings/adoptium.asc
+        fingerprint: 3B04D753C9050D9A5D343F39843C48A565F8F04B
+      - name: Docker
+        url: https://download.docker.com/linux/debian/gpg
+        destination: /etc/apt/keyrings/docker.asc
+        fingerprint: 9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+  block:
+    - name: Remove stale repository signing key stage
+      ansible.builtin.file:
+        path: /var/tmp/agent-relay-apt-keys
+        state: absent
+
+    - name: Create private repository signing key stage
+      ansible.builtin.file:
+        path: /var/tmp/agent-relay-apt-keys
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Download repository signing keys to staging
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "/var/tmp/agent-relay-apt-keys/{{ item.name | lower }}.asc"
+        owner: root
+        group: root
+        mode: "0600"
+        force: true
+      loop: "{{ agent_relay_repository_signing_keys }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+
+    - name: Read staged repository signing key fingerprints
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/gpg
+          - --show-keys
+          - --with-colons
+          - "/var/tmp/agent-relay-apt-keys/{{ item.name | lower }}.asc"
+      loop: "{{ agent_relay_repository_signing_keys }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: agent_relay_repository_signing_key_fingerprints
+      changed_when: false
+
+    - name: Require trusted repository signing keys
+      ansible.builtin.assert:
+        that:
+          - >-
+            ('fpr:::::::::' ~ item.item.fingerprint ~ ':') in item.stdout
+        fail_msg: "The downloaded {{ item.item.name }} signing key has an unexpected fingerprint."
+      loop: "{{ agent_relay_repository_signing_key_fingerprints.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Activate verified repository signing keys
+      ansible.builtin.copy:
+        src: "/var/tmp/agent-relay-apt-keys/{{ item.name | lower }}.asc"
+        dest: "{{ item.destination }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ agent_relay_repository_signing_keys }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Remove repository signing key stage
+      ansible.builtin.file:
+        path: /var/tmp/agent-relay-apt-keys
+        state: absent
 
 - name: Configure NodeSource repository
   ansible.builtin.copy:
@@ -67,14 +116,6 @@
       Architectures: amd64
       Signed-By: /etc/apt/keyrings/nodesource.asc
 
-- name: Install Adoptium signing key
-  ansible.builtin.get_url:
-    url: https://packages.adoptium.net/artifactory/api/gpg/key/public
-    dest: /etc/apt/keyrings/adoptium.asc
-    owner: root
-    group: root
-    mode: "0644"
-
 - name: Configure Adoptium repository
   ansible.builtin.copy:
     dest: /etc/apt/sources.list.d/adoptium.sources
@@ -88,14 +129,6 @@
       Components: main
       Architectures: amd64
       Signed-By: /etc/apt/keyrings/adoptium.asc
-
-- name: Install Docker signing key
-  ansible.builtin.get_url:
-    url: https://download.docker.com/linux/debian/gpg
-    dest: /etc/apt/keyrings/docker.asc
-    owner: root
-    group: root
-    mode: "0644"
 
 - name: Configure Docker repository
   ansible.builtin.copy:
@@ -113,9 +146,16 @@
 
 - name: Install host packages and configured extensions
   ansible.builtin.apt:
-    name: "{{ (agent_relay_required_apt_packages + agent_relay_extra_apt_packages + ['nodejs', 'temurin-' ~ agent_relay_java_major ~ '-jdk']) | unique }}"
+    name: "{{ (agent_relay_required_apt_packages + agent_relay_extra_apt_packages + ['temurin-' ~ agent_relay_java_major ~ '-jdk']) | unique }}"
     state: present
     update_cache: true
+
+- name: Install configured Node.js major
+  ansible.builtin.apt:
+    name: "nodejs={{ agent_relay_node_major }}.*"
+    state: present
+    update_cache: true
+    allow_downgrade: true
 
 - name: Remove packages conflicting with Docker Engine
   ansible.builtin.apt:

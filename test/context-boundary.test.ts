@@ -120,10 +120,10 @@ test("CI uses only the self-hosted organization runner and executes complete val
     "npm run check:shell",
     "npm run check:node-scripts",
     "npm run check:toolchain",
-    "npm run check:system",
   ]) {
     assert.match(workflow, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "u"));
   }
+  assert.doesNotMatch(workflow, /npm run check:system/u);
 });
 
 test("active packaging contains no Docker or Relay transport entrypoints", async () => {
@@ -145,7 +145,6 @@ test("active packaging contains no Docker or Relay transport entrypoints", async
 
   const packageJson = await readFile("package.json", "utf8");
   assert.doesNotMatch(packageJson, /install\.sh|install-script\.integration/u);
-  assert.match(packageJson, /test-system\/github-connect\.integration\.sh/u);
-  assert.match(packageJson, /bash -n runner\/finalize\.sh[\s\S]*scripts\/github-connect/u);
+  assert.doesNotMatch(packageJson, /test-system\/github-connect\.integration\.sh|scripts\/github-connect/u);
   assert.doesNotMatch(packageJson, /update\.sh|docker-host/u);
 });

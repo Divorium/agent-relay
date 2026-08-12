@@ -18,7 +18,8 @@
     owner: root
     group: root
     mode: "0644"
-  register: agent_relay_docker_config
+    validate: /usr/bin/dockerd --validate --config-file=%s
+  notify: agent_relay_host restart Docker
 
 - name: Configure containerd
   ansible.builtin.template:
@@ -27,7 +28,10 @@
     owner: root
     group: root
     mode: "0644"
-  register: agent_relay_containerd_config
+    validate: /usr/bin/containerd --config %s config dump
+  notify:
+    - agent_relay_host restart containerd
+    - agent_relay_host restart Docker
 
 - name: Configure Docker sockets
   ansible.builtin.template:
@@ -36,38 +40,26 @@
     owner: root
     group: root
     mode: "0644"
-  register: agent_relay_docker_socket_config
+  notify: agent_relay_host restart Docker socket
 
 - name: Enable and start containerd
   ansible.builtin.systemd_service:
     name: containerd.service
     enabled: true
-    state: "{{ 'restarted' if agent_relay_containerd_config.changed else 'started' }}"
-
-- name: Stop Docker before changing socket listeners
-  ansible.builtin.systemd_service:
-    name: docker.service
-    state: stopped
-  when: agent_relay_docker_socket_config.changed
+    state: started
 
 - name: Enable and start Docker socket
   ansible.builtin.systemd_service:
     name: docker.socket
     enabled: true
     daemon_reload: true
-    state: "{{ 'restarted' if agent_relay_docker_socket_config.changed else 'started' }}"
+    state: started
 
 - name: Enable and start Docker
   ansible.builtin.systemd_service:
     name: docker.service
     enabled: true
-    state: >-
-      {{
-        'started'
-        if agent_relay_docker_socket_config.changed
-        else (
-          'restarted'
-          if (agent_relay_docker_config.changed or agent_relay_containerd_config.changed)
-          else 'started'
-        )
-      }}
+    state: started
+
+- name: Apply container configuration changes
+  ansible.builtin.meta: flush_handlers

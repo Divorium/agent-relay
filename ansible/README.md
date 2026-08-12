@@ -5,7 +5,7 @@ This directory has two disjoint Ansible entrypoints:
 - `playbooks/host.yml` prepares and updates the complete Debian host and Agent Relay runtime;
 - `playbooks/github-connect.yml` connects that prepared runner to GitHub.
 
-The GitHub connection playbook does not import, include, or rerun the host playbook. Manual clone, pull, runner registration, direct lifecycle script invocation, or PAT use during host deployment is not part of the supported flow.
+The GitHub connection playbook does not import, include, or rerun the host playbook. Manual clone, pull, runner registration, or PAT use during host deployment is not part of the supported flow.
 
 ## Control machine
 
@@ -43,23 +43,26 @@ ansible-playbook \
   "$PWD/playbooks/host.yml"
 ```
 
-This playbook requires no GitHub PAT and performs the complete idempotent host reconciliation directly through Ansible:
+This playbook requires no GitHub PAT and reconciles the complete host directly through Ansible:
 
 - bootstraps Python 3;
-- installs packages and toolchains;
+- installs packages and pinned language toolchains, then updates Codex CLI to the latest available release;
 - creates the administrator, runner, and builder accounts;
 - configures Docker and containerd;
 - creates the ordinary and dedicated Docker sockets;
-- downloads and verifies the official GitHub Runner payload;
+- drains the registered listener before changing packages, container services, toolchains, runner files, or runtime files;
+- stages and verifies the official GitHub Runner payload before activation;
+- preserves the valid runner and Go payloads until the replacements pass validation;
+- restores preserved payloads before continuing a run interrupted during activation;
 - installs the runner systemd unit from an Ansible template;
 - checks out the configured Agent Relay revision;
 - builds the runtime as `agent-relay-builder` in a private stage;
 - validates and atomically activates the runtime;
 - restarts a completely registered runner or leaves an unregistered runner disabled.
 
-`host.yml` does not invoke `install.sh`, read `AGENT_RELAY_GITHUB_CREDENTIAL`, obtain a runner registration token, invoke `config.sh`, or call a GitHub runner-label API.
+Every `host.yml` run creates one maintenance window for a registered runner: Ansible stops the listener, waits for the active `Runner.Worker` process to exit, reconciles the host, and starts the listener again. A handled activation failure restores the previous valid payload in the same run. If the process or host stops during activation, the next run validates and restores the preserved payload before attempting another update.
 
-The host role and `scripts/github-connect` share `/var/lib/agent-relay/lifecycle/active` as an atomic lifecycle lock. Concurrent host deployment and GitHub connection fail closed. An interrupted Ansible operation may leave the lock directory; remove it only after confirming no host or connection operation is active.
+`host.yml` does not invoke `install.sh`, read `AGENT_RELAY_GITHUB_CREDENTIAL`, obtain a runner registration token, invoke `config.sh`, or call a GitHub runner-label API.
 
 Docker keeps `/run/docker.sock` and also receives `/srv/github-runner/storage/docker-socket/docker.sock`. The dedicated directory is owned by `github-runner`, the socket is `root:docker` mode `0660`, and Codex receives only that directory as a writable sandbox root.
 
@@ -86,16 +89,15 @@ A fine-grained token needs the organization permission `Self-hosted runners: Rea
 
 `github-connect.yml` performs only GitHub connection work:
 
-- verifies that `host.yml` already installed runner binaries, runtime, and the service unit;
+- requires that `host.yml` already installed runner binaries, runtime, workspace, and the service unit;
 - creates organization runner registration when absent;
 - starts the registered runner service;
 - locates exactly one runner named `gh-runner`;
-- adds the custom `agent-relay` label without replacing unrelated labels;
-- verifies the resulting label set.
+- adds the custom `agent-relay` label without replacing unrelated labels.
 
 It does not install packages, users, Docker, toolchains, source code, runner binaries, systemd units, or the Agent Relay runtime. It does not call `host.yml` or the host role.
 
-The PAT is passed through standard input to the dedicated connection script and through authenticated GitHub API requests. It is hidden from Ansible output and is not stored on the target.
+Ansible uses the PAT only for authenticated GitHub API requests delegated to the control machine. Tasks handling the PAT and short-lived registration token use `no_log`; neither credential is stored on the target.
 
 ## Later releases
 
@@ -110,4 +112,4 @@ ssh agent-relay-admin@HOST
 sudo -u github-runner -H /usr/local/bin/codex login
 ```
 
-Runner, toolchain, and host constants come from `../config/runner-host.json`. Operational recovery procedures are documented in [`../docs/operations/README.md`](../docs/operations/README.md).
+Pinned runner, language-toolchain, and host constants come from `../config/runner-host.json`; Codex CLI intentionally has no version pin. Operational recovery procedures are documented in [`../docs/operations/README.md`](../docs/operations/README.md).

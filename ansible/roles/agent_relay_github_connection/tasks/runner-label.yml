@@ -1,8 +1,14 @@
 ---
-- name: Locate the configured organization runner
+- name: Locate configured organization runner
   ansible.builtin.uri:
     url: >-
-      https://api.github.com/orgs/{{ agent_relay_host_contract.organization }}/actions/runners?name={{ agent_relay_host_contract.runner_name | urlencode }}&per_page=100
+      {{
+        'https://api.github.com/orgs/'
+        ~ agent_relay_host_contract.organization
+        ~ '/actions/runners?name='
+        ~ (agent_relay_host_contract.runner_name | urlencode)
+        ~ '&per_page=100'
+      }}
     method: GET
     headers:
       Accept: application/vnd.github+json
@@ -11,51 +17,32 @@
     return_content: true
     status_code: 200
   register: agent_relay_runner_inventory
+  delegate_to: localhost
+  become: false
   changed_when: false
   no_log: true
   until: >-
-    agent_relay_runner_inventory.json.runners is defined
-    and (
-      agent_relay_runner_inventory.json.runners
-      | selectattr('name', 'equalto', agent_relay_host_contract.runner_name)
-      | list
-      | length
-    ) >= 1
+    agent_relay_runner_inventory.json.total_count | default(0) >= 1
   retries: 12
   delay: 5
 
-- name: Select the configured organization runner
-  ansible.builtin.set_fact:
-    agent_relay_runner_matches: >-
-      {{
-        agent_relay_runner_inventory.json.runners
-        | selectattr('name', 'equalto', agent_relay_host_contract.runner_name)
-        | list
-      }}
-  no_log: true
-
-- name: Require an unambiguous organization runner
+- name: Require unambiguous organization runner
   ansible.builtin.assert:
     that:
-      - agent_relay_runner_matches | length == 1
+      - agent_relay_runner_inventory.json.total_count == 1
+      - agent_relay_runner_inventory.json.runners | length == 1
     fail_msg: The configured organization runner name must resolve to exactly one runner.
 
-- name: Read the configured runner identity and labels
-  ansible.builtin.set_fact:
-    agent_relay_runner_id: "{{ agent_relay_runner_matches[0].id | int }}"
-    agent_relay_runner_label_names_before: >-
-      {{
-        agent_relay_runner_matches[0].labels
-        | map(attribute='name')
-        | map('lower')
-        | list
-      }}
-  no_log: true
-
-- name: Add the managed Agent Relay runner label
+- name: Add managed Agent Relay runner label
   ansible.builtin.uri:
     url: >-
-      https://api.github.com/orgs/{{ agent_relay_host_contract.organization }}/actions/runners/{{ agent_relay_runner_id }}/labels
+      {{
+        'https://api.github.com/orgs/'
+        ~ agent_relay_host_contract.organization
+        ~ '/actions/runners/'
+        ~ (agent_relay_runner_inventory.json.runners[0].id | string)
+        ~ '/labels'
+      }}
     method: POST
     headers:
       Accept: application/vnd.github+json
@@ -65,35 +52,15 @@
     body:
       labels:
         - "{{ agent_relay_runner_label }}"
-    return_content: true
     status_code: 200
   changed_when: true
+  delegate_to: localhost
+  become: false
   no_log: true
-  when: agent_relay_runner_label | lower not in agent_relay_runner_label_names_before
-
-- name: Read the reconciled runner labels
-  ansible.builtin.uri:
-    url: >-
-      https://api.github.com/orgs/{{ agent_relay_host_contract.organization }}/actions/runners/{{ agent_relay_runner_id }}/labels
-    method: GET
-    headers:
-      Accept: application/vnd.github+json
-      Authorization: "Bearer {{ agent_relay_github_credential }}"
-      X-GitHub-Api-Version: "{{ agent_relay_host_contract.github_api_version }}"
-    return_content: true
-    status_code: 200
-  register: agent_relay_runner_labels_after
-  changed_when: false
-  no_log: true
-
-- name: Verify the managed Agent Relay runner label
-  ansible.builtin.assert:
-    that:
-      - >-
-        agent_relay_runner_label | lower in (
-          agent_relay_runner_labels_after.json.labels
-          | map(attribute='name')
-          | map('lower')
-          | list
-        )
-    fail_msg: GitHub did not report the managed Agent Relay runner label after reconciliation.
+  when: >-
+    agent_relay_runner_label | lower not in (
+      agent_relay_runner_inventory.json.runners[0].labels
+      | map(attribute='name')
+      | map('lower')
+      | list
+    )

@@ -47,21 +47,25 @@ test("Ansible keeps host provisioning disjoint from GitHub connection", async ()
   assert.match(reconciliation, /method: PUT/u);
   assert.doesNotMatch(reconciliation, /method: POST/u);
   assert.match(reconciliation, /selectattr\('type', 'equalto', 'custom'\)/u);
-  assert.match(reconciliation, /labels:\n\s+- "\{\{ agent_relay_runner_label \}\}"/u);
-  assert.match(reconciliation, /agent_relay_runner_current_custom_labels \| length != 1/u);
+  assert.match(reconciliation, /labels: "\{\{ agent_relay_runner_labels \}\}"/u);
+  assert.match(reconciliation, /agent_relay_runner_current_custom_labels != agent_relay_runner_desired_custom_labels/u);
 });
 
-test("Ansible sources the managed runner label from inventory", async () => {
+test("Ansible validates runner labels as role arguments sourced from inventory", async () => {
   const hostContract = JSON.parse(await text("config/runner-host.json")) as Record<string, unknown>;
-  const runnerGroupVars = await text("ansible/inventory/group_vars/agent_relay.yml.example");
+  const argumentSpec = await text("ansible/roles/agent_relay_github_connection/meta/argument_specs.yml");
   const connectionVars = await text("ansible/roles/agent_relay_github_connection/vars/main.yml");
   const connectionTasks = await text("ansible/roles/agent_relay_github_connection/tasks/main.yml");
 
   assert.equal(hostContract.runner_label, undefined);
-  assert.match(runnerGroupVars, /agent_relay_runner_label: agent-relay/u);
-  assert.doesNotMatch(connectionVars, /agent_relay_runner_label/u);
-  assert.match(connectionTasks, /Require inventory runner label/u);
-  assert.match(connectionTasks, /Define agent_relay_runner_label in inventory group_vars or host_vars/u);
+  assert.match(argumentSpec, /agent_relay_runner_labels:/u);
+  assert.match(argumentSpec, /type: list/u);
+  assert.match(argumentSpec, /elements: str/u);
+  assert.match(argumentSpec, /required: true/u);
+  assert.doesNotMatch(connectionVars, /agent_relay_runner_labels/u);
+  assert.match(connectionTasks, /Require nonempty unique runner labels/u);
+  assert.match(connectionTasks, /agent_relay_runner_labels \| length > 0/u);
+  assert.match(connectionTasks, /agent_relay_runner_labels \| unique \| list \| length/u);
 });
 
 test("Ansible registers each host with its inventory hostname", async () => {

@@ -44,10 +44,11 @@ test("Ansible keeps host provisioning disjoint from GitHub connection", async ()
   assert.match(reconciliation, /agent_relay_runner_inventory\.json\.runners \| length == 1/u);
   assert.match(reconciliation, /agent_relay_runner_inventory\.json\.runners\[0\]\.name == agent_relay_runner_name/u);
   assert.match(reconciliation, /agent_relay_runner_inventory\.json\.runners\[0\]\.id/u);
-  assert.match(reconciliation, /method: POST/u);
+  assert.match(reconciliation, /method: PUT/u);
+  assert.doesNotMatch(reconciliation, /method: POST/u);
+  assert.match(reconciliation, /selectattr\('type', 'equalto', 'custom'\)/u);
   assert.match(reconciliation, /labels:\n\s+- "\{\{ agent_relay_runner_label \}\}"/u);
-  assert.match(reconciliation, /agent_relay_runner_label \| lower not in/u);
-  assert.doesNotMatch(reconciliation, /method: PUT|selectattr/u);
+  assert.match(reconciliation, /agent_relay_runner_current_custom_labels \| length != 1/u);
 });
 
 test("Ansible sources the managed runner label from inventory", async () => {

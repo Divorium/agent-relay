@@ -34,7 +34,16 @@
       - agent_relay_runner_inventory.json.runners[0].name == agent_relay_runner_name
     fail_msg: The configured per-host organization runner name must resolve to exactly one runner.
 
-- name: Add managed Agent Relay runner label
+- name: Reconcile managed runner label
+  vars:
+    agent_relay_runner_current_custom_labels: >-
+      {{
+        agent_relay_runner_inventory.json.runners[0].labels
+        | selectattr('type', 'equalto', 'custom')
+        | map(attribute='name')
+        | map('lower')
+        | list
+      }}
   ansible.builtin.uri:
     url: >-
       {{
@@ -44,7 +53,7 @@
         ~ (agent_relay_runner_inventory.json.runners[0].id | string)
         ~ '/labels'
       }}
-    method: POST
+    method: PUT
     headers:
       Accept: application/vnd.github+json
       Authorization: "Bearer {{ agent_relay_github_credential }}"
@@ -59,9 +68,5 @@
   become: false
   no_log: true
   when: >-
-    agent_relay_runner_label | lower not in (
-      agent_relay_runner_inventory.json.runners[0].labels
-      | map(attribute='name')
-      | map('lower')
-      | list
-    )
+    agent_relay_runner_current_custom_labels | length != 1
+    or agent_relay_runner_label | lower not in agent_relay_runner_current_custom_labels

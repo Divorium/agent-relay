@@ -7,9 +7,6 @@ async function text(path: string): Promise<string> {
 }
 
 test("Ansible keeps host provisioning disjoint from GitHub connection", async () => {
-  const hostContract = JSON.parse(await text("config/runner-host.json")) as { runner_label: string };
-  assert.equal(hostContract.runner_label, "agent-relay");
-
   const hostDefaults = await text("ansible/roles/agent_relay_host/defaults/main.yml");
   const hostTasks = await text("ansible/roles/agent_relay_host/tasks/main.yml");
   const deployment = [
@@ -51,6 +48,19 @@ test("Ansible keeps host provisioning disjoint from GitHub connection", async ()
   assert.match(reconciliation, /labels:\n\s+- "\{\{ agent_relay_runner_label \}\}"/u);
   assert.match(reconciliation, /agent_relay_runner_label \| lower not in/u);
   assert.doesNotMatch(reconciliation, /method: PUT|selectattr/u);
+});
+
+test("Ansible sources the managed runner label from inventory", async () => {
+  const hostContract = JSON.parse(await text("config/runner-host.json")) as Record<string, unknown>;
+  const runnerGroupVars = await text("ansible/inventory/group_vars/agent_relay.yml.example");
+  const connectionVars = await text("ansible/roles/agent_relay_github_connection/vars/main.yml");
+  const connectionTasks = await text("ansible/roles/agent_relay_github_connection/tasks/main.yml");
+
+  assert.equal(hostContract.runner_label, undefined);
+  assert.match(runnerGroupVars, /agent_relay_runner_label: agent-relay/u);
+  assert.doesNotMatch(connectionVars, /agent_relay_runner_label/u);
+  assert.match(connectionTasks, /Require inventory runner label/u);
+  assert.match(connectionTasks, /Define agent_relay_runner_label in inventory group_vars or host_vars/u);
 });
 
 test("Ansible registers each host with its inventory hostname", async () => {

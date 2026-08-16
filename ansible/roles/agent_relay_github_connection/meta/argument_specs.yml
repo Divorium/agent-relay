@@ -1,0 +1,13 @@
+---
+argument_specs:
+  main:
+    short_description: Connect a prepared Agent Relay runner to GitHub
+    options:
+      agent_relay_github_credential:
+        type: str
+        description: GitHub credential used for organization runner API operations.
+      agent_relay_runner_labels:
+        type: list
+        elements: str
+        required: true
+        description: Custom GitHub runner labels managed from Ansible inventory.

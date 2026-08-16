@@ -120,5 +120,5 @@
     enabled: true
     state: started
 
-- name: Reconcile managed runner label
+- name: Reconcile managed runner labels
   ansible.builtin.import_tasks: runner-label.yml

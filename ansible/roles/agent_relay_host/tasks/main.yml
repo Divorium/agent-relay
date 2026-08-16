@@ -5,18 +5,13 @@
       - agent_relay_admin_user is match('^[a-z_][a-z0-9_-]*$')
       - agent_relay_admin_user | length <= 32
       - agent_relay_admin_user not in ['root', agent_relay_runner_user, agent_relay_builder_user]
-      - agent_relay_admin_authorized_keys is sequence
-      - agent_relay_admin_authorized_keys is not string
       - agent_relay_admin_authorized_keys | length > 0
-      - agent_relay_extra_apt_packages is sequence
-      - agent_relay_extra_apt_packages is not string
       - agent_relay_extra_apt_packages | intersect(agent_relay_docker_conflicting_packages) | length == 0
     fail_msg: Configure a valid non-reserved administrator, SSH public keys, and non-conflicting package list.
 
 - name: Validate administrator public keys
   ansible.builtin.assert:
     that:
-      - item is string
       - item | trim | length > 0
       - "'\n' not in item"
       - "'\r' not in item"

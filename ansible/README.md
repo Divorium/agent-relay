@@ -21,6 +21,25 @@ $EDITOR inventory/example.ini inventory/group_vars/all.yml
 
 `agent_relay_admin_authorized_keys` must contain at least one public SSH key. Do not commit private keys, passwords, GitHub tokens, Codex credentials, or Vault secrets.
 
+Runner labels belong to inventory. Define the labels for the `agent_relay` group in `inventory/group_vars/agent_relay.yml`:
+
+```yaml
+agent_relay_runner_labels:
+  - agent-relay
+  - linux-x64
+```
+
+Override them for one runner with a host variable, for example `inventory/host_vars/gh-runner-02.yml`:
+
+```yaml
+agent_relay_runner_labels:
+  - agent-relay
+  - heavy-runner
+  - docker
+```
+
+Set `agent_relay_runner_labels: []` to remove all custom labels from a runner.
+
 The host deployment tracks `main` from `https://github.com/Divorium/agent-relay.git` by default. Override it when required:
 
 ```yaml
@@ -76,7 +95,7 @@ The parent Docker storage directory and the containerd root are `root:root` mode
 
 ## Step 2: connect the prepared runner to GitHub
 
-Run this operation after the first successful `host.yml` execution or when repairing registration or the managed label:
+Run this operation after the first successful `host.yml` execution or when repairing registration or managed labels:
 
 ```bash
 export AGENT_RELAY_GITHUB_CREDENTIAL='github_pat_...'
@@ -96,10 +115,11 @@ A fine-grained token needs the organization permission `Self-hosted runners: Rea
 `github-connect.yml` performs only GitHub connection work:
 
 - requires that `host.yml` already installed runner binaries, runtime, workspace, and the service unit;
+- validates public role inputs through `meta/argument_specs.yml`, including `agent_relay_runner_labels` as `list[str]`;
 - creates organization runner registration when absent;
 - starts the registered runner service;
-- locates exactly one runner named `gh-runner`;
-- adds the custom `agent-relay` label without replacing unrelated labels.
+- locates exactly one runner named after the current `inventory_hostname`;
+- sets the inventory-configured labels as the runner's complete custom-label set while GitHub-managed read-only labels remain unchanged.
 
 It does not install packages, users, Docker, toolchains, source code, runner binaries, systemd units, or the Agent Relay runtime. It does not call `host.yml` or the host role.
 

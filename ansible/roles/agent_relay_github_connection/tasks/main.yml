@@ -38,45 +38,175 @@
         )
     fail_msg: Runner registration marker must be a regular file.
 
-- name: Create organization runner registration token
-  ansible.builtin.uri:
-    url: >-
-      https://api.github.com/orgs/{{ agent_relay_host_contract.organization }}/actions/runners/registration-token
-    method: POST
-    headers:
-      Accept: application/vnd.github+json
-      Authorization: "Bearer {{ agent_relay_github_credential }}"
-      X-GitHub-Api-Version: "{{ agent_relay_host_contract.github_api_version }}"
-    return_content: true
-    status_code: 201
-  register: agent_relay_registration_token
-  delegate_to: localhost
-  become: false
-  no_log: true
-  when: not (agent_relay_connection_registration_marker.stat.exists | default(false))
-
-- name: Register organization runner
+- name: Read existing runner registration descriptor
   become: true
-  become_user: "{{ agent_relay_host_contract.runner_user }}"
-  ansible.builtin.command:
-    argv:
-      - ./config.sh
-      - --unattended
-      - --replace
-      - --url
-      - "{{ agent_relay_host_contract.organization_url }}"
-      - --token
-      - "{{ agent_relay_registration_token.json.token }}"
-      - --name
-      - "{{ agent_relay_host_contract.runner_name }}"
-      - --work
-      - _work
-    chdir: "{{ agent_relay_runner_root }}"
-    creates: "{{ agent_relay_runner_root }}/.runner"
-  environment:
-    HOME: "{{ agent_relay_storage_root }}/home"
-  no_log: true
-  when: not (agent_relay_connection_registration_marker.stat.exists | default(false))
+  ansible.builtin.slurp:
+    src: "{{ agent_relay_runner_root }}/.runner"
+  register: agent_relay_connection_registration_descriptor
+  when: agent_relay_connection_registration_marker.stat.isreg | default(false)
+
+- name: Require existing runner registration identity
+  ansible.builtin.assert:
+    that:
+      - >-
+        (agent_relay_connection_registration_descriptor.content | b64decode | from_json).agentName
+        is string
+      - >-
+        ((agent_relay_connection_registration_descriptor.content | b64decode | from_json).agentName | trim)
+        | length > 0
+    fail_msg: Existing runner registration must contain a nonempty agentName.
+  when: agent_relay_connection_registration_marker.stat.isreg | default(false)
+
+- name: Reconcile per-host runner registration
+  vars:
+    agent_relay_existing_runner_name: >-
+      {{
+        (agent_relay_connection_registration_descriptor.content | b64decode | from_json).agentName
+        if (agent_relay_connection_registration_marker.stat.isreg | default(false))
+        else ''
+      }}
+    agent_relay_registration_replacement_required: >-
+      {{
+        not (agent_relay_connection_registration_marker.stat.isreg | default(false))
+        or agent_relay_existing_runner_name != agent_relay_runner_name
+      }}
+  block:
+    - name: Stop mismatched runner listener before re-registration
+      become: true
+      ansible.builtin.systemd_service:
+        name: "{{ agent_relay_service_name }}"
+        state: stopped
+      when:
+        - agent_relay_connection_registration_marker.stat.isreg | default(false)
+        - agent_relay_existing_runner_name != agent_relay_runner_name
+
+    - name: Wait for mismatched runner jobs to finish
+      become: true
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/pgrep
+          - -u
+          - "{{ agent_relay_host_contract.runner_user }}"
+          - -x
+          - Runner.Worker
+      register: agent_relay_connection_worker_state
+      changed_when: false
+      failed_when: agent_relay_connection_worker_state.rc not in [0, 1]
+      until: agent_relay_connection_worker_state.rc == 1
+      retries: 150
+      delay: 2
+      when:
+        - agent_relay_connection_registration_marker.stat.isreg | default(false)
+        - agent_relay_existing_runner_name != agent_relay_runner_name
+
+    - name: Locate legacy shared organization runner
+      ansible.builtin.uri:
+        url: >-
+          {{
+            'https://api.github.com/orgs/'
+            ~ agent_relay_host_contract.organization
+            ~ '/actions/runners?name='
+            ~ (agent_relay_host_contract.runner_name | urlencode)
+            ~ '&per_page=100'
+          }}
+        method: GET
+        headers:
+          Accept: application/vnd.github+json
+          Authorization: "Bearer {{ agent_relay_github_credential }}"
+          X-GitHub-Api-Version: "{{ agent_relay_host_contract.github_api_version }}"
+        return_content: true
+        status_code: 200
+      register: agent_relay_legacy_runner_inventory
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      no_log: true
+      run_once: true
+
+    - name: Require unambiguous legacy shared organization runner
+      ansible.builtin.assert:
+        that:
+          - agent_relay_legacy_runner_inventory.json.total_count | default(0) <= 1
+          - agent_relay_legacy_runner_inventory.json.runners | default([]) | length <= 1
+        fail_msg: Legacy shared runner name must resolve to at most one organization runner.
+      run_once: true
+
+    - name: Remove legacy shared organization runner
+      ansible.builtin.uri:
+        url: >-
+          {{
+            'https://api.github.com/orgs/'
+            ~ agent_relay_host_contract.organization
+            ~ '/actions/runners/'
+            ~ (agent_relay_legacy_runner_inventory.json.runners[0].id | string)
+          }}
+        method: DELETE
+        headers:
+          Accept: application/vnd.github+json
+          Authorization: "Bearer {{ agent_relay_github_credential }}"
+          X-GitHub-Api-Version: "{{ agent_relay_host_contract.github_api_version }}"
+        status_code: 204
+      delegate_to: localhost
+      become: false
+      no_log: true
+      run_once: true
+      when:
+        - agent_relay_legacy_runner_inventory.json.total_count | default(0) == 1
+        - agent_relay_legacy_runner_inventory.json.runners | default([]) | length == 1
+        - agent_relay_legacy_runner_inventory.json.runners[0].name == agent_relay_host_contract.runner_name
+
+    - name: Remove mismatched local runner registration
+      become: true
+      ansible.builtin.file:
+        path: "{{ agent_relay_runner_root }}/{{ item }}"
+        state: absent
+      loop:
+        - .runner
+        - .credentials
+        - .credentials_rsaparams
+      when:
+        - agent_relay_connection_registration_marker.stat.isreg | default(false)
+        - agent_relay_existing_runner_name != agent_relay_runner_name
+
+    - name: Create organization runner registration token
+      ansible.builtin.uri:
+        url: >-
+          https://api.github.com/orgs/{{ agent_relay_host_contract.organization }}/actions/runners/registration-token
+        method: POST
+        headers:
+          Accept: application/vnd.github+json
+          Authorization: "Bearer {{ agent_relay_github_credential }}"
+          X-GitHub-Api-Version: "{{ agent_relay_host_contract.github_api_version }}"
+        return_content: true
+        status_code: 201
+      register: agent_relay_registration_token
+      delegate_to: localhost
+      become: false
+      no_log: true
+      when: agent_relay_registration_replacement_required
+
+    - name: Register organization runner
+      become: true
+      become_user: "{{ agent_relay_host_contract.runner_user }}"
+      ansible.builtin.command:
+        argv:
+          - ./config.sh
+          - --unattended
+          - --replace
+          - --url
+          - "{{ agent_relay_host_contract.organization_url }}"
+          - --token
+          - "{{ agent_relay_registration_token.json.token }}"
+          - --name
+          - "{{ agent_relay_runner_name }}"
+          - --work
+          - _work
+        chdir: "{{ agent_relay_runner_root }}"
+        creates: "{{ agent_relay_runner_root }}/.runner"
+      environment:
+        HOME: "{{ agent_relay_storage_root }}/home"
+      no_log: true
+      when: agent_relay_registration_replacement_required
 
 - name: Inspect runner registration files
   become: true

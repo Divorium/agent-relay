@@ -16,10 +16,23 @@ Use `ansible-core >= 2.18`. Both roles use only `ansible.builtin` modules, and S
 ```bash
 cd ansible
 cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml
-$EDITOR inventory/example.ini inventory/group_vars/all.yml
+cp inventory/group_vars/agent_relay.yml.example inventory/group_vars/agent_relay.yml
+$EDITOR inventory/example.ini inventory/group_vars/all.yml inventory/group_vars/agent_relay.yml
 ```
 
 `agent_relay_admin_authorized_keys` must contain at least one public SSH key. Do not commit private keys, passwords, GitHub tokens, Codex credentials, or Vault secrets.
+
+The managed GitHub runner label belongs to inventory. Set the default for the `agent_relay` group in `inventory/group_vars/agent_relay.yml`:
+
+```yaml
+agent_relay_runner_label: agent-relay
+```
+
+Override it for one runner with a host variable, for example `inventory/host_vars/gh-runner-02.yml`:
+
+```yaml
+agent_relay_runner_label: heavy-runner
+```
 
 The host deployment tracks `main` from `https://github.com/Divorium/agent-relay.git` by default. Override it when required:
 
@@ -96,10 +109,11 @@ A fine-grained token needs the organization permission `Self-hosted runners: Rea
 `github-connect.yml` performs only GitHub connection work:
 
 - requires that `host.yml` already installed runner binaries, runtime, workspace, and the service unit;
+- requires `agent_relay_runner_label` from inventory;
 - creates organization runner registration when absent;
 - starts the registered runner service;
-- locates exactly one runner named `gh-runner`;
-- adds the custom `agent-relay` label without replacing unrelated labels.
+- locates exactly one runner named after the current `inventory_hostname`;
+- adds the inventory-configured custom label without replacing unrelated labels.
 
 It does not install packages, users, Docker, toolchains, source code, runner binaries, systemd units, or the Agent Relay runtime. It does not call `host.yml` or the host role.
 

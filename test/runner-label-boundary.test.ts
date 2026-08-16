@@ -47,26 +47,31 @@ test("Ansible keeps host provisioning disjoint from GitHub connection", async ()
   assert.match(reconciliation, /method: PUT/u);
   assert.doesNotMatch(reconciliation, /method: POST/u);
   assert.match(reconciliation, /selectattr\('type', 'equalto', 'custom'\)/u);
-  assert.match(reconciliation, /labels: "\{\{ agent_relay_runner_labels \}\}"/u);
+  assert.match(reconciliation, /unique\(case_sensitive=false\)/u);
+  assert.match(reconciliation, /labels: "\{\{ agent_relay_runner_effective_labels \}\}"/u);
   assert.match(reconciliation, /agent_relay_runner_current_custom_labels != agent_relay_runner_desired_custom_labels/u);
 });
 
-test("Ansible validates runner labels as role arguments sourced from inventory", async () => {
+test("Ansible validates public role inputs through argument specifications", async () => {
   const hostContract = JSON.parse(await text("config/runner-host.json")) as Record<string, unknown>;
-  const argumentSpec = await text("ansible/roles/agent_relay_github_connection/meta/argument_specs.yml");
+  const connectionSpec = await text("ansible/roles/agent_relay_github_connection/meta/argument_specs.yml");
+  const hostSpec = await text("ansible/roles/agent_relay_host/meta/argument_specs.yml");
   const connectionVars = await text("ansible/roles/agent_relay_github_connection/vars/main.yml");
   const connectionTasks = await text("ansible/roles/agent_relay_github_connection/tasks/main.yml");
+  const hostTasks = await text("ansible/roles/agent_relay_host/tasks/main.yml");
 
   assert.equal(hostContract.runner_label, undefined);
-  assert.match(argumentSpec, /agent_relay_runner_labels:/u);
-  assert.match(argumentSpec, /type: list/u);
-  assert.match(argumentSpec, /elements: str/u);
-  assert.match(argumentSpec, /required: true/u);
+  assert.match(connectionSpec, /agent_relay_github_credential:\n\s+type: str/u);
+  assert.match(connectionSpec, /agent_relay_runner_labels:\n\s+type: list\n\s+elements: str\n\s+required: true/u);
   assert.doesNotMatch(connectionVars, /agent_relay_runner_labels/u);
-  assert.match(connectionTasks, /Require valid runner labels/u);
-  assert.match(connectionTasks, /agent_relay_runner_labels \| length > 0/u);
-  assert.match(connectionTasks, /map\('trim'\).*reject\('equalto', ''\)/u);
-  assert.match(connectionTasks, /map\('lower'\) \| unique \| list \| length/u);
+  assert.doesNotMatch(connectionTasks, /Require valid runner labels|agent_relay_runner_labels \| length > 0|map\('trim'\)/u);
+
+  assert.match(hostSpec, /agent_relay_admin_user:\n\s+type: str/u);
+  assert.match(hostSpec, /agent_relay_admin_authorized_keys:\n\s+type: list\n\s+elements: str/u);
+  assert.match(hostSpec, /agent_relay_extra_apt_packages:\n\s+type: list\n\s+elements: str/u);
+  assert.match(hostSpec, /agent_relay_repository_url:\n\s+type: str/u);
+  assert.match(hostSpec, /agent_relay_repository_version:\n\s+type: str/u);
+  assert.doesNotMatch(hostTasks, /agent_relay_admin_authorized_keys is sequence|agent_relay_extra_apt_packages is sequence|item is string/u);
 });
 
 test("Ansible registers each host with its inventory hostname", async () => {

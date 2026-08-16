@@ -7,6 +7,12 @@
       Export AGENT_RELAY_GITHUB_CREDENTIAL on the Ansible control machine with organization
       Self-hosted runners: write permission before running playbooks/github-connect.yml.
 
+- name: Require inventory runner label
+  ansible.builtin.assert:
+    that:
+      - (agent_relay_runner_label | default('') | trim | length) > 0
+    fail_msg: Define agent_relay_runner_label in inventory group_vars or host_vars.
+
 - name: Inspect prepared runner workspace
   become: true
   ansible.builtin.stat:

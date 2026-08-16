@@ -34,7 +34,7 @@
       - agent_relay_runner_inventory.json.runners[0].name == agent_relay_runner_name
     fail_msg: The configured per-host organization runner name must resolve to exactly one runner.
 
-- name: Reconcile managed runner label
+- name: Reconcile managed runner labels
   vars:
     agent_relay_runner_current_custom_labels: >-
       {{
@@ -42,8 +42,11 @@
         | selectattr('type', 'equalto', 'custom')
         | map(attribute='name')
         | map('lower')
+        | sort
         | list
       }}
+    agent_relay_runner_desired_custom_labels: >-
+      {{ agent_relay_runner_labels | map('lower') | sort | list }}
   ansible.builtin.uri:
     url: >-
       {{
@@ -60,13 +63,10 @@
       X-GitHub-Api-Version: "{{ agent_relay_host_contract.github_api_version }}"
     body_format: json
     body:
-      labels:
-        - "{{ agent_relay_runner_label }}"
+      labels: "{{ agent_relay_runner_labels }}"
     status_code: 200
   changed_when: true
   delegate_to: localhost
   become: false
   no_log: true
-  when: >-
-    agent_relay_runner_current_custom_labels | length != 1
-    or agent_relay_runner_label | lower not in agent_relay_runner_current_custom_labels
+  when: agent_relay_runner_current_custom_labels != agent_relay_runner_desired_custom_labels

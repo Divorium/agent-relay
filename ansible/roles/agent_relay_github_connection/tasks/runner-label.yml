@@ -36,6 +36,8 @@
 
 - name: Reconcile managed runner labels
   vars:
+    agent_relay_runner_effective_labels: >-
+      {{ agent_relay_runner_labels | unique(case_sensitive=false) | list }}
     agent_relay_runner_current_custom_labels: >-
       {{
         agent_relay_runner_inventory.json.runners[0].labels
@@ -46,7 +48,7 @@
         | list
       }}
     agent_relay_runner_desired_custom_labels: >-
-      {{ agent_relay_runner_labels | map('lower') | sort | list }}
+      {{ agent_relay_runner_effective_labels | map('lower') | sort | list }}
   ansible.builtin.uri:
     url: >-
       {{
@@ -63,7 +65,7 @@
       X-GitHub-Api-Version: "{{ agent_relay_host_contract.github_api_version }}"
     body_format: json
     body:
-      labels: "{{ agent_relay_runner_labels }}"
+      labels: "{{ agent_relay_runner_effective_labels }}"
     status_code: 200
   changed_when: true
   delegate_to: localhost

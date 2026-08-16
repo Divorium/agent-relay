@@ -14,7 +14,7 @@ There is no Relay HTTP service, polling daemon, separate updater, host installer
 
 `playbooks/host.yml` applies `agent_relay_host`. The role:
 
-- bootstraps Python 3 over root SSH;
+- bootstraps Python 3 over SSH as `runneradmin` using play-level sudo escalation;
 - installs sudo, system packages, runner dependencies, Docker, and toolchains;
 - creates `agent-relay-admin`, `github-runner`, and `agent-relay-builder`;
 - creates and reconciles declared secure directories;

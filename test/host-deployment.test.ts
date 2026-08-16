@@ -13,6 +13,9 @@ async function json(path: string): Promise<Record<string, unknown>> {
 test("host provisioning and GitHub connection remain separate Ansible boundaries", async () => {
   const host = [
     await text("ansible/playbooks/host.yml"),
+  ].join("\n");
+  assert.match(host, /become: true/u);
+  const deploy = [
     await text("ansible/roles/agent_relay_host/tasks/deploy.yml"),
     await text("ansible/roles/agent_relay_host/tasks/runner-installation.yml"),
     await text("ansible/roles/agent_relay_host/tasks/runtime-deployment.yml"),

@@ -40,10 +40,16 @@ ANSIBLE_CONFIG="$PWD/ansible.cfg" \
 ANSIBLE_ROLES_PATH="$PWD/roles" \
 ansible-playbook \
   --inventory "$PWD/inventory/example.ini" \
+  --ask-become-pass \
   "$PWD/playbooks/host.yml"
 ```
 
-This playbook requires no GitHub PAT and reconciles the complete host directly through Ansible:
+The host playbook connects as `runneradmin` and uses sudo for host provisioning. The
+`--ask-become-pass` (`-K`) option prompts for the sudo password; `-k` prompts for
+the SSH password instead.
+
+This playbook requires no GitHub PAT and performs the complete idempotent host
+reconciliation directly through Ansible:
 
 - bootstraps Python 3;
 - installs packages and pinned language toolchains, then updates Codex CLI to the latest available release;
@@ -101,7 +107,7 @@ Ansible uses the PAT only for authenticated GitHub API requests delegated to the
 
 ## Later releases
 
-For every later release, run only `playbooks/host.yml` without exporting a PAT. Existing GitHub registration files are preserved, and the host role performs no credentialed GitHub operation.
+For every later release, run only `playbooks/host.yml` with `--ask-become-pass` (or `-K`) and without exporting a PAT. Existing GitHub registration files are preserved, and the host role performs no credentialed GitHub operation.
 
 ## Codex authentication
 

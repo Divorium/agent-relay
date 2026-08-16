@@ -2,7 +2,7 @@
 
 ## Supported host
 
-Agent Relay supports Debian 13 (Trixie) x86-64 with systemd as PID 1. A fresh target needs network access and root SSH only.
+Agent Relay supports Debian 13 (Trixie) x86-64 with systemd as PID 1. A target needs network access and an SSH-capable `runneradmin` account with sudo access.
 
 ## Configure the control machine
 
@@ -12,7 +12,7 @@ cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml
 $EDITOR inventory/example.ini inventory/group_vars/all.yml
 ```
 
-Replace `inventory/runners.ini` below with the configured inventory filename when different. Use `ansible-core >= 2.18`; SSH host-key checking remains enabled.
+Replace `inventory/runners.ini` below with the configured inventory filename when different. Use `ansible-core >= 2.18`; SSH host-key checking remains enabled. The host playbook connects as `runneradmin` and asks for the sudo password with `-K`.
 
 ## Host lifecycle
 
@@ -23,6 +23,7 @@ ANSIBLE_CONFIG="$PWD/ansible.cfg" \
 ANSIBLE_ROLES_PATH="$PWD/roles" \
 ansible-playbook \
   --inventory "$PWD/inventory/runners.ini" \
+  --ask-become-pass \
   "$PWD/playbooks/host.yml"
 ```
 
@@ -86,6 +87,7 @@ ANSIBLE_CONFIG="$PWD/ansible.cfg" \
 ANSIBLE_ROLES_PATH="$PWD/roles" \
 ansible-playbook \
   --inventory "$PWD/inventory/runners.ini" \
+  --ask-become-pass \
   "$PWD/playbooks/host.yml"
 
 export AGENT_RELAY_GITHUB_CREDENTIAL='github_pat_...'
@@ -105,6 +107,7 @@ ANSIBLE_CONFIG="$PWD/ansible.cfg" \
 ANSIBLE_ROLES_PATH="$PWD/roles" \
 ansible-playbook \
   --inventory "$PWD/inventory/runners.ini" \
+  --ask-become-pass \
   "$PWD/playbooks/host.yml"
 ```
 

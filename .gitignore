@@ -3,3 +3,9 @@ node_modules/
 .dist.stage.*
 dist.previous
 ansible/inventory/group_vars/all.yml
+
+# Local credentials and host-specific configuration.
+.env
+.env.*
+!.env.example
+ansible/inventory/runners.ini

@@ -2,7 +2,7 @@
 - name: Provision or update an installed Agent Relay host
   hosts: agent_relay
   gather_facts: false
-  become: false
+  become: true
 
   pre_tasks:
     - name: Bootstrap Python and python3-apt when absent

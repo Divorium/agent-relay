@@ -16,22 +16,26 @@ Use `ansible-core >= 2.18`. Both roles use only `ansible.builtin` modules, and S
 ```bash
 cd ansible
 cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml
-cp inventory/group_vars/agent_relay.yml.example inventory/group_vars/agent_relay.yml
-$EDITOR inventory/example.ini inventory/group_vars/all.yml inventory/group_vars/agent_relay.yml
+$EDITOR inventory/example.ini inventory/group_vars/all.yml
 ```
 
 `agent_relay_admin_authorized_keys` must contain at least one public SSH key. Do not commit private keys, passwords, GitHub tokens, Codex credentials, or Vault secrets.
 
-The managed GitHub runner label belongs to inventory. Set the default for the `agent_relay` group in `inventory/group_vars/agent_relay.yml`:
+Runner labels belong to inventory. Define the labels for the `agent_relay` group in `inventory/group_vars/agent_relay.yml`:
 
 ```yaml
-agent_relay_runner_label: agent-relay
+agent_relay_runner_labels:
+  - agent-relay
+  - linux-x64
 ```
 
-Override it for one runner with a host variable, for example `inventory/host_vars/gh-runner-02.yml`:
+Override them for one runner with a host variable, for example `inventory/host_vars/gh-runner-02.yml`:
 
 ```yaml
-agent_relay_runner_label: heavy-runner
+agent_relay_runner_labels:
+  - agent-relay
+  - heavy-runner
+  - docker
 ```
 
 The host deployment tracks `main` from `https://github.com/Divorium/agent-relay.git` by default. Override it when required:
@@ -89,7 +93,7 @@ The parent Docker storage directory and the containerd root are `root:root` mode
 
 ## Step 2: connect the prepared runner to GitHub
 
-Run this operation after the first successful `host.yml` execution or when repairing registration or the managed label:
+Run this operation after the first successful `host.yml` execution or when repairing registration or managed labels:
 
 ```bash
 export AGENT_RELAY_GITHUB_CREDENTIAL='github_pat_...'
@@ -109,11 +113,12 @@ A fine-grained token needs the organization permission `Self-hosted runners: Rea
 `github-connect.yml` performs only GitHub connection work:
 
 - requires that `host.yml` already installed runner binaries, runtime, workspace, and the service unit;
-- requires `agent_relay_runner_label` from inventory;
+- validates `agent_relay_runner_labels` as a required list of strings through the role argument specification;
+- requires the list to be nonempty and unique;
 - creates organization runner registration when absent;
 - starts the registered runner service;
 - locates exactly one runner named after the current `inventory_hostname`;
-- sets the inventory-configured label as the runner's complete custom-label set while GitHub-managed read-only labels remain unchanged.
+- sets the inventory-configured labels as the runner's complete custom-label set while GitHub-managed read-only labels remain unchanged.
 
 It does not install packages, users, Docker, toolchains, source code, runner binaries, systemd units, or the Agent Relay runtime. It does not call `host.yml` or the host role.
 

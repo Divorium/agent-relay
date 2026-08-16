@@ -113,7 +113,7 @@ A fine-grained token needs the organization permission `Self-hosted runners: Rea
 - creates organization runner registration when absent;
 - starts the registered runner service;
 - locates exactly one runner named after the current `inventory_hostname`;
-- adds the inventory-configured custom label without replacing unrelated labels.
+- sets the inventory-configured label as the runner's complete custom-label set while GitHub-managed read-only labels remain unchanged.
 
 It does not install packages, users, Docker, toolchains, source code, runner binaries, systemd units, or the Agent Relay runtime. It does not call `host.yml` or the host role.
 

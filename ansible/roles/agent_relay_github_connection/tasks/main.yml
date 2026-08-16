@@ -68,7 +68,7 @@
       - --token
       - "{{ agent_relay_registration_token.json.token }}"
       - --name
-      - "{{ agent_relay_host_contract.runner_name }}"
+      - "{{ agent_relay_runner_name }}"
       - --work
       - _work
     chdir: "{{ agent_relay_runner_root }}"

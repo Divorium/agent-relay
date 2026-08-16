@@ -28,6 +28,7 @@ agent_relay_runner_backup_archive: "{{ agent_relay_storage_root }}/.runner-paylo
 agent_relay_go_stage_root: "/usr/local/.agent-relay-go-{{ agent_relay_go_version }}"
 agent_relay_go_previous_root: /usr/local/.agent-relay-go-previous
 agent_relay_toolchain_path: /opt/java/openjdk/bin:/usr/local/go/bin:/opt/rust/cargo/bin:/usr/local/bin:/usr/bin:/bin
+agent_relay_runner_name: "{{ inventory_hostname }}"
 agent_relay_service_name: "actions.runner.{{ agent_relay_host_contract.organization }}.{{ agent_relay_host_contract.runner_name }}.service"
 agent_relay_service_unit: "/etc/systemd/system/{{ agent_relay_service_name }}"
 

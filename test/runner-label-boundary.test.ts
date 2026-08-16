@@ -40,13 +40,35 @@ test("Ansible keeps host provisioning disjoint from GitHub connection", async ()
   assert.doesNotMatch(connectionTasks, /packages\.yml|users\.yml|filesystem\.yml|containers\.yml|toolchains\.yml|deploy\.yml/u);
 
   assert.match(reconciliation, /\/actions\/runners\?name=/u);
-  assert.match(reconciliation, /agent_relay_host_contract\.runner_name \| urlencode/u);
+  assert.match(reconciliation, /agent_relay_runner_name \| urlencode/u);
+  assert.doesNotMatch(reconciliation, /agent_relay_host_contract\.runner_name \| urlencode/u);
   assert.match(reconciliation, /&per_page=100/u);
   assert.match(reconciliation, /agent_relay_runner_inventory\.json\.total_count == 1/u);
   assert.match(reconciliation, /agent_relay_runner_inventory\.json\.runners \| length == 1/u);
+  assert.match(reconciliation, /agent_relay_runner_inventory\.json\.runners\[0\]\.name == agent_relay_runner_name/u);
   assert.match(reconciliation, /agent_relay_runner_inventory\.json\.runners\[0\]\.id/u);
   assert.match(reconciliation, /method: POST/u);
   assert.match(reconciliation, /labels:\n\s+- "\{\{ agent_relay_runner_label \}\}"/u);
   assert.match(reconciliation, /agent_relay_runner_label \| lower not in/u);
   assert.doesNotMatch(reconciliation, /method: PUT|selectattr/u);
+});
+
+test("Ansible registers each host with its inventory hostname", async () => {
+  const hostVars = await text("ansible/roles/agent_relay_host/vars/main.yml");
+  const connectionVars = await text("ansible/roles/agent_relay_github_connection/vars/main.yml");
+  const connectionTasks = await text("ansible/roles/agent_relay_github_connection/tasks/main.yml");
+  const service = await text("ansible/roles/agent_relay_host/templates/actions-runner.service.j2");
+
+  for (const vars of [hostVars, connectionVars]) {
+    assert.match(vars, /agent_relay_runner_name: "\{\{ inventory_hostname \}\}"/u);
+  }
+
+  assert.match(
+    hostVars,
+    /agent_relay_service_name: "actions\.runner\.\{\{ agent_relay_host_contract\.organization \}\}\.\{\{ agent_relay_host_contract\.runner_name \}\}\.service"/u,
+  );
+  assert.match(service, /Description=GitHub Actions Runner \(\{\{ agent_relay_host_contract\.organization \}\}\.\{\{ agent_relay_runner_name \}\}\)/u);
+  assert.match(connectionTasks, /- --name\n\s+- "\{\{ agent_relay_runner_name \}\}"/u);
+  assert.match(connectionTasks, /creates: "\{\{ agent_relay_runner_root \}\}\/\.runner"/u);
+  assert.doesNotMatch(connectionTasks, /ansible\.builtin\.slurp|agentName|legacy shared|mismatched runner|method: DELETE/u);
 });

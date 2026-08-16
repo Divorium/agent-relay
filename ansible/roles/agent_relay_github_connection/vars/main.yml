@@ -3,4 +3,5 @@ agent_relay_host_contract: "{{ lookup('ansible.builtin.file', role_path ~ '/../.
 agent_relay_storage_root: "{{ agent_relay_host_contract.base_root }}/storage"
 agent_relay_runner_root: "{{ agent_relay_storage_root }}/runner"
 agent_relay_runner_label: "{{ agent_relay_host_contract.runner_label }}"
+agent_relay_runner_name: "{{ inventory_hostname }}"
 agent_relay_service_name: "actions.runner.{{ agent_relay_host_contract.organization }}.{{ agent_relay_host_contract.runner_name }}.service"

@@ -45,6 +45,19 @@ test("runner updates preserve the real workspace and use validated rollback stat
   assert.match(runner, /Restore previous runner payload/u);
 });
 
+test("runtime revision marker is written as root with builder ownership", async () => {
+  const runtime = await text("ansible/roles/agent_relay_host/tasks/runtime-deployment.yml");
+  const revisionTask = runtime
+    .split("    - name: Record runtime source revision")[1]
+    ?.split("    - name: Import staged runtime entrypoint")[0];
+
+  assert.ok(revisionTask);
+  assert.doesNotMatch(revisionTask, /become_user:/u);
+  assert.match(revisionTask, /ansible\.builtin\.copy:/u);
+  assert.match(revisionTask, /owner: "\{\{ agent_relay_builder_user \}\}"/u);
+  assert.match(revisionTask, /group: "\{\{ agent_relay_builder_user \}\}"/u);
+});
+
 test("Ansible installs latest Codex without a second host validator", async () => {
   const contract = await json("config/runner-host.json");
   const vars = await text("ansible/roles/agent_relay_host/vars/main.yml");

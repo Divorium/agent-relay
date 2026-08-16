@@ -38,6 +38,8 @@ agent_relay_runner_labels:
   - docker
 ```
 
+Set `agent_relay_runner_labels: []` to remove all custom labels from a runner.
+
 The host deployment tracks `main` from `https://github.com/Divorium/agent-relay.git` by default. Override it when required:
 
 ```yaml
@@ -113,8 +115,7 @@ A fine-grained token needs the organization permission `Self-hosted runners: Rea
 `github-connect.yml` performs only GitHub connection work:
 
 - requires that `host.yml` already installed runner binaries, runtime, workspace, and the service unit;
-- validates `agent_relay_runner_labels` as a required list of strings through the role argument specification;
-- requires the list to be nonempty and unique;
+- validates public role inputs through `meta/argument_specs.yml`, including `agent_relay_runner_labels` as `list[str]`;
 - creates organization runner registration when absent;
 - starts the registered runner service;
 - locates exactly one runner named after the current `inventory_hostname`;

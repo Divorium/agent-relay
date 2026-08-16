@@ -7,12 +7,17 @@
       Export AGENT_RELAY_GITHUB_CREDENTIAL on the Ansible control machine with organization
       Self-hosted runners: write permission before running playbooks/github-connect.yml.
 
-- name: Require nonempty unique runner labels
+- name: Require valid runner labels
   ansible.builtin.assert:
     that:
       - agent_relay_runner_labels | length > 0
-      - (agent_relay_runner_labels | unique | list | length) == (agent_relay_runner_labels | length)
-    fail_msg: Define at least one unique runner label in inventory group_vars or host_vars.
+      - >-
+        (agent_relay_runner_labels | map('trim') | reject('equalto', '') | list | length)
+        == (agent_relay_runner_labels | length)
+      - >-
+        (agent_relay_runner_labels | map('lower') | unique | list | length)
+        == (agent_relay_runner_labels | length)
+    fail_msg: Define at least one nonempty runner label without case-insensitive duplicates.
 
 - name: Inspect prepared runner workspace
   become: true

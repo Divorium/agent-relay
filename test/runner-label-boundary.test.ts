@@ -45,11 +45,8 @@ test("Ansible keeps host provisioning disjoint from GitHub connection", async ()
   assert.match(reconciliation, /agent_relay_runner_inventory\.json\.runners\[0\]\.name == agent_relay_runner_name/u);
   assert.match(reconciliation, /agent_relay_runner_inventory\.json\.runners\[0\]\.id/u);
   assert.match(reconciliation, /method: PUT/u);
-  assert.doesNotMatch(reconciliation, /method: POST/u);
-  assert.match(reconciliation, /selectattr\('type', 'equalto', 'custom'\)/u);
-  assert.match(reconciliation, /unique\(case_sensitive=false\)/u);
-  assert.match(reconciliation, /labels: "\{\{ agent_relay_runner_effective_labels \}\}"/u);
-  assert.match(reconciliation, /agent_relay_runner_current_custom_labels != agent_relay_runner_desired_custom_labels/u);
+  assert.match(reconciliation, /labels: "\{\{ agent_relay_runner_labels \}\}"/u);
+  assert.doesNotMatch(reconciliation, /selectattr|map\('lower'\)|unique\(|agent_relay_runner_current_custom_labels|agent_relay_runner_desired_custom_labels/u);
 });
 
 test("Ansible validates public role inputs through argument specifications", async () => {

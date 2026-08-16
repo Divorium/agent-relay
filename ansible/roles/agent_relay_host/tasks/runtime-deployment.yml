@@ -93,8 +93,6 @@
         fail_msg: The reconciled checkout did not report a commit revision.
 
     - name: Record runtime source revision
-      become: true
-      become_user: "{{ agent_relay_builder_user }}"
       ansible.builtin.copy:
         content: "{{ agent_relay_checkout_result.after }}\n"
         dest: "{{ agent_relay_runtime_stage_root }}/{{ agent_relay_runtime_revision_marker }}"

@@ -1,0 +1,22 @@
+---
+argument_specs:
+  main:
+    short_description: Prepare and reconcile an Agent Relay runner host
+    options:
+      agent_relay_admin_user:
+        type: str
+        description: Administrator account created for Agent Relay host operations.
+      agent_relay_admin_authorized_keys:
+        type: list
+        elements: str
+        description: SSH public keys authorized for the Agent Relay administrator.
+      agent_relay_extra_apt_packages:
+        type: list
+        elements: str
+        description: Additional APT packages installed on the runner host.
+      agent_relay_repository_url:
+        type: str
+        description: Git repository URL used for the Agent Relay checkout.
+      agent_relay_repository_version:
+        type: str
+        description: Git revision checked out for the Agent Relay runtime.

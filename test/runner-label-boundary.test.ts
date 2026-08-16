@@ -63,9 +63,10 @@ test("Ansible validates runner labels as role arguments sourced from inventory",
   assert.match(argumentSpec, /elements: str/u);
   assert.match(argumentSpec, /required: true/u);
   assert.doesNotMatch(connectionVars, /agent_relay_runner_labels/u);
-  assert.match(connectionTasks, /Require nonempty unique runner labels/u);
+  assert.match(connectionTasks, /Require valid runner labels/u);
   assert.match(connectionTasks, /agent_relay_runner_labels \| length > 0/u);
-  assert.match(connectionTasks, /agent_relay_runner_labels \| unique \| list \| length/u);
+  assert.match(connectionTasks, /map\('trim'\).*reject\('equalto', ''\)/u);
+  assert.match(connectionTasks, /map\('lower'\) \| unique \| list \| length/u);
 });
 
 test("Ansible registers each host with its inventory hostname", async () => {

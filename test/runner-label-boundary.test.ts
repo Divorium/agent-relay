@@ -53,17 +53,14 @@ test("Ansible keeps host provisioning disjoint from GitHub connection", async ()
   assert.doesNotMatch(reconciliation, /method: PUT|selectattr/u);
 });
 
-test("Ansible gives every inventory host a distinct GitHub runner identity", async () => {
+test("Ansible registers each host with its inventory hostname", async () => {
   const hostVars = await text("ansible/roles/agent_relay_host/vars/main.yml");
   const connectionVars = await text("ansible/roles/agent_relay_github_connection/vars/main.yml");
   const connectionTasks = await text("ansible/roles/agent_relay_github_connection/tasks/main.yml");
   const service = await text("ansible/roles/agent_relay_host/templates/actions-runner.service.j2");
 
   for (const vars of [hostVars, connectionVars]) {
-    assert.match(
-      vars,
-      /agent_relay_runner_name: "\{\{ agent_relay_host_contract\.runner_name \}\}-\{\{ inventory_hostname \}\}"/u,
-    );
+    assert.match(vars, /agent_relay_runner_name: "\{\{ inventory_hostname \}\}"/u);
   }
 
   assert.match(
@@ -71,14 +68,7 @@ test("Ansible gives every inventory host a distinct GitHub runner identity", asy
     /agent_relay_service_name: "actions\.runner\.\{\{ agent_relay_host_contract\.organization \}\}\.\{\{ agent_relay_host_contract\.runner_name \}\}\.service"/u,
   );
   assert.match(service, /Description=GitHub Actions Runner \(\{\{ agent_relay_host_contract\.organization \}\}\.\{\{ agent_relay_runner_name \}\}\)/u);
-
-  assert.match(connectionTasks, /Read existing runner registration descriptor/u);
-  assert.match(connectionTasks, /\.agentName/u);
-  assert.match(connectionTasks, /Stop mismatched runner listener before re-registration/u);
-  assert.match(connectionTasks, /Wait for mismatched runner jobs to finish/u);
-  assert.match(connectionTasks, /Locate legacy shared organization runner/u);
-  assert.match(connectionTasks, /method: DELETE/u);
-  assert.match(connectionTasks, /Remove mismatched local runner registration/u);
   assert.match(connectionTasks, /- --name\n\s+- "\{\{ agent_relay_runner_name \}\}"/u);
-  assert.match(connectionTasks, /agent_relay_existing_runner_name != agent_relay_runner_name/u);
+  assert.match(connectionTasks, /creates: "\{\{ agent_relay_runner_root \}\}\/\.runner"/u);
+  assert.doesNotMatch(connectionTasks, /ansible\.builtin\.slurp|agentName|legacy shared|mismatched runner|method: DELETE/u);
 });

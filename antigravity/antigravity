@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+usage() {
+  echo 'Usage: antigravity <account> [agy arguments...]'
+  echo '       antigravity --list | --help'
+}
+root="${ANTIGRAVITY_ROOT:-/srv/github-runner/storage/antigravity}"
+if [[ "${root}" != /* || "${root}" == */ || "${root}" == *'/../'* || "${root}" == *'/./'* ]]; then
+  echo 'Invalid ANTIGRAVITY_ROOT' >&2
+  exit 2
+fi
+if [[ "${1:-}" == '--help' || "${1:-}" == '-h' ]]; then
+  usage
+  exit 0
+fi
+if [[ "${1:-}" == '--list' ]]; then
+  shopt -s nullglob
+  for directory in "${root}"/accounts/*; do
+    [[ -d "${directory}" && ! -L "${directory}" ]] && basename -- "${directory}"
+  done
+  exit 0
+fi
+if (( $# == 0 )); then
+  usage >&2
+  exit 2
+fi
+account="$1"
+shift
+if [[ ! "${account}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]]; then
+  echo 'Invalid account name (letters, digits, underscore and hyphen only)' >&2
+  exit 2
+fi
+if [[ ! -f "${root}/.ready" || -L "${root}/.ready" || ! -f "${root}/docker-compose.yml" || -L "${root}/docker-compose.yml" ]]; then
+  echo 'Antigravity is not provisioned; run the host playbook with agent_relay_antigravity_enabled=true' >&2
+  exit 1
+fi
+ssh_key="${ANTIGRAVITY_SSH_KEY:-${HOME:?HOME is required}/.ssh/antigravity.priv}"
+if [[ ! -f "${ssh_key}" || -L "${ssh_key}" || ! -r "${ssh_key}" || "$(stat -c '%a' -- "${ssh_key}")" != 600 ]]; then
+  echo 'SSH key is missing, unreadable or not mode 0600 (ANTIGRAVITY_SSH_KEY)' >&2
+  exit 1
+fi
+account_root="${root}/accounts/${account}"
+if [[ -L "${account_root}" || -L "${account_root}/state" ]]; then
+  echo 'Account state path must not be a symbolic link' >&2
+  exit 1
+fi
+mkdir -p -- "${account_root}/state/.gemini/antigravity-cli/skills"
+chmod 0700 -- "${account_root}" "${account_root}/state" "${account_root}/state/.gemini" "${account_root}/state/.gemini/antigravity-cli"
+ue5_dir="${ANTIGRAVITY_UE5_DIR:-${root}/empty-ue5}"
+if [[ ! -d "${ue5_dir}" || -L "${ue5_dir}" ]]; then
+  echo 'UE5 directory must be an existing, non-symlink directory' >&2
+  exit 1
+fi
+docker_bin="${ANTIGRAVITY_DOCKER_BIN:-/usr/bin/docker}"
+if [[ "${docker_bin}" != /* || ! -x "${docker_bin}" || -L "${docker_bin}" ]]; then
+  echo 'Docker executable unavailable' >&2
+  exit 1
+fi
+workspace="$(pwd -P)"
+if [[ "${workspace}" == "/" ]]; then
+  echo 'Refusing to mount filesystem root as workspace' >&2
+  exit 1
+fi
+export HOST_UID="$(id -u)" HOST_GID="$(id -g)"
+export WORKSPACE_DIR="${workspace}" ACCOUNT_STATE_DIR="${account_root}/state"
+export SKILLS_DIR="${root}/skills" UE5_DIR="${ue5_dir}" ANTIGRAVITY_SSH_KEY="${ssh_key}"
+exec "${docker_bin}" compose -f "${root}/docker-compose.yml" run --rm agy "$@"

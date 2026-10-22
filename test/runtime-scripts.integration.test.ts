@@ -249,7 +249,7 @@ test("codex-run rejects missing authentication before launching Codex", async ()
   }
 });
 
-test("toolchain smoke accepts changing Codex versions and validates the complete environment profile", async () => {
+test("toolchain smoke validates the environment without preinstalled Codex", async () => {
   const root = join(tmpdir(), `agent-relay-toolchain-${process.pid}-${Date.now()}`);
   const scripts = join(root, "scripts");
   const bin = join(root, "bin");
@@ -265,7 +265,7 @@ test("toolchain smoke accepts changing Codex versions and validates the complete
   const generalCommands = [
     "node", "npm", "tsc", "python3", "git", "gcc", "g++", "clang", "make", "cmake", "pkg-config",
     "bash", "curl", "wget", "jq", "zip", "unzip", "tar", "gzip", "xz", "zstd", "file",
-    "diff", "codex", "head", "ssh", "dotnet",
+    "diff", "head", "ssh", "dotnet",
   ];
 
   await mkdir(scripts, { recursive: true });
@@ -340,21 +340,8 @@ test("toolchain smoke accepts changing Codex versions and validates the complete
     }
     assert.equal(await readFile(headLog, "utf8"), "head -n 1\n");
     assert.doesNotMatch(invocations, /^ssh |^dotnet /m);
-    assert.doesNotMatch(invocations, /^codex --version$/m);
+    assert.doesNotMatch(invocations, /^codex /m);
     assert.match(invocations, /^rustup show active-toolchain$/m);
-    assert.match(invocations, /^codex --ask-for-approval never exec --help$/m);
-
-    const profileInvocation = invocations.split("\n").find((line) => line.includes("permissions.agent.filesystem="));
-    if (!profileInvocation) throw new Error("Codex profile invocation was not recorded");
-    const smokeRoot = new RegExp(`exec --cd (${escapeRegExp(join(stateRoot, "tmp"))}/agent-relay-smoke\\.[A-Za-z0-9]+) --help$`).exec(profileInvocation)?.[1];
-    if (!smokeRoot) throw new Error("Codex profile invocation did not contain the private smoke workspace");
-    assert.match(
-      profileInvocation,
-      new RegExp(
-        `^codex --ask-for-approval never -c features\\.memories=false -c default_permissions="agent" -c permissions\\.agent\\.extends=":workspace" -c permissions\\.agent\\.filesystem=\\{"/tmp"="deny","${escapeRegExp(smokeRoot)}"="write"\\} -c permissions\\.agent\\.network\\.enabled=true exec --cd ${escapeRegExp(smokeRoot)} --help$`,
-      ),
-    );
-    await assert.rejects(stat(smokeRoot), /ENOENT/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

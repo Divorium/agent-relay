@@ -16,6 +16,7 @@ There is no Relay HTTP service, polling daemon, separate updater, host installer
 
 - bootstraps Python 3 over SSH as `runneradmin` using play-level sudo escalation;
 - installs sudo, system packages, runner dependencies, Docker, and toolchains;
+- removes the obsolete global Codex npm package and optionally builds a verified Antigravity Docker image;
 - creates `agent-relay-admin`, `github-runner`, and `agent-relay-builder`;
 - creates and reconciles declared secure directories;
 - configures Docker Engine and containerd data roots;
@@ -40,7 +41,7 @@ The host role contains no GitHub credential variable, makes no GitHub runner API
 - registers the organization runner only when registration is absent;
 - enables and starts the runner listener;
 - finds exactly one organization runner named `gh-runner`;
-- adds `agent-relay` through the additive runner-label endpoint.
+- reconciles the complete inventory-managed custom runner-label set through the PUT endpoint; the `antigravity` label requires the root-owned readiness marker and installed Docker image.
 
 The connection role does not install packages, users, Docker, toolchains, source code, runner binaries, systemd units, or runtime files. It does not invoke `host.yml` or `agent_relay_host`.
 
@@ -53,7 +54,8 @@ A fine-grained PAT needs `Self-hosted runners: Read and write`. A classic PAT ne
 /srv/github-runner/storage/agent-relay/dist/.agent-relay-source-revision
 /srv/github-runner/storage/runner       official GitHub Actions runner
 /srv/github-runner/storage/runner/_work github-runner-owned workflow workspaces
-/srv/github-runner/storage/home         github-runner home and Codex authentication
+/srv/github-runner/storage/home         github-runner home and separately managed CLI authentication
+/srv/github-runner/storage/antigravity  optional Antigravity image recipe, accounts, and shared skills
 /srv/github-runner/storage/build-home   builder home and temporary build state
 /srv/github-runner/storage/docker/engine
 /srv/github-runner/storage/docker/containerd
@@ -69,7 +71,7 @@ The Docker storage parent and containerd root are `root:root` mode `0711`. The d
 
 - `agent-relay-admin` owns the checkout.
 - `agent-relay-builder` has a locked password, `/usr/sbin/nologin`, no sudo, a private build home, and temporary stage ownership.
-- `github-runner` has a locked password and no sudo. It runs the official listener and Codex.
+- `github-runner` has a locked password and no host sudo. It runs the listener and can invoke separately managed Codex or the isolated Antigravity launcher.
 - `github-runner` belongs to `docker`; this is intentional root-equivalent host trust.
 - Activated runtime files are `root:root`; directories are `0755`, and regular files are `0644`.
 
@@ -103,10 +105,15 @@ The host role owns:
 - Go 1.24.5 under `/usr/local/go`;
 - stable Rust under `/opt/rust`;
 - TypeScript 5.8.3;
-- Codex CLI, updated to the latest available release on every `host.yml` run;
+- removal of the legacy preinstalled global Codex npm package; no Codex CLI is installed by this role;
+- optional Antigravity Docker image and per-account launcher, enabled explicitly per runner;
 - Docker Engine, containerd, Buildx, Compose, Git LFS, and native runner dependencies.
 
 `scripts/toolchain-environment.sh` defines the trusted runtime path layout. Every GitHub Actions workflow executes on the managed self-hosted runner, and CI runs `npm run check:toolchain` against that installed environment. Host provisioning relies on the Ansible installation tasks themselves.
+
+## Optional Antigravity boundary
+
+`agent_relay_antigravity_enabled` defaults to false. When enabled, the host role copies the supplied Docker recipe into the managed storage root, builds the image for the runner UID/GID, verifies the CLI binary, and only then publishes a readiness marker and launcher. Each named account has a separate bind-mounted state directory. The current working directory is the sole project mount; UE5 is an optional read-only mount. Neither Docker socket is passed to Antigravity. The PAT-free host role never changes labels directly: the GitHub connection role validates availability and reconciles the `antigravity` label separately.
 
 ## Runner binary and registration state
 
@@ -151,7 +158,7 @@ First installation:
 ```text
 host.yml
   -> github-connect.yml
-  -> explicit Codex login
+  -> optional external Codex authentication and/or Antigravity account sign-in
   -> Monify consumer acceptance
 ```
 
@@ -161,7 +168,7 @@ Later releases:
 host.yml
 ```
 
-`github-connect.yml` is rerun only for connection or managed-label recovery. It is not a release deployment step.
+`github-connect.yml` is rerun for initial registration, connection recovery, or managed-label changes, including when Antigravity is enabled or disabled. Ordinary runtime releases need only `host.yml`.
 
 ## GitHub request flow
 

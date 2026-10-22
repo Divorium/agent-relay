@@ -71,7 +71,7 @@ This playbook requires no GitHub PAT and performs the complete idempotent host
 reconciliation directly through Ansible:
 
 - bootstraps Python 3;
-- installs packages and pinned language toolchains, then updates Codex CLI to the latest available release;
+- installs packages and pinned language toolchains, then removes the obsolete preinstalled global Codex npm package;
 - creates the administrator, runner, and builder accounts;
 - configures Docker and containerd;
 - creates the ordinary and dedicated Docker sockets;
@@ -129,13 +129,22 @@ Ansible uses the PAT only for authenticated GitHub API requests delegated to the
 
 For every later release, run only `playbooks/host.yml` with `--ask-become-pass` (or `-K`) and without exporting a PAT. Existing GitHub registration files are preserved, and the host role performs no credentialed GitHub operation.
 
-## Codex authentication
+## Optional Antigravity
 
-Codex authentication remains a separate explicit operation after the host exists:
+Set `agent_relay_antigravity_enabled: true` for the desired host in inventory
+and rerun `host.yml`. The image is built and verified, the `antigravity` launcher
+installed, and a readiness marker written after successful provisioning.
 
-```bash
-ssh agent-relay-admin@HOST
-sudo -u github-runner -H /usr/local/bin/codex login
-```
+Rerun `github-connect.yml` with an organization PAT after enabling or disabling
+Antigravity so the `antigravity` label reflects the actual capability.
+Inventory alone cannot assign the label to an unprepared node.
 
-Pinned runner, language-toolchain, and host constants come from `../config/runner-host.json`; Codex CLI intentionally has no version pin. Operational recovery procedures are documented in [`../docs/operations/README.md`](../docs/operations/README.md).
+The runner's SSH private key defaults to
+`/srv/github-runner/storage/home/.ssh/antigravity.priv` (0600).
+See [`../antigravity/README.md`](../antigravity/README.md).
+
+The legacy preinstalled Codex CLI is removed; the Codex workflows remain
+but require an externally managed executable at `/usr/local/bin/codex`.
+
+Deployment constants are in `../config/runner-host.json`; operational
+recovery is documented in [`../docs/operations/README.md`](../docs/operations/README.md).

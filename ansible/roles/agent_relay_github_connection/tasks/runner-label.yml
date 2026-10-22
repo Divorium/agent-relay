@@ -1,4 +1,40 @@
 ---
+- name: Inspect Antigravity host capability
+  become: true
+  ansible.builtin.stat:
+    path: "{{ agent_relay_antigravity_root }}/.ready"
+    follow: false
+  register: agent_relay_antigravity_ready
+
+- name: Verify Antigravity Docker image when capability marker is present
+  become: true
+  ansible.builtin.command:
+    argv: [/usr/bin/docker, image, inspect, antigravity-sandbox:latest]
+  register: agent_relay_antigravity_image
+  changed_when: false
+  failed_when: false
+  when:
+    - agent_relay_antigravity_ready.stat.isreg | default(false)
+    - not (agent_relay_antigravity_ready.stat.islnk | default(false))
+    - agent_relay_antigravity_ready.stat.pw_name | default('') == 'root'
+
+- name: Determine effective runner labels
+  ansible.builtin.set_fact:
+    agent_relay_effective_runner_labels: >-
+      {{
+        (agent_relay_runner_labels | reject('equalto', 'antigravity') | list)
+        + (
+          ['antigravity']
+          if (
+            agent_relay_antigravity_ready.stat.isreg | default(false)
+            and not (agent_relay_antigravity_ready.stat.islnk | default(false))
+            and agent_relay_antigravity_ready.stat.pw_name | default('') == 'root'
+            and (agent_relay_antigravity_image.rc | default(1)) == 0
+          )
+          else []
+        )
+      }}
+
 - name: Locate configured organization runner
   ansible.builtin.uri:
     url: >-
@@ -51,7 +87,7 @@
       X-GitHub-Api-Version: "{{ agent_relay_host_contract.github_api_version }}"
     body_format: json
     body:
-      labels: "{{ agent_relay_runner_labels }}"
+      labels: "{{ agent_relay_effective_runner_labels }}"
     status_code: 200
   changed_when: true
   delegate_to: localhost

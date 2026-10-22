@@ -35,7 +35,8 @@ The host playbook does not require or read `AGENT_RELAY_GITHUB_CREDENTIAL`. It o
 - secure filesystem roots;
 - Docker and containerd configuration;
 - both Docker socket listeners;
-- pinned language toolchains and the latest available Codex CLI on every run;
+- pinned language toolchains and removal of the obsolete global Codex npm package;
+- optional Antigravity Docker image and launcher;
 - official GitHub Runner binaries;
 - the runner systemd unit;
 - managed source checkout;
@@ -72,7 +73,7 @@ This playbook does not rerun host provisioning and does not import `host.yml`. I
 2. creates runner registration when absent;
 3. enables and starts the listener;
 4. finds the organization runner named `gh-runner`;
-5. adds `agent-relay` through the additive labels endpoint when absent.
+5. reconciles inventory-managed custom labels, adding `antigravity` only for a verified installation.
 
 Ansible uses the PAT only in authenticated GitHub API calls delegated to the control machine. Tasks handling the PAT and short-lived registration token use `no_log`; the PAT is never sent to the target, and neither credential is stored there.
 
@@ -128,18 +129,19 @@ ansible-config dump --only-changed | grep DEFAULT_ROLES_PATH
 
 Pass `ANSIBLE_CONFIG` and `ANSIBLE_ROLES_PATH` inline as shown above. Assigning them on separate lines without `export` does not pass them to `ansible-playbook`.
 
-Do not commit private keys, passwords, GitHub tokens, or Codex credentials.
+Do not commit private keys, passwords, GitHub tokens, or CLI credentials.
 
-## Codex authentication
+## Optional Antigravity
 
-Codex authentication remains a separate explicit operation:
+Set `agent_relay_antigravity_enabled: true` in inventory and rerun
+`host.yml` to build and verify the container. Rerun `github-connect.yml`
+with the organization PAT to add its `antigravity` custom runner label.
+After disabling the feature, rerun `github-connect.yml` to remove the label.
+See [`../../antigravity/README.md`](../../antigravity/README.md) for account
+isolation, SSH key setup, and optional UE5 mount.
 
-```bash
-ssh agent-relay-admin@HOST
-sudo -u github-runner -H /usr/local/bin/codex login
-```
-
-Neither host deployment nor GitHub connection authenticates Codex.
+The Codex workflow still requires a separately managed CLI executable
+at `/usr/local/bin/codex`. Ansible no longer preinstalls or authenticates Codex.
 
 ## Deployment behavior
 

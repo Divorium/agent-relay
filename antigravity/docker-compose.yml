@@ -1,0 +1,50 @@
+services:
+  agy:
+    build:
+      context: .
+      args:
+        SANDBOX_UID: ${HOST_UID:?HOST_UID is required}
+        SANDBOX_GID: ${HOST_GID:?HOST_GID is required}
+    image: antigravity-sandbox:latest
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    working_dir: /workspace
+    network_mode: bridge
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+      - SETFCAP
+      - SYS_CHROOT
+    pids_limit: 8192
+    mem_limit: 16g
+    shm_size: '4gb'
+    stdin_open: true
+    environment:
+      UE_ROOT: /ue5
+    volumes:
+      - type: bind
+        source: ${WORKSPACE_DIR:-.}
+        target: /workspace
+      - type: bind
+        source: ${ACCOUNT_STATE_DIR:?ACCOUNT_STATE_DIR is required}
+        target: /tmp/antigravity-home
+      - type: bind
+        source: ${SKILLS_DIR:?SKILLS_DIR is required}
+        target: /shared-skills
+        read_only: true
+      - type: bind
+        source: ${SKILLS_DIR:?SKILLS_DIR is required}
+        target: /tmp/antigravity-home/.gemini/antigravity-cli/skills
+        read_only: true
+      - type: bind
+        source: ${ANTIGRAVITY_SSH_KEY:?ANTIGRAVITY_SSH_KEY is required}
+        target: /home/sandbox/.ssh/antigravity.priv
+        read_only: true
+      - type: bind
+        source: ${UE5_DIR:?UE5_DIR is required}
+        target: /ue5
+        read_only: true

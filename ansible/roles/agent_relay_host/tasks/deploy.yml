@@ -127,5 +127,8 @@
 - name: Apply runner service unit changes
   ansible.builtin.meta: flush_handlers
 
+- name: Reconcile optional Antigravity CLI
+  ansible.builtin.import_tasks: antigravity.yml
+
 - name: Reconcile runner listener state
   ansible.builtin.import_tasks: listener-state.yml

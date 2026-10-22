@@ -58,7 +58,7 @@ test("runtime revision marker is written as root with builder ownership", async 
   assert.match(revisionTask, /group: "\{\{ agent_relay_builder_user \}\}"/u);
 });
 
-test("Ansible installs latest Codex without a second host validator", async () => {
+test("Ansible removes the obsolete preinstalled Codex without requiring a separate host validator", async () => {
   const contract = await json("config/runner-host.json");
   const vars = await text("ansible/roles/agent_relay_host/vars/main.yml");
   const toolchains = await text("ansible/roles/agent_relay_host/tasks/toolchains.yml");
@@ -69,6 +69,8 @@ test("Ansible installs latest Codex without a second host validator", async () =
 
   assert.equal(contract.codex_version, undefined);
   assert.doesNotMatch(vars, /agent_relay_codex_version/u);
-  assert.equal((toolchains.match(/"@openai\/codex@latest"/gu) ?? []).length, 1);
+  assert.doesNotMatch(toolchains, /@openai\/codex@latest/u);
+  assert.match(toolchains, /npm, uninstall, --global, --prefix, \/usr\/local, "@openai\/codex"/u);
+  assert.match(toolchains, /agent_relay_codex_global\.stat\.isreg/u);
   assert.doesNotMatch(`${toolchains}\n${deployment}`, /host-toolchain-check|EXPECTED_CODEX_VERSION|codex --version|command -v codex/u);
 });

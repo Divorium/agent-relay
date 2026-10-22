@@ -1,0 +1,119 @@
+---
+- name: Remove obsolete Antigravity availability when disabled
+  when: not agent_relay_antigravity_enabled | bool
+  block:
+    - name: Remove Antigravity readiness marker
+      ansible.builtin.file:
+        path: "{{ agent_relay_antigravity_root }}/.ready"
+        state: absent
+    - name: Remove Antigravity launcher
+      ansible.builtin.file:
+        path: /usr/local/bin/antigravity
+        state: absent
+
+- name: Provision optional Antigravity Docker CLI
+  when: agent_relay_antigravity_enabled | bool
+  block:
+    - name: Create managed Antigravity directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ agent_relay_antigravity_root }}", owner: root, group: root, mode: "0755" }
+        - { path: "{{ agent_relay_antigravity_root }}/accounts", owner: "{{ agent_relay_runner_user }}", group: "{{ agent_relay_runner_user }}", mode: "0700" }
+        - { path: "{{ agent_relay_antigravity_root }}/skills", owner: "{{ agent_relay_runner_user }}", group: "{{ agent_relay_runner_user }}", mode: "0755" }
+        - { path: "{{ agent_relay_antigravity_root }}/empty-ue5", owner: root, group: root, mode: "0755" }
+
+    - name: Copy Antigravity Dockerfile from managed checkout
+      ansible.builtin.copy:
+        src: "{{ agent_relay_source_root }}/antigravity/Dockerfile"
+        dest: "{{ agent_relay_antigravity_root }}/Dockerfile"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      register: agent_relay_antigravity_dockerfile
+
+    - name: Copy Antigravity Compose file from managed checkout
+      ansible.builtin.copy:
+        src: "{{ agent_relay_source_root }}/antigravity/docker-compose.yml"
+        dest: "{{ agent_relay_antigravity_root }}/docker-compose.yml"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      register: agent_relay_antigravity_compose
+
+    - name: Copy Antigravity usage guide
+      ansible.builtin.copy:
+        src: "{{ agent_relay_source_root }}/antigravity/README.md"
+        dest: "{{ agent_relay_antigravity_root }}/README.md"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Resolve GitHub runner UID
+      ansible.builtin.command:
+        argv: [/usr/bin/id, -u, "{{ agent_relay_runner_user }}"]
+      register: agent_relay_antigravity_uid
+      changed_when: false
+
+    - name: Resolve GitHub runner GID
+      ansible.builtin.command:
+        argv: [/usr/bin/id, -g, "{{ agent_relay_runner_user }}"]
+      register: agent_relay_antigravity_gid
+      changed_when: false
+
+    - name: Inspect existing Antigravity image
+      ansible.builtin.command:
+        argv: [/usr/bin/docker, image, inspect, antigravity-sandbox:latest]
+      register: agent_relay_antigravity_image
+      changed_when: false
+      failed_when: false
+
+    - name: Build Antigravity sandbox for runner account
+      ansible.builtin.command:
+        argv: [/usr/bin/docker, compose, -f, "{{ agent_relay_antigravity_root }}/docker-compose.yml", build, agy]
+      environment:
+        HOST_UID: "{{ agent_relay_antigravity_uid.stdout | trim }}"
+        HOST_GID: "{{ agent_relay_antigravity_gid.stdout | trim }}"
+        ACCOUNT_STATE_DIR: "{{ agent_relay_antigravity_root }}/accounts"
+        WORKSPACE_DIR: "{{ agent_relay_antigravity_root }}"
+        SKILLS_DIR: "{{ agent_relay_antigravity_root }}/skills"
+        ANTIGRAVITY_SSH_KEY: /dev/null
+        UE5_DIR: "{{ agent_relay_antigravity_root }}/empty-ue5"
+      when: >-
+        agent_relay_antigravity_dockerfile.changed
+        or agent_relay_antigravity_compose.changed
+        or agent_relay_antigravity_image.rc != 0
+        or (
+          (agent_relay_antigravity_image.stdout | default('[]') | from_json | first | default({})).Config.User
+          | default('')
+        ) != (agent_relay_antigravity_uid.stdout | trim) ~ ':' ~ (agent_relay_antigravity_gid.stdout | trim)
+      changed_when: true
+
+    - name: Verify Antigravity CLI was built into image
+      ansible.builtin.command:
+        argv: [/usr/bin/docker, run, --rm, --entrypoint, /usr/bin/test, antigravity-sandbox:latest, -x, /home/sandbox/.local/bin/agy]
+      changed_when: false
+
+    - name: Publish Antigravity host launcher
+      ansible.builtin.copy:
+        src: "{{ agent_relay_source_root }}/antigravity/antigravity"
+        dest: /usr/local/bin/antigravity
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Mark Antigravity ready only after image validation
+      ansible.builtin.copy:
+        content: "installed\n"
+        dest: "{{ agent_relay_antigravity_root }}/.ready"
+        owner: root
+        group: root
+        mode: "0644"

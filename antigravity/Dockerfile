@@ -5,6 +5,8 @@
 # Neither curl nor APT metadata leaks into the runtime image.
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim AS installer
+ARG SANDBOX_UID=1000
+ARG SANDBOX_GID=1000
 
 ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/home/sandbox
@@ -12,12 +14,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --uid 1000 --create-home --shell /bin/bash sandbox
+    && groupadd --gid "${SANDBOX_GID}" sandbox && useradd --uid "${SANDBOX_UID}" --gid sandbox --create-home --shell /bin/bash sandbox
 
 USER sandbox
 
-RUN curl -fsSL https://antigravity.google/cli/install.sh \
-    | bash -s -- --dir /home/sandbox/.local/bin
+RUN bash -o pipefail -c 'curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --skip-aliases --skip-path' \
+    && test -x /home/sandbox/.local/bin/agy
 
 
 # ---------------------------------------------------------------------------
@@ -25,6 +27,8 @@ RUN curl -fsSL https://antigravity.google/cli/install.sh \
 # Includes agy, a full developer toolset, GitHub CLI, and SSH.
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim
+ARG SANDBOX_UID=1000
+ARG SANDBOX_GID=1000
 
 ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/tmp/antigravity-home \
@@ -69,6 +73,7 @@ RUN apt-get update \
         unzip zip tar gzip bzip2 xz-utils \
         # process inspection
         procps \
+        sudo \
         # editors
         nano \
         vim-tiny \
@@ -115,7 +120,7 @@ RUN apt-get update \
 # ------------------------------------------------------------------
 # Create sandbox user, workspace, and UE5 engine mount point
 # ------------------------------------------------------------------
-RUN useradd --uid 1000 --create-home --shell /bin/bash sandbox \
+RUN groupadd --gid "${SANDBOX_GID}" sandbox && useradd --uid "${SANDBOX_UID}" --gid sandbox --create-home --shell /bin/bash sandbox \
     && mkdir /workspace \
     && chown sandbox:sandbox /workspace \
     && mkdir /ue5
@@ -124,6 +129,9 @@ RUN useradd --uid 1000 --create-home --shell /bin/bash sandbox \
 # ------------------------------------------------------------------
 # pip: allow system-wide installs inside the container (PEP 668)
 # ------------------------------------------------------------------
+RUN printf 'sandbox ALL=(ALL:ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/sandbox \
+    && chmod 0440 /etc/sudoers.d/sandbox
+
 RUN printf "[global]\nbreak-system-packages = true\n" > /etc/pip.conf
 
 # ------------------------------------------------------------------
@@ -163,11 +171,12 @@ RUN git config --system safe.directory '*' \
 # Copy the agy binary from the installer stage
 # ------------------------------------------------------------------
 COPY --from=installer /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=installer --chown=1000:1000 /home/sandbox/.local /home/sandbox/.local
+COPY --from=installer --chown=${SANDBOX_UID}:${SANDBOX_GID} /home/sandbox/.local /home/sandbox/.local
 
 # A non-root default. Docker's --user flag may override this with the host
 # UID:GID so that a bind-mounted project remains writable.
-USER 1000:1000
+LABEL com.divorium.agent-relay.antigravity="true"
+USER ${SANDBOX_UID}:${SANDBOX_GID}
 WORKDIR /workspace
 
 ENTRYPOINT ["agy"]

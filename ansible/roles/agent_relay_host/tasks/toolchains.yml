@@ -326,17 +326,17 @@
     ) != agent_relay_typescript_version
   changed_when: true
 
-- name: Install latest Codex CLI
+- name: Inspect obsolete preinstalled Codex package
+  ansible.builtin.stat:
+    path: /usr/local/lib/node_modules/@openai/codex/package.json
+    follow: false
+  register: agent_relay_codex_global
+
+- name: Remove obsolete preinstalled Codex CLI
   ansible.builtin.command:
-    argv:
-      - /usr/bin/npm
-      - install
-      - --global
-      - --prefix
-      - /usr/local
-      - "@openai/codex@latest"
-  register: agent_relay_codex_install
-  changed_when: "'up to date' not in agent_relay_codex_install.stdout"
+    argv: [/usr/bin/npm, uninstall, --global, --prefix, /usr/local, "@openai/codex"]
+  when: agent_relay_codex_global.stat.isreg | default(false)
+  changed_when: true
 
 - name: Inspect system Git LFS configuration
   ansible.builtin.command:

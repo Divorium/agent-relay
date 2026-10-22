@@ -20,3 +20,6 @@ argument_specs:
       agent_relay_repository_version:
         type: str
         description: Git revision checked out for the Agent Relay runtime.
+      agent_relay_antigravity_enabled:
+        type: bool
+        description: Build and enable isolated Antigravity CLI on this host.

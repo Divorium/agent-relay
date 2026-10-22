@@ -72,3 +72,4 @@ agent_relay_required_apt_packages:
   - zip
   - zlib1g
   - zstd
+agent_relay_antigravity_root: "{{ agent_relay_storage_root }}/antigravity"

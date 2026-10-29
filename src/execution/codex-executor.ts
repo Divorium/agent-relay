@@ -11,6 +11,11 @@ export interface ExecutionOutcome {
   exitCode: number;
   executionActivityCount: number;
 }
+export interface JobCodex {
+  binary: string;
+  home: string;
+  installRoot: string;
+}
 export interface KillableProcess { pid?: number; kill(signal: "SIGTERM" | "SIGKILL"): unknown; }
 export type ProcessGroupKiller = (pid: number, signal: "SIGTERM" | "SIGKILL") => unknown;
 
@@ -30,8 +35,14 @@ function trustedProject(path: string): string {
   return `projects={${JSON.stringify(path)}={trust_level="trusted"}}`;
 }
 
-export function createCodexEnvironment(home: string, runtimeRoot: string): Record<string, string> {
-  return { HOME: home, CODEX_RUNTIME_ROOT: runtimeRoot, LANG: "C.UTF-8", LC_ALL: "C.UTF-8" };
+export function createCodexEnvironment(home: string, runtimeRoot: string, job?: JobCodex): Record<string, string> {
+  const environment: Record<string, string> = { HOME: home, CODEX_RUNTIME_ROOT: runtimeRoot, LANG: "C.UTF-8", LC_ALL: "C.UTF-8" };
+  if (job) {
+    environment.CODEX_BINARY = job.binary;
+    environment.CODEX_HOME = job.home;
+    environment.CODEX_INSTALL_ROOT = job.installRoot;
+  }
+  return environment;
 }
 
 export function createCodexArgs(
@@ -40,6 +51,7 @@ export function createCodexArgs(
   home: string,
   runtimeRoot: string,
   trustedRuntimeRoot: string,
+  job?: JobCodex,
 ): string[] {
   const resolvedWorkspace = resolve(workspace);
   const entries = [
@@ -53,6 +65,9 @@ export function createCodexArgs(
     permission(resolvedWorkspace, "write"),
     permission(join(resolvedWorkspace, ".git"), "read"),
   ];
+  if (job) {
+    entries.push(permission(resolve(job.installRoot), "read"), permission(resolve(job.home), "deny"));
+  }
   return [
     "--ask-for-approval", "never",
     "-c", "features.memories=false",
@@ -131,16 +146,17 @@ export class CodexExecutor {
     private readonly trustedRuntimeRoot: string,
     private readonly forceKillDelayMs = 5_000,
     private readonly maxJsonlRecordBytes = deriveJsonlRecordBytes(maxOutputBytes),
+    private readonly job?: JobCodex,
   ) {}
 
   async run(planPath: string, workspace: string, transcript: TranscriptSink = discardingTranscript): Promise<ExecutionOutcome> {
     const prompt = buildCodexPrompt(planPath);
     const child = spawn(
       this.command,
-      createCodexArgs(workspace, prompt, this.home, this.runtimeRoot, this.trustedRuntimeRoot),
+      createCodexArgs(workspace, prompt, this.home, this.runtimeRoot, this.trustedRuntimeRoot, this.job),
       {
         cwd: workspace,
-        env: createCodexEnvironment(this.home, this.runtimeRoot),
+        env: createCodexEnvironment(this.home, this.runtimeRoot, this.job),
         stdio: ["ignore", "pipe", "pipe"],
         detached: true,
       },

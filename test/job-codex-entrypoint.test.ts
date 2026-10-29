@@ -23,7 +23,7 @@ test("entrypoint forwards job inputs and removes its run state", async () => {
     await mkdir(home); await mkdir(temp);
     await writeFile(join(workspace, plan), "# Verify native job\n");
     await writeFile(output, "");
-    await writeFile(launcher, `#!/bin/sh\nset -eu\nprintf '%s\\n' "$CODEX_BINARY" "$CODEX_HOME" "$CODEX_INSTALL_ROOT" "\${GITHUB_TOKEN-unset}" > '${record}'\nprintf '%s\\n' '{"type":"item.completed","item":{"type":"command_execution","command":"fixture","aggregated_output":"","status":"completed","exit_code":0}}'\n`, { mode: 0o700 });
+    await writeFile(launcher, `#!/bin/sh\nset -eu\nprintf '%s\\n' "$CODEX_BINARY" "$CODEX_HOME" "$CODEX_INSTALL_ROOT" "\${GITHUB_TOKEN-unset}" > '${record}'\nprintf '%s\\n' '{"type":"item.completed","item":{"id":"job-fixture","type":"command_execution","command":"fixture","aggregated_output":"","status":"completed","exit_code":0}}'\n`, { mode: 0o700 });
     await chmod(launcher, 0o700);
     for (const name of names) delete process.env[name];
     Object.assign(process.env, {

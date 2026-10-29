@@ -48,7 +48,7 @@ test("executor exposes the dedicated Docker socket directory without denying the
   assert.ok(!args.includes("danger-full-access"));
 });
 
-test("workflows validate and execute the pull request runtime with strict token scoping", async () => {
+test("workflows validate pull requests but execute an immutable trusted runtime with strict token scoping", async () => {
   for (const path of workflowPaths) {
     const workflow = await readFile(path, "utf8");
     assert.match(workflow, /runs-on: \[self-hosted\]/);
@@ -56,7 +56,9 @@ test("workflows validate and execute the pull request runtime with strict token 
     for (const script of ["resolve-request", "resolve-pr", "resolve-plan"]) assert.ok(workflow.includes(`node /srv/github-runner/storage/agent-relay/runner/${script}.mjs`));
     assert.match(workflow, /- name: Install pull-request runtime dependencies[\s\S]*run: npm ci/);
     assert.match(workflow, /- name: Build pull-request runtime[\s\S]*run: npm run build/);
-    assert.match(workflow, /cp -a dist runner scripts config "\$runtime\/"/);
+    assert.match(workflow, /repository: Divorium\/agent-relay\s+ref: [a-f0-9]{40}/);
+    assert.match(workflow, /cp -a \.trusted-codex-runtime\/\. "\$runtime\/"/);
+    assert.doesNotMatch(workflow, /cp -a dist runner scripts config/);
     assert.match(workflow, /scripts\/run-job-codex" node "\$RELAY_RUNTIME_ROOT\/runner\/run-codex\.mjs"/);
     assert.match(workflow, /bash "\$RELAY_RUNTIME_ROOT\/runner\/finalize\.sh"/);
     assert.match(workflow, /CODEX_VERSION: 0\.164\.0/);

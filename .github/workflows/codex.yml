@@ -119,6 +119,14 @@ jobs:
       - name: Report missing active ExecPlan
         if: steps.plan_diff.outputs.plan_found == 'false' || steps.plan.outputs.plan_found == 'false'
         run: echo 'No active ExecPlan was found in this pull request. Codex execution was skipped.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Checkout reviewed execution runtime
+        if: steps.plan_diff.outputs.plan_found != 'false' && steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != ''
+        uses: actions/checkout@v4
+        with:
+          repository: Divorium/agent-relay
+          ref: 8404ac69fe8c79ff6a8998dcdbd4dd9cf4cd2b15
+          path: .trusted-codex-runtime
+          persist-credentials: false
       - name: Preserve trusted execution runtime
         id: runtime
         if: steps.plan_diff.outputs.plan_found != 'false' && steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != ''
@@ -127,10 +135,14 @@ jobs:
           umask 077
           runtime="$(mktemp -d "$RUNNER_TEMP/relay-job-runtime.XXXXXXXX")"
           printf 'root=%s\n' "$runtime" >> "$GITHUB_OUTPUT"
-          cp -a dist runner scripts config "$runtime/"
+          cp -a .trusted-codex-runtime/. "$runtime/"
+          rm -rf -- .trusted-codex-runtime
+          cd "$runtime"
+          npm ci
+          npm run build
       - name: Run Codex directly
         id: codex
-        if: steps.plan_diff.outputs.plan_found != 'false' && steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != '' && steps.runtime.outcome == 'success'
+        if: steps.plan_diff.outputs.plan_found != 'false' && steps.plan.outputs.plan_found != 'false' && steps.plan.outputs.plan_path != ''
         continue-on-error: true
         env:
           CODEX_TOKEN: ${{ secrets.CODEX_TOKEN }}

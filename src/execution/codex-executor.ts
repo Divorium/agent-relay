@@ -212,6 +212,9 @@ export class CodexExecutor {
     });
     child.stdout.on("error", fail);
     child.stderr.on("error", fail);
+    const interrupted = (): void => fail(new CodexExecutionError("CODEX_FAILED", "Codex execution interrupted"));
+    process.on("SIGTERM", interrupted);
+    process.on("SIGINT", interrupted);
 
     let spawned = false;
     let startupError: CodexExecutionError | undefined;
@@ -236,6 +239,8 @@ export class CodexExecutor {
         resolvePromise(code ?? 1);
       });
     });
+    process.removeListener("SIGTERM", interrupted);
+    process.removeListener("SIGINT", interrupted);
 
     await input.finish();
     if (firstFailure === undefined) {

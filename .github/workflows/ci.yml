@@ -19,58 +19,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-
       - name: Install dependencies
         run: npm ci
-
       - name: Typecheck
-        id: typecheck
-        shell: bash
-        run: |
-          set +e
-          npm run typecheck > "${RUNNER_TEMP}/agent-relay-typecheck-output.log" 2>&1
-          status=$?
-          if (( status != 0 )); then
-            cat "${RUNNER_TEMP}/agent-relay-typecheck-output.log"
-          fi
-          exit "${status}"
-
-      - name: Upload typecheck failure output
-        if: failure() && steps.typecheck.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: agent-relay-typecheck-output
-          path: ${{ runner.temp }}/agent-relay-typecheck-output.log
-          if-no-files-found: error
-
+        run: npm run typecheck
       - name: Run tests and coverage
-        id: tests
-        shell: bash
-        run: |
-          set +e
-          npm test > "${RUNNER_TEMP}/agent-relay-test-output.log" 2>&1
-          status=$?
-          if (( status != 0 )); then
-            tail -n 80 "${RUNNER_TEMP}/agent-relay-test-output.log"
-          fi
-          exit "${status}"
-
-      - name: Upload test failure output
-        if: failure() && steps.tests.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: agent-relay-test-output
-          path: ${{ runner.temp }}/agent-relay-test-output.log
-          if-no-files-found: error
-
+        run: npm test
       - name: Validate production runtime build
         run: npm run check:runtime
-
-      - name: Validate shell scripts
+      - name: Validate shell scripts and job lifecycle
         run: npm run check:shell
-
       - name: Validate Node scripts
         run: npm run check:node-scripts
-
       - name: Validate toolchain
         run: npm run check:toolchain

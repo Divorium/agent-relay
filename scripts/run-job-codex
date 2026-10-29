@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 0077
+
+[[ "$(id -u)" != 0 ]] || { echo 'Codex jobs must not run as root' >&2; exit 1; }
+(( $# > 0 )) || { echo 'A trusted launcher command is required' >&2; exit 2; }
+: "${CODEX_VERSION:?CODEX_VERSION is required}"
+: "${CODEX_CACHE_ROOT:?CODEX_CACHE_ROOT is required}"
+: "${RUNNER_TEMP:?RUNNER_TEMP is required}"
+: "${CODEX_TOKEN:?CODEX_TOKEN is required}"
+[[ "$CODEX_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Pin an exact stable Codex version' >&2; exit 2; }
+[[ "$CODEX_CACHE_ROOT" == /* && "$CODEX_CACHE_ROOT" != / && ! -L "$CODEX_CACHE_ROOT" ]] || exit 2
+[[ -d "$RUNNER_TEMP" && ! -L "$RUNNER_TEMP" ]] || exit 2
+command -v flock >/dev/null
+
+token="$CODEX_TOKEN"
+export -n token
+unset CODEX_TOKEN CODEX_API_KEY OPENAI_API_KEY GITHUB_TOKEN GH_TOKEN
+job_root="$(mktemp -d "$RUNNER_TEMP/codex-job.XXXXXXXX")"
+staging=''
+child_pid=''
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+  printf 'codex_job_root=%s\n' "$job_root" >> "$GITHUB_OUTPUT"
+fi
+cleanup() {
+  local status=$?
+  trap - EXIT
+  [[ -z "$staging" ]] || rm -rf -- "$staging" || status=1
+  rm -rf -- "$job_root" || status=1
+  exit "$status"
+}
+stop() {
+  trap '' TERM INT
+  if [[ -n "$child_pid" ]]; then
+    kill -TERM "$child_pid" 2>/dev/null || true
+    wait "$child_pid" 2>/dev/null || true
+  fi
+  exit "$1"
+}
+trap cleanup EXIT
+trap 'stop 143' TERM
+trap 'stop 130' INT
+mkdir -m 0700 "$job_root/home" "$job_root/auth"
+
+mkdir -p -m 0700 "$CODEX_CACHE_ROOT"
+[[ "$(readlink -f -- "$CODEX_CACHE_ROOT")" == "$CODEX_CACHE_ROOT" ]] || exit 2
+[[ "$(stat -c '%u:%a' -- "$CODEX_CACHE_ROOT")" == "$(id -u):700" ]] || exit 2
+platform="$(node -p 'process.platform + "-" + process.arch')"
+[[ "$platform" =~ ^linux-(x64|arm64)$ ]] || { echo 'Unsupported native Codex platform' >&2; exit 2; }
+cache="$CODEX_CACHE_ROOT/$platform"
+[[ ! -L "$cache" ]] || exit 2
+mkdir -p -m 0700 "$cache"
+[[ ! -L "$cache/.install.lock" ]] || exit 2
+exec 9>"$cache/.install.lock"
+flock -x 9
+while IFS= read -r abandoned; do
+  [[ ! -L "$abandoned" ]] && rm -rf -- "$abandoned"
+done < <(find "$cache" -mindepth 1 -maxdepth 1 -type d -name '.stage-*')
+prefix="$cache/$CODEX_VERSION"
+binary="$prefix/bin/codex"
+if [[ ! -e "$prefix" && ! -L "$prefix" ]]; then
+  staging="$(mktemp -d "$cache/.stage-XXXXXXXX")"
+  env -i PATH="$PATH" HOME="$job_root/home" \
+    npm install --global --prefix "$staging" --cache "$staging/npm-cache" \
+    --no-audit --no-fund "@openai/codex@$CODEX_VERSION"
+  [[ "$("$staging/bin/codex" --version)" == "codex-cli $CODEX_VERSION" ]] || {
+    echo 'Downloaded Codex version does not match the workflow pin' >&2; exit 1;
+  }
+  rm -rf -- "$staging/npm-cache"
+  mv -T -- "$staging" "$prefix"
+  staging=''
+  printf 'CODEX_CACHE_MISS version=%s\n' "$CODEX_VERSION"
+else
+  printf 'CODEX_CACHE_HIT version=%s\n' "$CODEX_VERSION"
+fi
+[[ -d "$prefix" && ! -L "$prefix" && -x "$binary" ]] || exit 2
+[[ "$(readlink -f -- "$binary")" == "$prefix/"* ]] || exit 2
+[[ "$("$binary" --version)" == "codex-cli $CODEX_VERSION" ]] || exit 1
+[[ ! -L "$cache/.use-$CODEX_VERSION.lock" ]] || exit 2
+exec 8>"$cache/.use-$CODEX_VERSION.lock"
+flock -s 8
+touch "$prefix" "$prefix/.last-used"
+retained=1
+while IFS= read -r candidate; do
+  [[ "$candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$candidate" != "$CODEX_VERSION" ]] || continue
+  if (( retained < 2 )); then retained=$((retained + 1)); continue; fi
+  [[ ! -L "$cache/$candidate" && ! -L "$cache/.use-$candidate.lock" ]] || continue
+  exec 7>"$cache/.use-$candidate.lock"
+  if flock -n -x 7; then
+    rm -rf -- "$cache/$candidate"
+    rm -f -- "$cache/.use-$candidate.lock"
+  fi
+  exec 7>&-
+done < <(find "$cache" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %f\n' | sort -nr | cut -d' ' -f2-)
+flock -u 9
+exec 9>&-
+
+export CODEX_BINARY="$binary" CODEX_INSTALL_ROOT="$prefix" CODEX_HOME="$job_root/auth"
+printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
+login_flag='--with-api-key'
+[[ "$token" != at-* ]] || login_flag='--with-access-token'
+printf '%s' "$token" | env -i PATH="$PATH" HOME="$job_root/home" CODEX_HOME="$CODEX_HOME" \
+  "$binary" login "$login_flag"
+unset token
+[[ -f "$CODEX_HOME/auth.json" && ! -L "$CODEX_HOME/auth.json" ]] || {
+  echo 'Codex did not create job-local authentication' >&2; exit 1;
+}
+chmod 0600 "$CODEX_HOME/auth.json"
+"$@" &
+child_pid=$!
+set +e
+wait "$child_pid"
+status=$?
+set -e
+child_pid=''
+exit "$status"

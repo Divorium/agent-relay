@@ -27,7 +27,7 @@ test("job authentication is denied and installed CLI is read-only to commands", 
   const args: string[] = Reflect.apply(createCodexArgs, undefined, [
     "/runner/work/repo", "task", "/runner/home", "/runner/temp/run", "/trusted/relay", job,
   ]);
-  const policy = args.find((value) => value.startsWith("permissions.agent.filesystem="));
+  const policy = args.find((value) => value.startsWith("permissions.agent.filesystem=")) ?? "";
   assert.ok(policy);
   assert.ok(policy.includes('"/runner/home"="deny"'));
   assert.ok(policy.includes('"/runner/temp/codex-auth"="deny"'));

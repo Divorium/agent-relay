@@ -113,6 +113,7 @@ test("codex-run preserves real state and routes tool state into one private runt
   const unrelatedWorkspace = join(home, "other-workspace", "keep.txt");
   const invocationLog = join(root, "invocation.log");
   const fakeCodex = join(root, "fake-codex");
+  const jobHome = join(root, "job-auth");
   const runtime = await prepareLauncherRuntime(root);
   const launcher = join(runtime.scripts, "codex-run");
 
@@ -120,6 +121,8 @@ test("codex-run preserves real state and routes tool state into one private runt
   await mkdir(join(home, ".local", "share", "actions-runner"), { recursive: true });
   await mkdir(join(home, "source"), { recursive: true });
   await mkdir(join(home, "other-workspace"), { recursive: true });
+  await mkdir(jobHome, { mode: 0o700 });
+  await writeFile(join(jobHome, "auth.json"), "job auth\n", { mode: 0o600 });
   await writeFile(auth, "auth\n");
   await writeFile(runnerState, "runner\n");
   await writeFile(sourceState, "source\n");
@@ -128,6 +131,7 @@ test("codex-run preserves real state and routes tool state into one private runt
 set -euo pipefail
 {
   printf 'HOME=%s\n' "\${HOME:-}"
+  printf 'CODEX_HOME=%s\n' "\${CODEX_HOME:-}"
   printf 'USER=%s\n' "\${USER:-}"
   printf 'LOGNAME=%s\n' "\${LOGNAME:-}"
   printf 'SHELL=%s\n' "\${SHELL:-}"
@@ -159,8 +163,7 @@ set -euo pipefail
 `, { mode: 0o700 });
   await chmod(fakeCodex, 0o700);
 
-  const launcherSource = (await readFile(join(process.cwd(), "scripts", "codex-run"), "utf8"))
-    .replace("/usr/local/bin/codex", fakeCodex);
+  const launcherSource = await readFile(join(process.cwd(), "scripts", "codex-run"), "utf8");
   await writeFile(launcher, launcherSource, { mode: 0o700 });
   await chmod(launcher, 0o700);
 
@@ -171,6 +174,9 @@ set -euo pipefail
         ...process.env,
         HOME: home,
         CODEX_RUNTIME_ROOT: runtimeRoot,
+        CODEX_BINARY: fakeCodex,
+        CODEX_HOME: jobHome,
+        CODEX_INSTALL_ROOT: root,
         LEAK_ME: "must-not-cross-boundary",
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -184,6 +190,7 @@ set -euo pipefail
 
     const invocation = await readFile(invocationLog, "utf8");
     assert.match(invocation, new RegExp(`HOME=${escapeRegExp(home)}`));
+    assert.match(invocation, new RegExp(`CODEX_HOME=${escapeRegExp(jobHome)}`));
     assert.match(invocation, new RegExp(`USER=${escapeRegExp(process.env.USER ?? "")}`));
     assert.match(invocation, /LOGNAME=.+/);
     assert.match(invocation, /SHELL=\/bin\/bash/);
@@ -223,25 +230,23 @@ test("codex-run rejects missing authentication before launching Codex", async ()
   const runtimeRoot = join(home, ".cache", "agent-relay-runtime");
   const marker = join(root, "executed");
   const fakeCodex = join(root, "fake-codex");
+  const jobHome = join(root, "job-auth");
   const runtime = await prepareLauncherRuntime(root);
   const launcher = join(runtime.scripts, "codex-run");
   await mkdir(home, { recursive: true });
+  await mkdir(jobHome, { mode: 0o700 });
   await writeFile(fakeCodex, `#!/bin/bash\nprintf executed > "${marker}"\n`, { mode: 0o700 });
   await chmod(fakeCodex, 0o700);
-  await writeFile(
-    launcher,
-    (await readFile(join(process.cwd(), "scripts", "codex-run"), "utf8")).replace("/usr/local/bin/codex", fakeCodex),
-    { mode: 0o700 },
-  );
+  await writeFile(launcher, await readFile(join(process.cwd(), "scripts", "codex-run"), "utf8"), { mode: 0o700 });
   await chmod(launcher, 0o700);
   try {
     const result = await runProcess("/bin/bash", [launcher], {
       cwd: root,
-      env: { ...process.env, HOME: home, CODEX_RUNTIME_ROOT: runtimeRoot },
+      env: { ...process.env, HOME: home, CODEX_RUNTIME_ROOT: runtimeRoot, CODEX_BINARY: fakeCodex, CODEX_HOME: jobHome, CODEX_INSTALL_ROOT: root },
       stdio: ["ignore", "pipe", "pipe"],
     });
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Codex authentication is missing/);
+    assert.match(result.stderr, /Codex authentication must be a private regular file/);
     await assert.rejects(readFile(marker, "utf8"));
   } finally {
     await runtime.closeSocket();

@@ -1,76 +1,83 @@
 # Run the existing native Codex launcher with a job-selected CLI
 
-This ExecPlan follows `.agent/PLANS.md`. Progress, discoveries, decisions, and outcomes remain living evidence. The user approved native execution on the existing self-hosted runner, workflow-owned installation, reusable CLI cache, temporary authentication, existing Docker access, and the existing finalizer. No new service or coordinator is authorized.
+This living ExecPlan follows `.agent/PLANS.md`. The user approved native execution on the existing self-hosted runner, workflow-owned installation, reusable CLI cache, temporary authentication, existing Docker access and trusted finalization. No new service or coordinator is authorized.
 
 ## Purpose / Big Picture
 
 
-A consumer workflow can select and install a Codex CLI without changing the host through Ansible. It supplies an absolute executable path and an isolated authentication directory to the existing Agent Relay entrypoint. Codex still runs natively as the non-root runner, with the existing filesystem policy, Docker endpoint, normalized logs, timeout handling, and no GitHub push credential. This increment supplies that launcher contract; Monify owns its consumer workflow and persistent version cache in a separate dependent change.
+A workflow selects Codex without an Ansible deployment or persistent host login. The existing Agent Relay CLI runs it natively with the previous filesystem policy, Docker endpoint, output normalization and timeout handling. The workflow chooses version/credentials; the setup helper implements their bounded cache and authentication lifecycle. Monify integrates that formal CLI in its separate dependent PR.
 
 ## Progress
 
 
-- [ ] (2026-10-29 00:00Z) P1: The existing entrypoint forwards a validated job-selected executable and private Codex home, with explicit sandbox protection of authentication and cache directories; focused environment and launcher tests pass.
-- [ ] (2026-10-29 00:00Z) P2: Host provisioning and toolchain checks no longer install or require global Codex; direct host-contract tests prove the distinction from workflow-selected execution.
-- [ ] (2026-10-29 00:00Z) P3: Current documentation and a tested consumer example describe the native job contract, cleanup ownership and deployment prerequisite without claiming live deployment.
+- [x] (2026-10-29 03:10Z) P1 launcher: job-selected executable/home/install root pass through environment sanitization, authentication and CLI permissions are explicit, and cleanup/cancellation tests pass on self-hosted.
+- [x] (2026-10-29 03:10Z) P1 cache: atomic version installation, concurrent reuse, active leases, bounded retention and failure cleanup are implemented. A fake correct-version substituted executable is rejected by a trusted tree digest before execution/login.
+- [x] (2026-10-29 03:10Z) P2: Ansible and host checks no longer install or require global Codex; other host-toolchain checks remain unchanged. CI 40808202330 passes typecheck, unit/coverage, runtime build, shell lifecycle and Node gates, then fails the managed Rust PATH gate.
+- [x] (2026-10-29 03:10Z) P3 documentation/consumers: current host documentation and examples describe workflow-owned Codex; credentialed execution uses an immutable separate runtime, not incoming PR code.
+- [ ] (2026-10-29 03:10Z) P3 final review: verify the credentialed PATH hardening and current tests. Review found that inherited GITHUB_PATH could choose fake bash/node before the trusted helper; fixed absolute shell and explicit trusted PATH require fresh CI/review.
+- [ ] (2026-10-29 03:10Z) Final live acceptance: Monify's initial model/Docker proof passed, but its final integrity-enabled setup failed and is under diagnosis. Keep this plan active; no deployment or merge readiness is claimed.
 
 ## Surprises & Discoveries
 
 
-The existing launcher hard-codes `/usr/local/bin/codex` and `${HOME}/.codex/auth.json`. `createCodexEnvironment` currently forwards only HOME, the runtime root, and locale. Changing the shell launcher alone would therefore discard new workflow inputs. Open PR #69 independently removes global Codex as part of Antigravity provisioning; this work must not import or edit its unrelated changes.
+The original launcher hard-coded `/usr/local/bin/codex` and host HOME authentication; the environment factory discarded job inputs. Both layers now use an explicit workflow contract. The prior detached process also needed signal handling to prevent abandoned execution on runner cancellation.
+
+The first live consumer proof failed because the cache was below sandbox-denied HOME; RUNNER_TOOL_CACHE works without relaxing that denial. Security review exposed cache substitution and PR-selected credentialed helper risks, followed by inherited interpreter PATH. Trusted hash validation and immutable helper selection address the first two; the latest workflow explicitly selects its shell and resets interpreter environment.
+
+Open PR #69 independently removes Codex with Antigravity work; do not import or edit its unrelated changes. The managed Rust gate remains failing on the host and has not been waived or repaired by this feature.
 
 ## Decision Log
 
 
-The user explicitly approved retaining the existing runner account and Docker permissions. This is not a new Docker isolation design. The proposed CLI path and authentication directory are trusted workflow inputs, never PR description or model output. Keep GitHub token exposure limited to the finalizer. Do not add Rootless Docker, a proxy, another account, an orchestration service, or an agent-owned Git operation.
+Retain the existing runner account and Docker privileges. This is not a new host isolation design. Workflow inputs select a reviewed runtime, pinned CLI and private authentication; no model output selects executable trust. The supported setup helper is an existing-runtime CLI boundary, not a new service. Installation ownership remains with workflow configuration, not Ansible.
+
+Integrity pins are reviewed with the runtime and stored outside the writable binary cache. Version output is not authentication of an executable. Credentialed steps must use absolute shells, a fixed trusted PATH and no inherited BASH_ENV/ENV/NODE_OPTIONS. Do not broaden user/sudo/Docker permissions or expose GitHub write tokens to model commands.
 
 ## Outcomes & Retrospective
 
 
-Implementation and live acceptance remain incomplete. Local fake-CLI tests are boundary tests, not proof of a real Codex model execution or Docker E2E.
+Native execution, warm cache, real Docker and synthetic sandbox denials were observed in Monify runs 40804598116 and 40805358355 on earlier runtime revisions. Controls browser E2E also passed separately. Final security-patched acceptance, the complete host gate and final review remain unresolved. Main and the managed host installation have not been changed.
 
 ## Context and Orientation
 
 
-`runner/run-codex.mjs` calls `src/run-codex.ts` through compiled `dist/src/run-codex.js`. `src/execution/codex-executor.ts` constructs the clean child environment and permission profile. `scripts/codex-run` prepares per-execution tool caches using `scripts/toolchain-environment.sh`, validates the dedicated Docker socket, launches Codex and removes its temporary runtime on exit. `runner/finalize.sh` owns commits and pushes and is outside this increment. Host installation lives in `ansible/roles/agent_relay_host/tasks/toolchains.yml`; native toolchain smoke and its tests must no longer require the CLI that workflows now own.
+`runner/run-codex.mjs` invokes compiled `src/run-codex.ts`; `src/execution/codex-executor.ts` owns clean environment, permissions and process lifecycle. `scripts/codex-run` validates inputs/socket and removes private tool state. `scripts/run-job-codex` owns versioned cache, leases, login and authentication cleanup. `scripts/codex-cache-digest.mjs` checks installations against `config/codex-integrity.json`. Host provisioning remains in `ansible/roles/agent_relay_host/tasks/toolchains.yml`; `runner/finalize.sh` remains the trusted Git writer.
 
 ## Plan of Work
 
 
-P1 changes the existing environment and launcher contract to require `CODEX_BINARY` and `CODEX_HOME` for job-managed execution. Validate absolute paths and reject missing or unsafe authentication directories and executable paths before starting the child. Preserve `.git` read-only access, original runner HOME denial, trusted-runtime denial and Docker endpoint validation. The CLI installation is read-only to agent commands; the authentication directory is denied to agent commands. The CLI process itself still reads its authentication. Do not log credentials. Keep the runtime executable discoverable relative to the installed entrypoint so a pinned, separately checked-out runtime can be integration-tested without replacing the host installation. Add direct tests covering positive execution, missing inputs, cleanup after failure, and preservation of exact exit codes.
+P1 implements and tests the explicit native CLI/environment contract in `src/run-codex.ts`, `src/execution/codex-executor.ts`, `scripts/codex-run` and `scripts/run-job-codex`. Preserve previous sandbox rules and no raw credentials in the child environment. Cache only installed software, not authentication. Validate integrity before any cached execution; scope cleanup to owned paths and hold leases around active versions.
 
-P2 removes global Codex installation from Ansible and removes only the corresponding installed-host requirements from toolchain checks and their tests. It does not uninstall arbitrary existing packages, change users, sockets, permissions, services, runner registration, or another toolchain. Existing global installations are unused, not destructively removed during a PR run.
+P2 removes only global Codex installation and corresponding host smoke expectations from Ansible and tests. Do not uninstall arbitrary existing packages, change users, daemon/socket settings, runner registration or other toolchains.
 
-P3 updates current README, operations/specification text and the consumer example with the formal input contract. Preserve historical completed plans. The repository's own Codex workflow must provide the new inputs before it adopts the launcher; its preparation must use the same supported job-owned setup path, not persistent manual login. Public artifact uploads are not added. Implementation tests remain under existing CI.
+P3 reconciles README, operations/specification and both workflow consumers. Incoming PR code is validated without Codex credentials; credentialed execution uses an immutable independent runtime. Protected interpreter environment is checked directly in tests. Retain failure reporting and never add public artifact uploads.
 
 ## Concrete Steps
 
 
-Working directory: the dedicated Agent Relay implementation checkout. First write and run the focused failing tests. Then implement the smallest launcher changes and rerun them. Run `npm ci`, `npm run typecheck`, `npm test`, `npm run check:runtime`, `npm run check:shell`, and `npm run check:node-scripts`. Run `npm run check:toolchain` on the self-hosted runner; a pre-existing managed Rust failure must be reproduced unchanged on the base and reported separately, not hidden or weakened.
-
-The consumer acceptance uses an exact pinned snapshot of this PR runtime, a workflow-provided native CLI and temporary authentication. It executes a real Codex command and a Docker client/server probe, checks that model commands cannot read authentication or modify Git metadata, and confirms cleanup. Host deployment is not implied by a successful source-level run.
+Working directory: the dedicated Agent Relay feature checkout. Execute `npm ci`, `npm run typecheck`, `npm test`, `npm run check:runtime`, `npm run check:shell`, `npm run check:node-scripts`, and `npm run check:toolchain`. Run `node --test test-system/job-codex-*.test.mjs` for detailed lifecycle diagnostics. Do not suppress the Rust failure. Consumer acceptance uses a pinned runtime and real model/Docker commands; report input/runtime hashes, command results and cleanup.
 
 ## Validation and Acceptance
 
 
-The increment passes when a CLI installed outside `/usr/local` is invoked through the existing entrypoint without host Codex login, the model command permissions preserve the previous boundaries, the real selected child exit code is returned, temporary runtime is removed on normal failure, and provisioning does not reinstall global Codex. Tests must demonstrate that the new inputs survive environment sanitization and that credentials never become command arguments or published output. Missing tools, refused credentials, and Docker failures remain failures. Final live acceptance of Monify's combined change is recorded in its dependent PR, not substituted for focused Agent Relay tests.
+Require a non-global CLI through the existing entrypoint, job-local login, preserved model permissions, actual child exit codes, cleaned private state, no Ansible reinstall, trusted integrity checks and credentialed shell selection. Fake-CLI tests establish local boundaries, not model success. A real application browser run and exact consumer SHA must be identified separately. Final acceptance of the combined change is recorded in Monify, not inferred from Relay CI.
 
 ## Idempotence and Recovery
 
 
-Work only on `feat/job-managed-native-codex`; never write main. Preserve active executions and unrelated PR #69. File writes use expected branch heads or blob SHAs. Runtime cleanup removes only directories created for the current invocation. Cache removal, daemon-wide pruning and system mutations are excluded. On interruption retain a truthful unchecked Progress item and exact evidence; do not instruct a human to execute missing repository tasks.
+Write only `feat/job-managed-native-codex`; preserve main and unrelated PR #69. Use expected heads/blob identities for mutations. Cleanup removes only invocation-owned state. Cache retention may remove idle versions only after an exclusive lease, never active versions. No daemon-wide prune or system mutation is permitted. Unhandled machine loss is not guaranteed cleanup; report remaining artifacts truthfully.
 
 ## Artifacts and Notes
 
 
-Planning base: `7ab13b761c81b6efa3004ab2f9d08b03bc6d4cd0`. Monify integration starts from `27e4173a18d55106649b6a43545283a863e9b54c`. Repository-native CI, exact commits and focused command transcripts are the evidence locations. No validation result has been asserted yet.
+Base: `7ab13b761c81b6efa3004ab2f9d08b03bc6d4cd0`. Relay CI 40805205876 first passed 130 TypeScript tests with 100 percent production coverage and 11 shell lifecycle tests before the known host Rust failure. CI 40808202330 revalidated later code after stale workflow assertions were corrected. Cache-integrity reference was obtained from a clean credential-free installation in run 40806852517. The local poison-cache regression failed before and passed after the digest fix. Final review and live security-patched acceptance remain pending.
 
 ## Interfaces and Dependencies
 
 
-The public boundary remains the existing CLI entrypoint plus environment variables. `CODEX_BINARY` is the workflow-selected absolute executable; `CODEX_HOME` is the private job-owned authentication/configuration directory. Existing plan, workspace, transcript and runtime inputs retain their meanings. The workflow is responsible for installation/version selection, login and eventual removal of its authentication directory. The launcher is responsible for per-execution tool-state cleanup and restricted invocation. Use existing Node, Bash, filesystem and process primitives; do not add npm runtime dependencies.
+Workflow setup inputs are CODEX_VERSION, CODEX_CACHE_ROOT, CODEX_TOKEN and RUNNER_TEMP. The launcher receives CODEX_BINARY, CODEX_INSTALL_ROOT and private CODEX_HOME plus existing plan/workspace/transcript inputs. The workflow owns pins, credentials and invocation; Agent Relay supplies the setup/launcher CLI and normalization. Use existing Node, Bash, filesystem/process primitives and flock; add no npm runtime dependency or service.
 
 ## Plan Revision Notes
 
 
-2026-10-29: Initial prerequisite increment, derived from the approved recommendation. Consumer workflow activation and Docker E2E are deliberately separate from the launcher contract rather than hidden deployment assumptions.
+2026-10-29: Reconciled retained implementation and observed test evidence. Explicitly recorded cache ownership, review corrections and remaining host/final-revision gates without claiming deployment or completion.

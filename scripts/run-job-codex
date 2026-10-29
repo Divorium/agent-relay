@@ -12,6 +12,7 @@ umask 0077
 [[ "$CODEX_CACHE_ROOT" == /* && "$CODEX_CACHE_ROOT" != / && ! -L "$CODEX_CACHE_ROOT" ]] || exit 2
 [[ -d "$RUNNER_TEMP" && ! -L "$RUNNER_TEMP" ]] || exit 2
 command -v flock >/dev/null
+script_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 token="$CODEX_TOKEN"
 export -n token
@@ -63,10 +64,11 @@ if [[ ! -e "$prefix" && ! -L "$prefix" ]]; then
   env -i PATH="$PATH" HOME="$job_root/home" \
     npm install --global --prefix "$staging" --cache "$staging/npm-cache" \
     --no-audit --no-fund "@openai/codex@$CODEX_VERSION"
+  rm -rf -- "$staging/npm-cache"
+  node "$script_root/codex-cache-digest.mjs" "$staging" "$CODEX_VERSION" "$platform" >/dev/null
   [[ "$("$staging/bin/codex" --version)" == "codex-cli $CODEX_VERSION" ]] || {
     echo 'Downloaded Codex version does not match the workflow pin' >&2; exit 1;
   }
-  rm -rf -- "$staging/npm-cache"
   mv -T -- "$staging" "$prefix"
   staging=''
   printf 'CODEX_CACHE_MISS version=%s\n' "$CODEX_VERSION"
@@ -75,11 +77,12 @@ else
 fi
 [[ -d "$prefix" && ! -L "$prefix" && -x "$binary" ]] || exit 2
 [[ "$(readlink -f -- "$binary")" == "$prefix/"* ]] || exit 2
+node "$script_root/codex-cache-digest.mjs" "$prefix" "$CODEX_VERSION" "$platform" >/dev/null
 [[ "$("$binary" --version)" == "codex-cli $CODEX_VERSION" ]] || exit 1
 [[ ! -L "$cache/.use-$CODEX_VERSION.lock" ]] || exit 2
 exec 8>"$cache/.use-$CODEX_VERSION.lock"
 flock -s 8
-touch "$prefix" "$prefix/.last-used"
+touch "$prefix"
 retained=1
 while IFS= read -r candidate; do
   [[ "$candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$candidate" != "$CODEX_VERSION" ]] || continue

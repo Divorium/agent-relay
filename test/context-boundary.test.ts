@@ -90,7 +90,8 @@ test("CI uses only the self-hosted organization runner and executes complete val
   assert.match(workflow, /actions\/checkout@v4/);
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /run: npm ci/);
-  for (const command of ["npm run typecheck", "npm test", "npm run check:runtime", "npm run check:shell", "npm run check:node-scripts", "npm run check:toolchain"]) assert.ok(workflow.includes(command));
+  for (const command of ["npm run typecheck", "npm test", "npm run check:runtime", "npm run check:shell", "npm run check:node-scripts"]) assert.ok(workflow.includes(command));
+  assert.doesNotMatch(workflow, /npm run check:toolchain/u);
   assert.doesNotMatch(workflow, /npm run check:system/u);
 });
 

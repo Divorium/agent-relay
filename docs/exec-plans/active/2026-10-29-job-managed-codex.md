@@ -17,7 +17,7 @@ A workflow selects Codex without an Ansible deployment or persistent host login.
 - [ ] (2026-10-29 03:10Z) P3 final review: verify the credentialed PATH hardening and current tests. Review found that inherited GITHUB_PATH could choose fake bash/node before the trusted helper; fixed absolute shell and explicit trusted PATH require fresh CI/review.
 - [ ] (2026-10-29 03:10Z) Final live acceptance: Monify's initial model/Docker proof passed, but its final integrity-enabled setup failed and is under diagnosis. Keep this plan active; no deployment or merge readiness is claimed.
 
-- [ ] (2026-10-31 02:57Z) P4 follow-up: split host toolchain smoke from Node.js/Codex CI while retaining an independently runnable host diagnostic; targeted CI and regression tests must pass. Rust-requiring consumer jobs continue to install their declared toolchain themselves.
+- [x] (2026-10-31 03:05Z) P4 follow-up: host toolchain smoke is separate from Node.js/Codex CI and remains manually runnable; CI 41162581103 passed at d05f863895e13606e7b700f9cb8bb0005da05538 (134 TypeScript tests, 12 job lifecycle tests, typecheck, runtime build, shell and Node validation). Rust-requiring consumer jobs continue to install their declared toolchain themselves.
 
 ## Surprises & Discoveries
 
@@ -79,6 +79,8 @@ Write only `feat/job-managed-native-codex`; preserve main and unrelated PR #69. 
 
 
 Base: `7ab13b761c81b6efa3004ab2f9d08b03bc6d4cd0`. Relay CI 40805205876 first passed 130 TypeScript tests with 100 percent production coverage and 11 shell lifecycle tests before the known host Rust failure. CI 40808202330 revalidated later code after stale workflow assertions were corrected. Cache-integrity reference was obtained from a clean credential-free installation in run 40806852517. The local poison-cache regression failed before and passed after the digest fix. Final review and live security-patched acceptance remain pending.
+
+The 2026-10-31 CI boundary follow-up passed its focused and complete Node.js CI at `d05f863895e13606e7b700f9cb8bb0005da05538` in run 41162581103. It did not run the independent host diagnostic, which intentionally retains its strict checks and may still report the previously observed managed Rust PATH mismatch. Earlier P3 runtime/security review and Monify downstream acceptance remain independently open.
 
 ## Interfaces and Dependencies
 

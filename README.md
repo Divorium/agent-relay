@@ -1,15 +1,16 @@
 # Agent Relay
 
-Agent Relay runs on a dedicated Debian 13 (Trixie) x86-64 systemd host with one organization-level GitHub Actions runner.
+Agent Relay runs on a dedicated Debian 13 (Trixie) x86-64 systemd host with an organization-level GitHub Actions runner.
 
-- [`ansible/README.md`](ansible/README.md) describes the complete host installation and separate GitHub connection;
-- [`docs/operations/README.md`](docs/operations/README.md) describes credentials, updates, and recovery;
+- [`ansible/README.md`](ansible/README.md) describes host installation and separate GitHub connection.
+- [`docs/operations/README.md`](docs/operations/README.md) describes updates and recovery.
 - [`docs/native-github-runner-specification.md`](docs/native-github-runner-specification.md) defines runtime and privilege contracts.
+- [`docs/job-managed-codex.md`](docs/job-managed-codex.md) defines workflow-owned CLI installation, temporary authentication and cleanup.
 
-`ansible/playbooks/host.yml` provisions and updates the full host without a GitHub PAT. It manages packages, users, Docker, pinned language toolchains, the latest Codex CLI, runner binaries, the systemd unit, source checkout, and Agent Relay runtime. On an unregistered host it leaves the runner listener disabled and stopped.
+`ansible/playbooks/host.yml` provisions packages, users, Docker, pinned language toolchains, runner binaries, systemd and the Agent Relay runtime without a GitHub PAT. It does not install, update, authenticate or uninstall Codex. On an unregistered host it leaves the runner listener disabled and stopped. `ansible/playbooks/github-connect.yml` separately registers and starts the prepared runner using a control-machine credential.
 
-`ansible/playbooks/github-connect.yml` is a separate one-time operation. It requires the organization PAT, verifies the prepared host, registers the runner, starts the listener, and reconciles the custom `agent-relay` label. It does not rerun host provisioning or runtime installation.
+Codex runs natively through the existing restricted launcher. A workflow selects a pinned CLI version and calls `scripts/run-job-codex` with `CODEX_VERSION`, `CODEX_CACHE_ROOT`, `RUNNER_TEMP` and a step-scoped `CODEX_TOKEN`. Installation is cached outside runner HOME; authentication is never cached. The wrapper passes `CODEX_BINARY`, `CODEX_INSTALL_ROOT` and private `CODEX_HOME` to the launcher. No global CLI or persistent host login is required.
 
-Pinned runner, language-toolchain, and host constants are defined in [`config/runner-host.json`](config/runner-host.json). Codex is updated to the latest available CLI release on every `host.yml` run. Codex uses `/srv/github-runner/storage/docker-socket/docker.sock`; `/run/docker.sock` remains available for host operators. Consumer workflows target `[self-hosted, agent-relay]` and retain the exact `runner.name == gh-runner` assertion as defense in depth.
+Docker remains at `/srv/github-runner/storage/docker-socket/docker.sock`; `/run/docker.sock` remains available to operators. Users and daemon privileges are unchanged. Access to this daemon remains privileged host trust, not strong isolation.
 
-Codex output is normalized into Actions-safe `[codex] ` lines, redacted, streamed live, and written to the `agent-relay-output` artifact. `${GITHUB_OUTPUT}` remains reserved for workflow outputs. A zero-exit Codex process is accepted only after at least one command execution or file change event is observed.
+Codex output is normalized into Actions-safe `[codex]` lines, redacted and streamed. `${GITHUB_OUTPUT}` carries workflow outputs only. Exit zero requires at least one completed command or non-empty file-change event. Trusted finalization owns commits and pushes. No public artifact upload is added.

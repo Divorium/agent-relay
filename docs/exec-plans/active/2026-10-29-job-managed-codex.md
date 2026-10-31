@@ -17,6 +17,8 @@ A workflow selects Codex without an Ansible deployment or persistent host login.
 - [ ] (2026-10-29 03:10Z) P3 final review: verify the credentialed PATH hardening and current tests. Review found that inherited GITHUB_PATH could choose fake bash/node before the trusted helper; fixed absolute shell and explicit trusted PATH require fresh CI/review.
 - [ ] (2026-10-29 03:10Z) Final live acceptance: Monify's initial model/Docker proof passed, but its final integrity-enabled setup failed and is under diagnosis. Keep this plan active; no deployment or merge readiness is claimed.
 
+- [ ] (2026-10-31 02:57Z) P4 follow-up: split host toolchain smoke from Node.js/Codex CI while retaining an independently runnable host diagnostic; targeted CI and regression tests must pass. Rust-requiring consumer jobs continue to install their declared toolchain themselves.
+
 ## Surprises & Discoveries
 
 
@@ -26,12 +28,16 @@ The first live consumer proof failed because the cache was below sandbox-denied 
 
 Open PR #69 independently removes Codex with Antigravity work; do not import or edit its unrelated changes. The managed Rust gate remains failing on the host and has not been waived or repaired by this feature.
 
+The 2026-10-31 follow-up identified the exact unwanted dependency: `package.json`'s `check` invokes `check:toolchain`; both `.github/workflows/ci.yml` and the Codex preflight consequently fail for a host Rust PATH mismatch although the Agent Relay app is Node.js/TypeScript. The regression test first failed on run 41162168023 for both the combined gate and the missing independent diagnostic.
+
 ## Decision Log
 
 
 Retain the existing runner account and Docker privileges. This is not a new host isolation design. Workflow inputs select a reviewed runtime, pinned CLI and private authentication; no model output selects executable trust. The supported setup helper is an existing-runtime CLI boundary, not a new service. Installation ownership remains with workflow configuration, not Ansible.
 
 Integrity pins are reviewed with the runtime and stored outside the writable binary cache. Version output is not authentication of an executable. Credentialed steps must use absolute shells, a fixed trusted PATH and no inherited BASH_ENV/ENV/NODE_OPTIONS. Do not broaden user/sudo/Docker permissions or expose GitHub write tokens to model commands.
+
+The user authorized detaching host-wide Rust/Java/Go diagnostics from Codex validation, while keeping language installation in each consuming application's build/test jobs. Preserve the host smoke script and its tests rather than disabling or weakening it. The manually dispatched host diagnostic remains honest about the provisioned VM, and Monify already installs its Rust toolchain in Rust-dependent jobs.
 
 ## Outcomes & Retrospective
 
@@ -55,7 +61,9 @@ P3 reconciles README, operations/specification and both workflow consumers. Inco
 ## Concrete Steps
 
 
-Working directory: the dedicated Agent Relay feature checkout. Execute `npm ci`, `npm run typecheck`, `npm test`, `npm run check:runtime`, `npm run check:shell`, `npm run check:node-scripts`, and `npm run check:toolchain`. Run `node --test test-system/job-codex-*.test.mjs` for detailed lifecycle diagnostics. Do not suppress the Rust failure. Consumer acceptance uses a pinned runtime and real model/Docker commands; report input/runtime hashes, command results and cleanup.
+Working directory: the dedicated Agent Relay feature checkout. Execute `npm ci`, `npm run typecheck`, `npm test`, `npm run check:runtime`, `npm run check:shell`, `npm run check:node-scripts`, and `npm run check:toolchain`. Run `node --test test-system/job-codex-*.test.mjs` for detailed lifecycle diagnostics. Run `npm run check:toolchain` separately for host provisioning diagnosis; do not suppress its Rust failure or let it block the unrelated Codex/application CI gates. Consumer acceptance uses a pinned runtime and real model/Docker commands; report input/runtime hashes, command results and cleanup.
+
+P4 removes `check:toolchain` from the Node.js `check` aggregate and its PR-CI job, retaining all actual code/coverage/runtime/shell/Node validation. Add a separate manual `host-toolchain.yml` for complete host diagnostics and a regression test proving both the separation and continued accessibility. Do not modify host settings, toolchain path expectations, or unrelated consumer workflows.
 
 ## Validation and Acceptance
 
@@ -78,6 +86,8 @@ Base: `7ab13b761c81b6efa3004ab2f9d08b03bc6d4cd0`. Relay CI 40805205876 first pas
 Workflow setup inputs are CODEX_VERSION, CODEX_CACHE_ROOT, CODEX_TOKEN and RUNNER_TEMP. The launcher receives CODEX_BINARY, CODEX_INSTALL_ROOT and private CODEX_HOME plus existing plan/workspace/transcript inputs. The workflow owns pins, credentials and invocation; Agent Relay supplies the setup/launcher CLI and normalization. Use existing Node, Bash, filesystem/process primitives and flock; add no npm runtime dependency or service.
 
 ## Plan Revision Notes
+
+2026-10-31: User-approved follow-up corrects the previously accepted dependency of Codex on the provisioned host Rust PATH. Diagnostic remains intact and separately runnable; Node.js validation and optional application Rust setup are explicitly independent. The prior failed toolchain runs remain valid historical evidence.
 
 
 2026-10-29: Reconciled retained implementation and observed test evidence. Explicitly recorded cache ownership, review corrections and remaining host/final-revision gates without claiming deployment or completion.

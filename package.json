@@ -14,7 +14,7 @@
     "check:shell": "bash -n runner/finalize.sh scripts/codex-run scripts/run-job-codex scripts/host-config.sh scripts/toolchain-environment.sh scripts/toolchain-smoke.sh scripts/ci-runtime-build.sh scripts/ci-toolchain-smoke.sh && node --test test-system/job-codex-*.test.mjs",
     "check:node-scripts": "node --check runner/resolve-pr.mjs && node --check runner/resolve-plan.mjs && node --check runner/resolve-request.mjs && node --check runner/run-codex.mjs",
     "check:toolchain": "bash scripts/ci-toolchain-smoke.sh",
-    "check": "npm run typecheck && npm test && npm run check:runtime && npm run check:shell && npm run check:node-scripts && npm run check:toolchain"
+    "check": "npm run typecheck && npm test && npm run check:runtime && npm run check:shell && npm run check:node-scripts"
   },
   "devDependencies": {
     "typescript": "5.8.3"

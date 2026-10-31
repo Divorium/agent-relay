@@ -97,7 +97,7 @@ The launcher also sets `TOKEN_MINIFY_RUN_LOG_DIR` to a `worker-run` directory in
 
 The host role owns Node.js 22, Java 21 under `/opt/java/openjdk`, Go under `/usr/local/go`, Rust under `/opt/rust`, TypeScript, Docker Engine, containerd, Buildx, Compose, Git LFS and native runner dependencies. Pinned values remain in `config/runner-host.json`. Codex is not a host toolchain prerequisite: each workflow selects its exact cached CLI version.
 
-`scripts/toolchain-environment.sh` defines the trusted runtime path layout. Every GitHub Actions workflow executes on the managed self-hosted runner, and CI runs `npm run check:toolchain` against that installed environment. Host provisioning relies on the Ansible installation tasks themselves. Removing the Codex prerequisite does not waive failures of the other managed toolchains.
+`scripts/toolchain-environment.sh` defines the trusted runtime path layout. GitHub Actions runs on the managed self-hosted runner. The complete provisioned-host diagnostic, `npm run check:toolchain`, runs independently through the manually dispatched `.github/workflows/host-toolchain.yml`. It is not a prerequisite for Codex execution or Agent Relay's Node.js/TypeScript CI. Host provisioning relies on the Ansible installation tasks themselves. When an application requires Rust, its own build/test job installs the repository-selected Rust toolchain (the Monify Rust jobs use `dtolnay/rust-toolchain` with `rust-toolchain.toml`), rather than requiring the Codex launcher to provision a compiler. Host diagnostic failures remain visible when that diagnostic is executed.
 
 ## Runner binary and registration state
 
@@ -129,6 +129,6 @@ The launcher refuses root execution, validates workflow-selected `CODEX_BINARY`,
 
 ## Validation contract
 
-Self-hosted CI retains strict TypeScript checking, mandatory 100 percent production line/branch/function coverage, runtime compilation, shell/Node checks, complete non-Codex host toolchain validation, and deployment/connection/activation/PAT-isolation contracts. Native cache and launcher tests additionally exercise failure, concurrency, cancellation and cleanup.
+Self-hosted application CI retains strict TypeScript checking, mandatory 100 percent production line/branch/function coverage, runtime compilation, shell/Node checks, and deployment/connection/activation/PAT-isolation contracts. The complete host toolchain validation remains available as a separate manual diagnostic and is not part of the Codex prerequisite gate. Native cache and launcher tests additionally exercise failure, concurrency, cancellation and cleanup.
 
 Post-deployment acceptance still requires PAT-free host installation, both Docker sockets, Docker access as `github-runner`, correct inventory labels and consumer execution. The native job additionally proves real Codex execution with Docker/Compose, a warm CLI cache, synthetic permission denials and cleaned private state. Successful changed/no-change finalization and exact-SHA application validation remain separate requirements; no host deployment or full E2E pass is inferred from source tests.

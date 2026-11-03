@@ -24,16 +24,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          umask 0077
           version="$(node -e "const fs = require('fs'); const pins = JSON.parse(fs.readFileSync('config/codex-integrity.json', 'utf8')); const versions = Object.keys(pins); if (versions.length !== 1) process.exit(1); console.log(versions[0]);")"
           platform="$(node -p 'process.platform + "-" + process.arch')"
           root="$(mktemp -d "$RUNNER_TEMP/codex-integrity.XXXXXXXX")"
           trap 'rm -rf -- "$root"' EXIT
           for attempt in first second; do
-            npm install --global --prefix "$root/$attempt" --cache "$root/cache-$attempt" \
+            staging="$root/$attempt"
+            mkdir -m 0700 "$staging"
+            npm install --global --prefix "$staging" --cache "$staging/npm-cache" \
               --no-audit --no-fund "@openai/codex@$version"
-            rm -rf -- "$root/cache-$attempt"
-            test "$("$root/$attempt/bin/codex" --version)" = "codex-cli $version"
-            node scripts/codex-cache-digest.mjs "$root/$attempt" > "$root/$attempt.sha256"
+            rm -rf -- "$staging/npm-cache"
+            test "$("$staging/bin/codex" --version)" = "codex-cli $version"
+            node scripts/codex-cache-digest.mjs "$staging" > "$root/$attempt.sha256"
             printf 'FRESH_CODEX_SHA256 version=%s platform=%s attempt=%s digest=%s\n' \
               "$version" "$platform" "$attempt" "$(cat "$root/$attempt.sha256")"
           done

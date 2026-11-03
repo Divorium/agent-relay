@@ -19,6 +19,8 @@ A workflow selects Codex without an Ansible deployment or persistent host login.
 
 - [x] (2026-10-31 03:05Z) P4 follow-up: host toolchain smoke is separate from Node.js/Codex CI and remains manually runnable; CI 41162581103 passed at d05f863895e13606e7b700f9cb8bb0005da05538 (134 TypeScript tests, 12 job lifecycle tests, typecheck, runtime build, shell and Node validation). Rust-requiring consumer jobs continue to install their declared toolchain themselves.
 
+- [ ] (2026-11-03) P5 verified cache recovery: independently reconstruct a valid Codex installation when an existing version cache fails trusted integrity checks, without running its binary or exposing credentials, while preserving active-version lease safety. Verify actual Monify runtime acceptance after the repair.
+
 ## Surprises & Discoveries
 
 
@@ -29,6 +31,8 @@ The first live consumer proof failed because the cache was below sandbox-denied 
 Open PR #69 independently removes Codex with Antigravity work; do not import or edit its unrelated changes. The managed Rust gate remains failing on the host and has not been waived or repaired by this feature.
 
 The 2026-10-31 follow-up identified the exact unwanted dependency: `package.json`'s `check` invokes `check:toolchain`; both `.github/workflows/ci.yml` and the Codex preflight consequently fail for a host Rust PATH mismatch although the Agent Relay app is Node.js/TypeScript. The regression test first failed on run 41162168023 for both the combined gate and the missing independent diagnostic.
+
+The previously recorded `0.164.0/linux-x64` SHA-256 tree digest had 66 hexadecimal characters, so the verifier correctly rejected it as a missing trusted pin. On run 41564031016, two credential-free, independent npm installs of the exact `@openai/codex@0.164.0` package on `linux-x64` both produced `62733b1e3e1860df3462f50d3dbc0d20b24cfc5558a7a5dc64230db7991fd9a1`, after `codex --version` verification; the existing cache on Monify runner `gh-runner-02` yielded a different digest (`be9d45aaa1601bf8c52a6a20e11c057983a6c9bedaef9c2e0ea2405b22b54c77`). The pin is now set from the two independent clean installations. Treat the existing cache as invalid, not as an accepted alternate package.
 
 ## Decision Log
 
@@ -88,6 +92,8 @@ The 2026-10-31 CI boundary follow-up passed its focused and complete Node.js CI 
 Workflow setup inputs are CODEX_VERSION, CODEX_CACHE_ROOT, CODEX_TOKEN and RUNNER_TEMP. The launcher receives CODEX_BINARY, CODEX_INSTALL_ROOT and private CODEX_HOME plus existing plan/workspace/transcript inputs. The workflow owns pins, credentials and invocation; Agent Relay supplies the setup/launcher CLI and normalization. Use existing Node, Bash, filesystem/process primitives and flock; add no npm runtime dependency or service.
 
 ## Plan Revision Notes
+
+2026-11-03: A live Monify test revealed a 66-character SHA-256 pin rather than a missing platform. Independent, secret-free double installation in Agent Relay run 41564031016 verified the replacement digest. Added P5 for automatic safe recovery of invalid per-version caches; a pin mismatch must never expose credentials or compromise active leases. No relaxation of the integrity requirement is authorized.
 
 2026-10-31: User-approved follow-up corrects the previously accepted dependency of Codex on the provisioned host Rust PATH. Diagnostic remains intact and separately runnable; Node.js validation and optional application Rust setup are explicitly independent. The prior failed toolchain runs remain valid historical evidence.
 

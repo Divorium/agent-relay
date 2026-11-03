@@ -157,6 +157,21 @@ test('an active cache lease survives pruning and cancellation removes authentica
   }
 });
 
+test('missing platform pin fails before login and reports a safe diagnostic digest', async () => {
+  const f = await fixture();
+  try {
+    const platform = `${process.platform}-${process.arch}`;
+    const path = join(f.root, 'relay/config/codex-integrity.json');
+    const pins = JSON.parse(await readFile(path, 'utf8'));
+    delete pins['0.164.0'][platform];
+    await writeFile(path, JSON.stringify(pins));
+    const result = await run(f);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, new RegExp(`Missing trusted Codex version pin for 0\\.164\\.0/${platform}; observed [a-f0-9]{64}`));
+    assert.deepEqual(await readdir(f.temp), []);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
 test('a cache replacement with the expected version cannot receive credentials', async () => {
   const f = await fixture();
   try {

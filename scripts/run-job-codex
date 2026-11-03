@@ -59,6 +59,20 @@ while IFS= read -r abandoned; do
 done < <(find "$cache" -mindepth 1 -maxdepth 1 -type d -name '.stage-*')
 prefix="$cache/$CODEX_VERSION"
 binary="$prefix/bin/codex"
+recovered=false
+if [[ -e "$prefix" || -L "$prefix" ]]; then
+  [[ -d "$prefix" && ! -L "$prefix" ]] || { echo 'Cached Codex installation must be a directory' >&2; exit 2; }
+  if ! node "$script_root/codex-cache-digest.mjs" "$prefix" "$CODEX_VERSION" "$platform" >/dev/null; then
+    [[ ! -L "$cache/.use-$CODEX_VERSION.lock" ]] || exit 2
+    exec 8>"$cache/.use-$CODEX_VERSION.lock"
+    if ! flock -n -x 8; then
+      echo 'Untrusted Codex cache is in use; recovery deferred' >&2
+      exit 1
+    fi
+    rm -rf -- "$prefix"
+    recovered=true
+  fi
+fi
 if [[ ! -e "$prefix" && ! -L "$prefix" ]]; then
   staging="$(mktemp -d "$cache/.stage-XXXXXXXX")"
   env -i PATH="$PATH" HOME="$job_root/home" \
@@ -71,7 +85,11 @@ if [[ ! -e "$prefix" && ! -L "$prefix" ]]; then
   }
   mv -T -- "$staging" "$prefix"
   staging=''
-  printf 'CODEX_CACHE_MISS version=%s\n' "$CODEX_VERSION"
+  if [[ "$recovered" == true ]]; then
+    printf 'CODEX_CACHE_RECOVERED version=%s\n' "$CODEX_VERSION"
+  else
+    printf 'CODEX_CACHE_MISS version=%s\n' "$CODEX_VERSION"
+  fi
 else
   printf 'CODEX_CACHE_HIT version=%s\n' "$CODEX_VERSION"
 fi
@@ -79,8 +97,10 @@ fi
 [[ "$(readlink -f -- "$binary")" == "$prefix/"* ]] || exit 2
 node "$script_root/codex-cache-digest.mjs" "$prefix" "$CODEX_VERSION" "$platform" >/dev/null
 [[ "$("$binary" --version)" == "codex-cli $CODEX_VERSION" ]] || exit 1
-[[ ! -L "$cache/.use-$CODEX_VERSION.lock" ]] || exit 2
-exec 8>"$cache/.use-$CODEX_VERSION.lock"
+if [[ "$recovered" != true ]]; then
+  [[ ! -L "$cache/.use-$CODEX_VERSION.lock" ]] || exit 2
+  exec 8>"$cache/.use-$CODEX_VERSION.lock"
+fi
 flock -s 8
 touch "$prefix"
 retained=1

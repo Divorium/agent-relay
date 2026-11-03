@@ -188,3 +188,63 @@ test('a poisoned cache is verified and rebuilt without executing substituted cod
     assert.deepEqual(await readdir(f.temp), []);
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });
+
+
+test('invalid cached version in use is never replaced before its lease is released', async () => {
+  const f = await fixture();
+  let active;
+  try {
+    const first = await run(f);
+    assert.equal(first.code, 0, first.stderr);
+    active = spawn('bash', [f.wrapper, process.execPath, '-e', 'console.log("READY"); setInterval(() => {}, 1000);'], {
+      env: f.env, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let output = '', errors = '';
+    const done = new Promise((resolve) => active.once('close', resolve));
+    active.stderr.on('data', (data) => { errors += data; });
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`No READY marker: ${errors}`)), 10000);
+      active.stdout.on('data', (data) => {
+        output += data;
+        if (output.includes('READY')) { clearTimeout(timer); resolve(); }
+      });
+      active.once('error', reject);
+    });
+    const binary = join(f.root, 'cache', `${process.platform}-${process.arch}`, '0.164.0/bin/codex');
+    const marker = join(f.root, 'poison-executed');
+    await writeFile(binary, `#!/bin/sh\nprintf compromised > '${marker}'\nexit 0\n`);
+    const blocked = await run(f);
+    assert.notEqual(blocked.code, 0);
+    assert.match(blocked.stderr, /in use/);
+    assert.equal(await readFile(f.count, 'utf8'), '0.164.0\n');
+    await assert.rejects(readFile(marker));
+    active.kill('SIGTERM');
+    assert.equal(await done, 143);
+    active = null;
+    const repaired = await run(f);
+    assert.equal(repaired.code, 0, repaired.stderr);
+    assert.match(repaired.stdout, /CODEX_CACHE_RECOVERED/);
+    assert.equal(await readFile(f.count, 'utf8'), '0.164.0\n0.164.0\n');
+    assert.deepEqual(await readdir(f.temp), []);
+  } finally {
+    active?.kill('SIGKILL');
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test('failed recovery of an invalid version leaves no runnable cache or job authentication', async () => {
+  const f = await fixture();
+  try {
+    const first = await run(f);
+    assert.equal(first.code, 0, first.stderr);
+    const cache = join(f.root, 'cache', `${process.platform}-${process.arch}`);
+    await writeFile(join(cache, '0.164.0/bin/codex'), '#!/bin/sh\nexit 0\n');
+    await writeFile(f.npm, '#!/bin/sh\nexit 23\n', { mode: 0o700 });
+    const result = await run(f);
+    assert.equal(result.code, 23, result.stderr);
+    const entries = await readdir(cache);
+    assert.ok(!entries.includes('0.164.0'));
+    assert.ok(entries.every((name) => !name.startsWith('.stage-')));
+    assert.deepEqual(await readdir(f.temp), []);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});

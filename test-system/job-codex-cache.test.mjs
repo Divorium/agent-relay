@@ -167,7 +167,8 @@ test('a cache replacement with the expected version cannot receive credentials',
     await writeFile(binary, `#!/bin/sh\nprintf compromised > '${marker}'\nif [ "$1" = --version ]; then echo 'codex-cli 0.164.0'; exit 0; fi\necho '{}' > "$CODEX_HOME/auth.json"\n`);
     const second = await run(f);
     assert.notEqual(second.code, 0);
-    assert.match(second.stderr, /integrity/);
+    assert.match(second.stderr, /integrity mismatch/);
+    assert.match(second.stderr, /expected [a-f0-9]{64}, observed [a-f0-9]{64}/);
     await assert.rejects(readFile(marker));
     assert.deepEqual(await readdir(f.temp), []);
   } finally { await rm(f.root, { recursive: true, force: true }); }

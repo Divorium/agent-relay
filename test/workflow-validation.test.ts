@@ -2,10 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const workflowPaths = [
-  ".github/workflows/codex.yml",
-  "examples/github-actions/codex.yml",
-];
+const workflowPaths = [".github/workflows/codex.yml", "examples/github-actions/codex.yml"];
 
 test("Codex validates and rechecks the exact pull request revision before execution", async () => {
   for (const path of workflowPaths) {
@@ -20,10 +17,13 @@ test("Codex validates and rechecks the exact pull request revision before execut
     assert.match(workflow, /HEAD_SHA: \$\{\{ steps\.pr\.outputs\.head_sha \}\}/u);
     assert.match(workflow, /TARGET_BRANCH: \$\{\{ steps\.pr\.outputs\.head_ref \}\}/u);
     assert.match(workflow, /Install pull-request runtime dependencies[\s\S]*run: npm ci[\s\S]*Build pull-request runtime[\s\S]*run: npm run build/u);
-    assert.match(workflow, /CODEX_TRANSCRIPT_PATH: \$\{\{ runner\.temp \}\}\/agent-relay-console\.log[\s\S]*run: node runner\/run-codex\.mjs/u);
+    assert.match(workflow, /CODEX_TRANSCRIPT_PATH: \$\{\{ runner\.temp \}\}\/agent-relay-console\.log/);
+    assert.match(workflow, /repository: Divorium\/agent-relay\s+ref: [a-f0-9]{40}/);
+    assert.match(workflow, /cp -a \.trusted-codex-runtime\/\. "\$runtime\/"/);
+    assert.match(workflow, /run-job-codex" node "\$RELAY_RUNTIME_ROOT\/runner\/run-codex\.mjs"/);
+    assert.doesNotMatch(workflow, /run: node runner\/run-codex\.mjs|cp -a dist runner scripts config/);
     assert.doesNotMatch(workflow, /2>&1|\btee\b/u);
   }
-
   const resolver = await readFile("runner/resolve-pr.mjs", "utf8");
   assert.match(resolver, /EXPECTED_HEAD_SHA/u);
   assert.match(resolver, /headSha !== expectedHeadSha/u);

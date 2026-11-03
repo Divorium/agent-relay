@@ -5,7 +5,7 @@ This directory has two disjoint Ansible entrypoints:
 - `playbooks/host.yml` prepares and updates the complete Debian host and Agent Relay runtime;
 - `playbooks/github-connect.yml` connects that prepared runner to GitHub.
 
-The GitHub connection playbook does not import, include, or rerun the host playbook. Manual clone, pull, runner registration, or PAT use during host deployment is not part of the supported flow.
+The GitHub connection playbook does not import, include, or rerun the host playbook. Manual clone, pull, runner registration, or PAT use during host deployment is not part of the supported flow. Codex CLI installation and authentication belong to consumer workflows, not either playbook; see [the native job contract](../docs/job-managed-codex.md).
 
 ## Control machine
 
@@ -21,7 +21,7 @@ $EDITOR inventory/example.ini inventory/group_vars/all.yml
 
 `agent_relay_admin_authorized_keys` must contain at least one public SSH key. Do not commit private keys, passwords, GitHub tokens, Codex credentials, or Vault secrets.
 
-Runner labels belong to inventory. Define the labels for the `agent_relay` group in `inventory/group_vars/agent_relay.yml`:
+Runner labels belong to inventory. Define labels for the `agent_relay` group in `inventory/group_vars/agent_relay.yml`:
 
 ```yaml
 agent_relay_runner_labels:
@@ -29,7 +29,7 @@ agent_relay_runner_labels:
   - linux-x64
 ```
 
-Override them for one runner with a host variable, for example `inventory/host_vars/gh-runner-02.yml`:
+Override per runner with a host variable, for example `inventory/host_vars/gh-runner-02.yml`:
 
 ```yaml
 agent_relay_runner_labels:
@@ -38,9 +38,7 @@ agent_relay_runner_labels:
   - docker
 ```
 
-Set `agent_relay_runner_labels: []` to remove all custom labels from a runner.
-
-The host deployment tracks `main` from `https://github.com/Divorium/agent-relay.git` by default. Override it when required:
+Set `agent_relay_runner_labels: []` to remove all custom labels. The host deployment tracks `main` from `https://github.com/Divorium/agent-relay.git` by default. Override when required:
 
 ```yaml
 agent_relay_repository_url: https://github.com/Divorium/agent-relay.git
@@ -51,7 +49,7 @@ The checkout is managed state. Local target changes are discarded when Ansible r
 
 ## Step 1: install or update the host
 
-Run `host.yml` on a fresh host and for every later Agent Relay or host update:
+Run `host.yml` on a fresh host and for later Agent Relay or host updates:
 
 ```bash
 cd ansible
@@ -63,79 +61,34 @@ ansible-playbook \
   "$PWD/playbooks/host.yml"
 ```
 
-The host playbook connects as `runneradmin` and uses sudo for host provisioning. The
-`--ask-become-pass` (`-K`) option prompts for the sudo password; `-k` prompts for
-the SSH password instead.
+The playbook connects as `runneradmin` and uses sudo only for host provisioning. `--ask-become-pass` (`-K`) prompts for the sudo password; `-k` prompts for SSH password. No GitHub PAT is required. Host reconciliation directly bootstraps Python, installs packages and pinned host toolchains, creates administrator/runner/builder accounts, configures Docker/containerd and both sockets, drains active workers, stages verified runner binaries and runtime, preserves rollback state, installs systemd, builds as the unprivileged builder and restarts only a registered listener.
 
-This playbook requires no GitHub PAT and performs the complete idempotent host
-reconciliation directly through Ansible:
+Codex is not installed, updated, authenticated or removed by host provisioning. Existing global installations left by an older release are unused by the new workflow contract. CLI upgrades are made by changing the workflow's exact version, without another host deployment.
 
-- bootstraps Python 3;
-- installs packages and pinned language toolchains, then updates Codex CLI to the latest available release;
-- creates the administrator, runner, and builder accounts;
-- configures Docker and containerd;
-- creates the ordinary and dedicated Docker sockets;
-- drains the registered listener before changing packages, container services, toolchains, runner files, or runtime files;
-- stages and verifies the official GitHub Runner payload before activation;
-- preserves the valid runner and Go payloads until the replacements pass validation;
-- restores preserved payloads before continuing a run interrupted during activation;
-- installs the runner systemd unit from an Ansible template;
-- checks out the configured Agent Relay revision;
-- builds the runtime as `agent-relay-builder` in a private stage;
-- validates and atomically activates the runtime;
-- restarts a completely registered runner or leaves an unregistered runner disabled.
+Every host run creates one maintenance window on a registered runner: stop the listener, wait for active `Runner.Worker`, reconcile and restart. Handled activation failure restores prior valid state; an interrupted activation is recovered by the next run. `host.yml` does not invoke `install.sh`, read `AGENT_RELAY_GITHUB_CREDENTIAL`, request a registration token, call `config.sh` or reconcile GitHub labels.
 
-Every `host.yml` run creates one maintenance window for a registered runner: Ansible stops the listener, waits for the active `Runner.Worker` process to exit, reconciles the host, and starts the listener again. A handled activation failure restores the previous valid payload in the same run. If the process or host stops during activation, the next run validates and restores the preserved payload before attempting another update.
-
-`host.yml` does not invoke `install.sh`, read `AGENT_RELAY_GITHUB_CREDENTIAL`, obtain a runner registration token, invoke `config.sh`, or call a GitHub runner-label API.
-
-Docker keeps `/run/docker.sock` and also receives `/srv/github-runner/storage/docker-socket/docker.sock`. The dedicated directory is owned by `github-runner`, the socket is `root:docker` mode `0660`, and Codex receives only that directory as a writable sandbox root.
-
-The parent Docker storage directory and the containerd root are `root:root` mode `0711`. The Docker daemon data root at `/srv/github-runner/storage/docker/engine` is `root:root` mode `0710`, matching the final mode enforced by Docker after startup.
+Docker keeps `/run/docker.sock` and also receives `/srv/github-runner/storage/docker-socket/docker.sock`. The directory is runner-owned, the socket is `root:docker` mode `0660`; the Codex sandbox allows the dedicated directory but does not turn daemon access into an unprivileged boundary. Docker/containerd storage modes remain unchanged.
 
 ## Step 2: connect the prepared runner to GitHub
 
-Run this operation after the first successful `host.yml` execution or when repairing registration or managed labels:
+Run after first host preparation or for connection/label recovery:
 
 ```bash
 export AGENT_RELAY_GITHUB_CREDENTIAL='github_pat_...'
-
 cd ansible
 ANSIBLE_CONFIG="$PWD/ansible.cfg" \
 ANSIBLE_ROLES_PATH="$PWD/roles" \
 ansible-playbook \
   --inventory "$PWD/inventory/example.ini" \
+  --ask-become-pass \
   "$PWD/playbooks/github-connect.yml"
-
 unset AGENT_RELAY_GITHUB_CREDENTIAL
 ```
 
-A fine-grained token needs the organization permission `Self-hosted runners: Read and write`. A classic PAT needs `admin:org`.
+A fine-grained token needs organization `Self-hosted runners: Read and write`; a classic PAT needs `admin:org`. The connection role verifies prepared state, validates public inputs, obtains a registration token, invokes the official runner configuration as `github-runner`, starts its listener and reconciles the inventory-owned custom-label set while preserving GitHub-managed labels. API calls use `no_log` and execute on the control machine; no PAT is stored on the target.
 
-`github-connect.yml` performs only GitHub connection work:
-
-- requires that `host.yml` already installed runner binaries, runtime, workspace, and the service unit;
-- validates public role inputs through `meta/argument_specs.yml`, including `agent_relay_runner_labels` as `list[str]`;
-- creates organization runner registration when absent;
-- starts the registered runner service;
-- locates exactly one runner named after the current `inventory_hostname`;
-- sets the inventory-configured labels as the runner's complete custom-label set while GitHub-managed read-only labels remain unchanged.
-
-It does not install packages, users, Docker, toolchains, source code, runner binaries, systemd units, or the Agent Relay runtime. It does not call `host.yml` or the host role.
-
-Ansible uses the PAT only for authenticated GitHub API requests delegated to the control machine. Tasks handling the PAT and short-lived registration token use `no_log`; neither credential is stored on the target.
-
-## Later releases
-
-For every later release, run only `playbooks/host.yml` with `--ask-become-pass` (or `-K`) and without exporting a PAT. Existing GitHub registration files are preserved, and the host role performs no credentialed GitHub operation.
+This playbook does not install host components, source, toolchains or runtime and never invokes `host.yml`. Later releases run only `host.yml` without a PAT. Existing registration is preserved.
 
 ## Codex authentication
 
-Codex authentication remains a separate explicit operation after the host exists:
-
-```bash
-ssh agent-relay-admin@HOST
-sudo -u github-runner -H /usr/local/bin/codex login
-```
-
-Pinned runner, language-toolchain, and host constants come from `../config/runner-host.json`; Codex CLI intentionally has no version pin. Operational recovery procedures are documented in [`../docs/operations/README.md`](../docs/operations/README.md).
+Supply the existing `CODEX_TOKEN` as a step-scoped GitHub Actions secret to `scripts/run-job-codex`. Its private per-job login replaces persistent operator `codex login`. Cache only the selected CLI, never credentials. Full invocation, cache and cleanup ownership are documented in [job-managed-codex.md](../docs/job-managed-codex.md). Host constants remain in `config/runner-host.json`; the Codex version belongs to the consumer workflow.

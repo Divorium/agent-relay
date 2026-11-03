@@ -27,139 +27,62 @@ ansible-playbook \
   "$PWD/playbooks/host.yml"
 ```
 
-The host playbook does not require or read `AGENT_RELAY_GITHUB_CREDENTIAL`. It owns:
+The host playbook does not require or read `AGENT_RELAY_GITHUB_CREDENTIAL`. It owns Python bootstrap, system packages/repositories, administrator/runner/builder accounts, secure filesystem roots, Docker/containerd and both sockets, pinned host toolchains, official runner binaries, systemd, managed source checkout, staged runtime compilation/revision marker/atomic activation, and listener lifecycle. It does not install, update, authenticate or uninstall Codex CLI.
 
-- Python bootstrap;
-- system packages and repositories;
-- administrator, runner, and builder accounts;
-- secure filesystem roots;
-- Docker and containerd configuration;
-- both Docker socket listeners;
-- pinned language toolchains and the latest available Codex CLI on every run;
-- official GitHub Runner binaries;
-- the runner systemd unit;
-- managed source checkout;
-- staged Agent Relay runtime build, source-revision marker, and atomic activation;
-- registered-listener restart or unregistered-listener shutdown.
-
-All host deployment behavior is expressed as Ansible tasks and templates. The host role does not execute an installer script, perform runner registration, call the GitHub runner API, reconcile GitHub labels, or consume a PAT.
-
-Ansible owns the checkout and deployment lifecycle. Do not manually clone, pull, edit Docker systemd drop-ins, replace runner binaries, register the runner, or mutate runtime directories on the target.
+All host deployment behavior is expressed as Ansible tasks and templates. The host role does not execute an installer script, perform runner registration, call the GitHub runner API, reconcile GitHub labels, or consume a PAT. Ansible owns the checkout and deployment lifecycle; do not manually change managed host paths or Docker systemd drop-ins.
 
 ## One-time GitHub connection
 
-After `host.yml` succeeds, export an organization credential:
+After `host.yml` succeeds, export an organization credential on the control machine:
 
 ```bash
 export AGENT_RELAY_GITHUB_CREDENTIAL='github_pat_...'
-```
-
-A fine-grained PAT needs `Self-hosted runners: Read and write`. A classic PAT needs `admin:org`.
-
-Run the separate connection playbook:
-
-```bash
-ANSIBLE_CONFIG="$PWD/ansible.cfg" \
-ANSIBLE_ROLES_PATH="$PWD/roles" \
-ansible-playbook \
-  --inventory "$PWD/inventory/runners.ini" \
-  "$PWD/playbooks/github-connect.yml"
-```
-
-This playbook does not rerun host provisioning and does not import `host.yml`. It only:
-
-1. verifies that runner binaries, runtime, and service unit exist;
-2. creates runner registration when absent;
-3. enables and starts the listener;
-4. finds the organization runner named `gh-runner`;
-5. adds `agent-relay` through the additive labels endpoint when absent.
-
-Ansible uses the PAT only in authenticated GitHub API calls delegated to the control machine. Tasks handling the PAT and short-lived registration token use `no_log`; the PAT is never sent to the target, and neither credential is stored there.
-
-Rerun `github-connect.yml` only to repair registration service state or the managed label. Ordinary releases use only `host.yml` without a PAT.
-
-## Expected first deployment sequence
-
-```bash
-cd ansible
-
 ANSIBLE_CONFIG="$PWD/ansible.cfg" \
 ANSIBLE_ROLES_PATH="$PWD/roles" \
 ansible-playbook \
   --inventory "$PWD/inventory/runners.ini" \
   --ask-become-pass \
-  "$PWD/playbooks/host.yml"
-
-export AGENT_RELAY_GITHUB_CREDENTIAL='github_pat_...'
-ANSIBLE_CONFIG="$PWD/ansible.cfg" \
-ANSIBLE_ROLES_PATH="$PWD/roles" \
-ansible-playbook \
-  --inventory "$PWD/inventory/runners.ini" \
   "$PWD/playbooks/github-connect.yml"
 unset AGENT_RELAY_GITHUB_CREDENTIAL
 ```
 
+A fine-grained PAT needs `Self-hosted runners: Read and write`; a classic PAT needs `admin:org`. This separate playbook verifies prepared host state, obtains a short-lived registration token, registers an absent runner, enables its listener and reconciles inventory-owned labels. It does not install host/runtime components or invoke `host.yml`. API calls are delegated to the control machine and use `no_log`; the PAT and registration token are not stored on the target. Rerun only for connection or label recovery.
+
 ## Later release sequence
 
-```bash
-cd ansible
-ANSIBLE_CONFIG="$PWD/ansible.cfg" \
-ANSIBLE_ROLES_PATH="$PWD/roles" \
-ansible-playbook \
-  --inventory "$PWD/inventory/runners.ini" \
-  --ask-become-pass \
-  "$PWD/playbooks/host.yml"
-```
+Run only `host.yml`, without exporting a PAT. Ansible reconciles its configured repository revision and compares `dist/.agent-relay-source-revision`; missing or mismatched active state requires a rebuild. This does not control the Codex version chosen by a consumer workflow.
 
 ## If Ansible cannot find a role
 
-From the repository `ansible` directory, verify both roles:
+From the repository `ansible` directory:
 
 ```bash
 test -f "$PWD/roles/agent_relay_host/tasks/main.yml"
 test -f "$PWD/roles/agent_relay_github_connection/tasks/main.yml"
-```
-
-Check the active role path:
-
-```bash
 ansible-config dump --only-changed | grep DEFAULT_ROLES_PATH
 ```
 
-Pass `ANSIBLE_CONFIG` and `ANSIBLE_ROLES_PATH` inline as shown above. Assigning them on separate lines without `export` does not pass them to `ansible-playbook`.
+Pass `ANSIBLE_CONFIG` and `ANSIBLE_ROLES_PATH` inline as shown. Do not commit private keys, passwords, GitHub tokens or Codex credentials.
 
-Do not commit private keys, passwords, GitHub tokens, or Codex credentials.
+## Codex installation and authentication
 
-## Codex authentication
+Consumer workflows use [the native job contract](../job-managed-codex.md). Select an exact `CODEX_VERSION`, a reviewed runtime revision and `${RUNNER_TOOL_CACHE}/codex-cli`; pass the existing `CODEX_TOKEN` only to the setup step. No operator `codex login` or global `/usr/local/bin/codex` is needed. A global CLI left by an older deployment is not used and is not destructively removed by a PR test.
 
-Codex authentication remains a separate explicit operation:
+The setup helper installs missing versions atomically, reuses warm versions and retains active-version leases. Job authentication lives in a private temporary `CODEX_HOME`. The restricted launcher receives the selected executable and home without inheriting raw GitHub credentials. Normal failure and handled interruption remove the job's login/tool state. CLI cache remains intentionally; machine loss or SIGKILL may require trusted cleanup of confirmed abandoned state.
 
-```bash
-ssh agent-relay-admin@HOST
-sudo -u github-runner -H /usr/local/bin/codex login
-```
-
-Neither host deployment nor GitHub connection authenticates Codex.
+The existing dedicated Docker socket remains privileged access to the host daemon. Do not represent the sandbox as full protection against daemon-mediated access. Test scripts must address and clean only their own resources. No global Docker prune is part of CLI setup.
 
 ## Deployment behavior
 
-The host role reconciles the configured repository revision and compares its commit with `dist/.agent-relay-source-revision`; a missing, unsafe, or mismatched marker requires a rebuild.
+A host reconciliation stops the registered listener before changing packages, container services, toolchains, runner files or runtime files, then waits for `Runner.Worker` to exit. Build/import failure leaves the active runtime unchanged. Activation failure restores `dist.previous` when safe. Runner updates use a checksum-verified stage and temporary backup, preserving `_work` and registration. A handled failure restarts a previously valid listener; a later run retries failed reconciliation. An unregistered host remains stopped.
 
-When runner files, the pinned runner version, the service unit, or the runtime revision require reconciliation, the role stops an active listener, drains `Runner.Worker` processes, applies the required tasks, and restores the listener for complete registration. Runtime activation remains an atomic directory swap.
+The host role declares `runner/_work` as a real `github-runner:github-runner` mode `0700` directory. It does not contain compatibility cleanup for the previous symlink layout. Docker keeps `/run/docker.sock` and `/srv/github-runner/storage/docker-socket/docker.sock`; socket changes stop Docker, restart containerd/socket listeners and then restart Docker so `dockerd -H fd://` receives both descriptors.
 
-The host role declares `runner/_work` as a real `github-runner:github-runner` mode `0700` directory. It does not contain compatibility cleanup for the previous symlink layout.
-
-A host reconciliation stops the registered listener before changing packages, container services, toolchains, runner files, or runtime files, then waits for the active `Runner.Worker` process to exit. A build or import failure leaves the active runtime unchanged. A runtime activation failure restores `dist.previous` when possible. A runner update is extracted and validated in a private staging directory; activation preserves `_work` and registration files and restores the previous payload when validation fails. When reconciliation fails, Ansible restarts the preserved listener only when the old runtime remains valid. A later run retries the failed reconciliation.
-
-The Docker role keeps `/run/docker.sock` and adds `/srv/github-runner/storage/docker-socket/docker.sock`. When container configuration changes, handlers stop Docker, restart containerd and `docker.socket`, and then start Docker so `dockerd -H fd://` receives both descriptors.
-
-Ansible declares the final daemon-owned filesystem modes: `/srv/github-runner/storage/docker` and the containerd root are `root:root` mode `0711`, while Docker data root `/srv/github-runner/storage/docker/engine` is `root:root` mode `0710`.
-
-For each Codex execution, `scripts/codex-run` routes `worker-run` command logs into that execution's private writable runtime through `TOKEN_MINIFY_RUN_LOG_DIR`. The runtime is removed when the launcher exits; `/var/lib/codex-token-minify` does not need to be writable inside the Codex sandbox.
+The Docker storage parent and containerd root remain `root:root` mode `0711`; Docker's data root remains mode `0710`. Per-execution `worker-run` logs live inside the launcher's private runtime, so `/var/lib/codex-token-minify` need not become writable in the model sandbox.
 
 ## Interrupted runtime swap
 
-Normally `dist.previous` exists only between two rename operations and is deleted after successful activation. A later `host.yml` run restores it when `dist` is absent or removes it when `dist` already exists. Ansible stops only when either path is not a regular directory.
+Normally `dist.previous` exists only between rename operations and is deleted after successful activation. A later `host.yml` restores it when `dist` is absent or removes it when `dist` exists. Unsafe file types stop recovery rather than widening cleanup.
 
 ## Status
 
@@ -173,9 +96,7 @@ sudo -u github-runner -H env \
   docker info
 ```
 
-Both Docker sockets must exist. The dedicated directory must be owned by `github-runner`, the socket must be `root:docker` mode `0660`, and the runner account must belong to `docker`.
-
-When the dedicated socket is missing or stale, rerun `host.yml`. Do not create a symlink to `/run/docker.sock`, grant write access to `/run`, or edit the systemd unit manually.
+Both sockets must exist. The dedicated directory is runner-owned, the socket is `root:docker` mode `0660`, and the runner account belongs to `docker`. When missing or stale, reconcile through `host.yml`; do not symlink `/run/docker.sock`, grant write access to `/run` or edit systemd manually.
 
 ## Filesystem layout
 
@@ -194,6 +115,4 @@ When the dedicated socket is missing or stale, rerun `host.yml`. Do not create a
 
 ## Codex output
 
-Codex output is normalized, redacted, and streamed with a fixed `[codex] ` prefix. The same accepted bytes are written to `agent-relay-output`. Raw JSONL remains internal, and `${GITHUB_OUTPUT}` contains workflow outputs only.
-
-A zero process exit is insufficient for success. Agent Relay requires at least one completed command execution or one completed file-change item containing at least one change. Empty file-change items and commands that only started do not satisfy the gate. After live output reaches its byte limit, JSONL parsing and semantic activity tracking continue while further normalized output is discarded.
+Output is normalized, redacted and streamed with a fixed `[codex]` prefix. Raw JSONL remains internal; `${GITHUB_OUTPUT}` contains workflow outputs only. A zero exit requires completed command execution or a completed non-empty file change. Parsing/activity checks continue after the live byte limit. Current workflows keep diagnostics in Actions logs and do not add public artifact uploads. Missing application test evidence remains a blocker even after native acceptance passes.

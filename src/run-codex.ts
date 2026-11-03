@@ -1,6 +1,6 @@
-import { appendFile, chmod, mkdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { CodexExecutor } from "./execution/codex-executor.js";
+import { appendFile, chmod, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { CodexExecutor, type JobCodex } from "./execution/codex-executor.js";
 import { CodexExecutionError } from "./execution/errors.js";
 import { createTranscriptSink } from "./execution/transcript.js";
 import { deriveJsonlRecordBytes, MAX_JSONL_RECORD_BYTES_HARD_LIMIT, MIN_JSONL_RECORD_BYTES } from "./execution/jsonl-parser.js";
@@ -21,6 +21,17 @@ export async function main(command = CODEX_RUN_COMMAND): Promise<void> {
   if (configuredJsonlBytes !== undefined && (configuredJsonlBytes < MIN_JSONL_RECORD_BYTES || configuredJsonlBytes > MAX_JSONL_RECORD_BYTES_HARD_LIMIT)) throw new CodexExecutionError("INVALID_CONFIGURATION", `MAX_JSONL_RECORD_BYTES must be between ${MIN_JSONL_RECORD_BYTES} and ${MAX_JSONL_RECORD_BYTES_HARD_LIMIT}`);
   const maxJsonlRecordBytes = configuredJsonlBytes ?? deriveJsonlRecordBytes(maxOutputBytes);
   const workspace = await resolveWorkspace(workspaceRoot, workspaceInput); const planFile = await assertActivePlanFile(workspace, planPath); const commitMessage = deriveCommitMessage(await readFile(planFile, "utf8"));
-  const runtimeRoot = join(home, ".cache", "agent-relay-runtime"); await mkdir(runtimeRoot, { recursive: true, mode: 0o700 }); await chmod(runtimeRoot, 0o700);
-  const transcript = await createTranscriptSink(runnerTemp, transcriptPath); const executor = new CodexExecutor(command, timeoutMs, maxOutputBytes, home, runtimeRoot, TRUSTED_RUNTIME_ROOT, 5_000, maxJsonlRecordBytes); await executor.run(planPath, workspace, transcript); await appendFile(githubOutput, `commit_message=${commitMessage}\n`, "utf8");
+  const job: JobCodex | undefined = process.env.CODEX_BINARY === undefined ? undefined : {
+    binary: requiredEnvironment("CODEX_BINARY"), home: requiredEnvironment("CODEX_HOME"), installRoot: requiredEnvironment("CODEX_INSTALL_ROOT"),
+  };
+  const runtimeRoot = await mkdtemp(join(runnerTemp, "agent-relay-runtime-"));
+  await chmod(runtimeRoot, 0o700);
+  try {
+    const transcript = await createTranscriptSink(runnerTemp, transcriptPath);
+    const executor = new CodexExecutor(command, timeoutMs, maxOutputBytes, home, runtimeRoot, dirname(dirname(command)), 5_000, maxJsonlRecordBytes, job);
+    await executor.run(planPath, workspace, transcript);
+    await appendFile(githubOutput, `commit_message=${commitMessage}\n`, "utf8");
+  } finally {
+    await rm(runtimeRoot, { recursive: true, force: true });
+  }
 }

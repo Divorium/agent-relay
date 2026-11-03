@@ -37,7 +37,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     if (process.argv.length > 3) {
       const pins = JSON.parse(await fs.readFile(new URL('../config/codex-integrity.json', import.meta.url), 'utf8'));
       const expected = pins[process.argv[3]]?.[process.argv[4]];
-      if (!/^[a-f0-9]{64}$/.test(expected ?? '')) throw new Error('Missing trusted Codex version pin');
+      if (!/^[a-f0-9]{64}$/.test(expected ?? '')) throw new Error(`Missing trusted Codex version pin for ${process.argv[3]}/${process.argv[4]}; observed ${actual}`);
       if (actual !== expected) throw new Error(`Codex cache integrity mismatch: expected ${expected}, observed ${actual}`);
     }
     console.log(actual);

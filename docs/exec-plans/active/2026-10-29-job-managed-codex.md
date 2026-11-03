@@ -93,6 +93,8 @@ Workflow setup inputs are CODEX_VERSION, CODEX_CACHE_ROOT, CODEX_TOKEN and RUNNE
 
 ## Plan Revision Notes
 
+2026-11-03: Follow-up found the independent integrity probe originally used the default process umask, while `scripts/run-job-codex` uses `umask 0077`. File executable mode bits are part of the tree digest, so the default-umask value 62733b1e... was not production-equivalent. The probe now reproduces `umask 0077`, private installation staging and temporary npm cache inside the stage. Run 41565105131 independently installed `@openai/codex@0.164.0` twice and both produced be9d45aaa1601bf8c52a6a20e11c057983a6c9bedaef9c2e0ea2405b22b54c77, matching the native runner cache. The trusted pin has been updated to this verified production-mode digest. The old value remains historical evidence, not an accepted alternate pin; final Monify model/Docker validation remains required.
+
 2026-11-03: A live Monify test revealed a 66-character SHA-256 pin rather than a missing platform. Independent, secret-free double installation in Agent Relay run 41564031016 verified the replacement digest. Added P5 for automatic safe recovery of invalid per-version caches; a pin mismatch must never expose credentials or compromise active leases. No relaxation of the integrity requirement is authorized.
 
 2026-10-31: User-approved follow-up corrects the previously accepted dependency of Codex on the provisioned host Rust PATH. Diagnostic remains intact and separately runnable; Node.js validation and optional application Rust setup are explicitly independent. The prior failed toolchain runs remain valid historical evidence.

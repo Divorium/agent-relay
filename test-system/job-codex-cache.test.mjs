@@ -172,7 +172,7 @@ test('missing platform pin fails before login and reports a safe diagnostic dige
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });
 
-test('a cache replacement with the expected version cannot receive credentials', async () => {
+test('a poisoned cache is verified and rebuilt without executing substituted code', async () => {
   const f = await fixture();
   try {
     const first = await run(f);
@@ -181,9 +181,9 @@ test('a cache replacement with the expected version cannot receive credentials',
     const marker = join(f.root, 'poison-executed');
     await writeFile(binary, `#!/bin/sh\nprintf compromised > '${marker}'\nif [ "$1" = --version ]; then echo 'codex-cli 0.164.0'; exit 0; fi\necho '{}' > "$CODEX_HOME/auth.json"\n`);
     const second = await run(f);
-    assert.notEqual(second.code, 0);
-    assert.match(second.stderr, /integrity mismatch/);
-    assert.match(second.stderr, /expected [a-f0-9]{64}, observed [a-f0-9]{64}/);
+    assert.equal(second.code, 0, second.stderr);
+    assert.match(second.stdout, /CODEX_CACHE_RECOVERED version=0\.164\.0/);
+    assert.equal(await readFile(f.count, 'utf8'), '0.164.0\n0.164.0\n');
     await assert.rejects(readFile(marker));
     assert.deepEqual(await readdir(f.temp), []);
   } finally { await rm(f.root, { recursive: true, force: true }); }

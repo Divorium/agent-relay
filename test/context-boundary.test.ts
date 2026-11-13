@@ -54,8 +54,12 @@ test("workflows validate pull requests but execute an immutable trusted runtime 
     assert.match(workflow, /runs-on: \[self-hosted\]/);
     assert.doesNotMatch(workflow, /runs-on: \[self-hosted,\s*agent-relay\]/);
     for (const script of ["resolve-request", "resolve-pr", "resolve-plan"]) assert.ok(workflow.includes(`node /srv/github-runner/storage/agent-relay/runner/${script}.mjs`));
-    assert.match(workflow, /- name: Install pull-request runtime dependencies[\s\S]*run: npm ci/);
-    assert.match(workflow, /- name: Build pull-request runtime[\s\S]*run: npm run build/);
+    assert.match(workflow, /- name: Install dependencies\n        run: npm ci/);
+    assert.match(workflow, /- name: Validate repository\n        run: npm run check/);
+    const codexJob = workflow.split("\n  codex:\n")[1] ?? "";
+    assert.ok(codexJob);
+    assert.doesNotMatch(codexJob, /- name: Install pull-request runtime dependencies|- name: Build pull-request runtime/);
+    assert.match(codexJob, /- name: Preserve trusted execution runtime[\s\S]*cd "\$runtime"\n          npm ci\n          npm run build/);
     assert.match(workflow, /repository: Divorium\/agent-relay\s+ref: [a-f0-9]{40}/);
     assert.match(workflow, /cp -a \.trusted-codex-runtime\/\. "\$runtime\/"/);
     assert.doesNotMatch(workflow, /cp -a dist runner scripts config/);

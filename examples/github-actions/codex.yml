@@ -88,10 +88,6 @@ jobs:
           case "$(git remote get-url origin)" in
             *://*@*) echo 'Repository remote must not contain credentials' >&2; exit 1 ;;
           esac
-      - name: Install pull-request runtime dependencies
-        run: npm ci
-      - name: Build pull-request runtime
-        run: npm run build
       - name: Detect missing pull-request ExecPlan
         id: plan_diff
         if: github.event_name == 'pull_request'
@@ -124,7 +120,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Divorium/agent-relay
-          ref: 8404ac69fe8c79ff6a8998dcdbd4dd9cf4cd2b15
+          ref: ea856ecbd2d9787efe513add6de49bf90337694b
           path: .trusted-codex-runtime
           persist-credentials: false
       - name: Preserve trusted execution runtime
@@ -149,6 +145,8 @@ jobs:
           BASH_ENV: ""
           ENV: ""
           NODE_OPTIONS: ""
+          LD_PRELOAD: ""
+          LD_AUDIT: ""
           CODEX_TOKEN: ${{ secrets.CODEX_TOKEN }}
           CODEX_VERSION: 0.164.0
           CODEX_PLAN_PATH: ${{ steps.plan.outputs.plan_path }}
@@ -179,6 +177,8 @@ jobs:
           BASH_ENV: ""
           ENV: ""
           NODE_OPTIONS: ""
+          LD_PRELOAD: ""
+          LD_AUDIT: ""
           COMMIT_MESSAGE: ${{ steps.codex.outputs.commit_message }}
           TARGET_BRANCH: ${{ steps.pr.outputs.head_ref }}
           GITHUB_PUSH_TOKEN: ${{ github.token }}

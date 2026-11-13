@@ -12,9 +12,43 @@ for (const path of [".github/workflows/codex.yml", "examples/github-actions/code
       assert.match(step, /BASH_ENV: ""/);
       assert.match(step, /ENV: ""/);
       assert.match(step, /NODE_OPTIONS: ""/);
+      assert.match(step, /LD_PRELOAD: ""/);
+      assert.match(step, /LD_AUDIT: ""/);
       assert.match(step, /export PATH=\/usr\/local\/bin:\/usr\/bin:\/bin/);
       assert.match(step, /\/bin\/bash "\$RELAY_RUNTIME_ROOT\//);
       assert.ok(step.indexOf("export PATH=") < step.lastIndexOf('/bin/bash "$RELAY_RUNTIME_ROOT/'));
     }
   });
 }
+
+const reviewedRuntimeSha = "ea856ecbd2d9787efe513add6de49bf90337694b";
+
+for (const path of [".github/workflows/codex.yml", "examples/github-actions/codex.yml"]) {
+  test(`${path} isolates untrusted setup from the credentialed job`, async () => {
+    const workflow = await readFile(path, "utf8");
+    const validate = workflow.split("\n  validate:\n")[1]?.split("\n  codex:\n")[0] ?? "";
+    const codex = workflow.split("\n  codex:\n")[1] ?? "";
+    assert.ok(validate);
+    assert.ok(codex);
+    assert.match(validate, /- name: Install dependencies\n        run: npm ci/);
+    assert.match(validate, /- name: Validate repository\n        run: npm run check/);
+    assert.doesNotMatch(codex, /- name: (?:Install pull-request runtime dependencies|Build pull-request runtime)/);
+    assert.doesNotMatch(codex, /\n        run: npm (?:ci|run build)\n/);
+
+    const beforeTrustedCheckout = codex.split("- name: Checkout reviewed execution runtime")[0] ?? "";
+    assert.doesNotMatch(beforeTrustedCheckout, /npm (?:ci|install|run build)/);
+    assert.match(codex, new RegExp(`repository: Divorium/agent-relay\\n          ref: ${reviewedRuntimeSha}`));
+
+    const trustedBuild = codex.split("- name: Preserve trusted execution runtime")[1]?.split("- name: Run Codex directly")[0] ?? "";
+    assert.match(trustedBuild, /cp -a \.trusted-codex-runtime\/\. "\$runtime\/"/);
+    assert.match(trustedBuild, /cd "\$runtime"\n          npm ci\n          npm run build/);
+  });
+}
+
+test("the example and active credentialed workflows remain identical", async () => {
+  const [active, example] = await Promise.all([
+    readFile(".github/workflows/codex.yml", "utf8"),
+    readFile("examples/github-actions/codex.yml", "utf8"),
+  ]);
+  assert.equal(example, active);
+});

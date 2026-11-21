@@ -38,7 +38,6 @@ mapping = {
     "RUST_TOOLCHAIN": "rust_toolchain",
     "TYPESCRIPT_VERSION": "typescript_version",
     "BASE_ROOT": "base_root",
-    "DOCKER_SOCKET_PATH": "docker_socket_path",
     "RUNNER_USER": "runner_user",
     "BUILD_USER": "builder_user",
 }

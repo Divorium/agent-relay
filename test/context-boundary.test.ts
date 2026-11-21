@@ -2,17 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { buildCodexPrompt } from "../src/execution/prompt.js";
-import { DOCKER_SOCKET_DIRECTORY, createCodexArgs, createCodexEnvironment } from "../src/execution/codex-executor.js";
+import { createCodexArgs, createCodexEnvironment } from "../src/execution/codex-executor.js";
 
 const workflowPaths = [".github/workflows/codex.yml", "examples/github-actions/codex.yml"];
 
-test("runtime prompt includes plan pointers and context-driven ordinary Docker use", () => {
+test("runtime prompt includes plan pointers and trusted finalization", () => {
   const prompt = buildCodexPrompt("docs/exec-plans/active/task.md");
   assert.match(prompt, /^Follow \.agent\/PLANS\.md and execute the active ExecPlan at docs\/exec-plans\/active\/task\.md\./u);
-  assert.match(prompt, /Docker and Docker Compose are available as ordinary host CLI tools/u);
-  assert.match(prompt, /Decide whether existing services should be reused, restarted, rebuilt, or removed/u);
-  assert.match(prompt, /including logs and cleanup when appropriate/u);
-  assert.match(prompt, /Do not assume Agent Relay manages container lifecycle/u);
+  assert.match(prompt, /runs natively on the self-hosted runner/u);
+  assert.match(prompt, /Do not execute Git commands/u);
 });
 
 test("repository instructions remain durable and plan-driven", async () => {
@@ -27,19 +25,16 @@ test("repository instructions remain durable and plan-driven", async () => {
   assert.match(rules, /## Decision Log/);
 });
 
-test("executor exposes the dedicated Docker socket directory without denying the workspace ancestor", () => {
+test("executor scopes filesystem access to the selected workspace and trusted paths", () => {
   assert.deepEqual(createCodexEnvironment("/home/user", "/home/user/.cache/runtime"), {
     HOME: "/home/user", CODEX_RUNTIME_ROOT: "/home/user/.cache/runtime", LANG: "C.UTF-8", LC_ALL: "C.UTF-8",
   });
-  assert.equal(DOCKER_SOCKET_DIRECTORY, "/srv/github-runner/storage/docker-socket");
   const args = createCodexArgs("/runner/_work/repository/repository", "task prompt", "/home/user", "/home/user/.cache/runtime", "/srv/github-runner/storage/agent-relay");
   const filesystem = args.find((value) => value.startsWith("permissions.agent.filesystem="));
   assert.ok(filesystem);
   assert.match(filesystem, /"\/home\/user"="deny"/);
   assert.match(filesystem, /"\/srv\/github-runner\/storage\/agent-relay"="deny"/);
   assert.match(filesystem, /"\/opt\/rust"="read"/);
-  assert.match(filesystem, /"\/srv\/github-runner\/storage\/docker-socket"="write"/);
-  assert.doesNotMatch(filesystem, /docker\.sock"="write"/);
   assert.doesNotMatch(filesystem, /"\/runner\/_work"="deny"/);
   assert.match(filesystem, /"\/runner\/_work\/repository\/repository"="write"/);
   assert.match(filesystem, /"\/runner\/_work\/repository\/repository\/\.git"="read"/);

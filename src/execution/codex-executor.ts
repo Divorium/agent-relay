@@ -19,8 +19,6 @@ export interface JobCodex {
 export interface KillableProcess { pid?: number; kill(signal: "SIGTERM" | "SIGKILL"): unknown; }
 export type ProcessGroupKiller = (pid: number, signal: "SIGTERM" | "SIGKILL") => unknown;
 
-export const DOCKER_SOCKET_DIRECTORY = "/srv/github-runner/storage/docker-socket";
-
 const discardingTranscript: TranscriptSink = {
   async write() {},
   async sync() {},
@@ -60,7 +58,6 @@ export function createCodexArgs(
     permission("/opt/rust", "read"),
     permission("/tmp", "deny"),
     permission("/var/tmp", "deny"),
-    permission(DOCKER_SOCKET_DIRECTORY, "write"),
     permission(resolve(runtimeRoot), "write"),
     permission(resolvedWorkspace, "write"),
     permission(join(resolvedWorkspace, ".git"), "read"),

@@ -33,7 +33,6 @@
   loop:
     - "{{ agent_relay_runner_root }}"
     - "{{ agent_relay_runner_home }}"
-    - "{{ agent_relay_docker_socket_root }}"
 
 - name: Create runner workspace
   ansible.builtin.file:

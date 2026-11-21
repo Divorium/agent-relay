@@ -120,10 +120,8 @@ exec 9>&-
 
 export CODEX_BINARY="$binary" CODEX_INSTALL_ROOT="$prefix" CODEX_HOME="$job_root/auth"
 printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
-login_flag='--with-api-key'
-[[ "$token" != at-* ]] || login_flag='--with-access-token'
 printf '%s' "$token" | env -i PATH="$PATH" HOME="$job_root/home" CODEX_HOME="$CODEX_HOME" \
-  "$binary" login "$login_flag"
+  "$binary" login --with-access-token
 unset token
 [[ -f "$CODEX_HOME/auth.json" && ! -L "$CODEX_HOME/auth.json" ]] || {
   echo 'Codex did not create job-local authentication' >&2; exit 1;

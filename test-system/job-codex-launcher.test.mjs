@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile, chmod, symlink } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -9,24 +8,19 @@ import { tmpdir } from 'node:os';
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'relay-job-'));
   const source = join(root, 'relay');
-  for (const directory of ['scripts', 'config']) await mkdir(join(source, directory), { recursive: true });
-  for (const file of ['codex-run', 'toolchain-environment.sh', 'host-config.sh'])
+  for (const directory of ['scripts']) await mkdir(join(source, directory), { recursive: true });
+  for (const file of ['codex-run', 'toolchain-environment.sh'])
     await cp(join(process.cwd(), 'scripts', file), join(source, 'scripts', file));
-  const socketDir = join(root, 'socket'), home = join(root, 'runner-home'), auth = join(root, 'auth');
+  const home = join(root, 'runner-home'), auth = join(root, 'auth');
   const install = join(root, 'tools'), state = join(root, 'state');
-  for (const directory of [socketDir, home, auth, install, state]) await mkdir(directory, { mode: 0o700 });
+  for (const directory of [home, auth, install, state]) await mkdir(directory, { mode: 0o700 });
   await mkdir(join(install, 'bin'));
-  await writeFile(join(auth, 'auth.json'), '{"synthetic":true}\n', { mode: 0o600 });
-  const config = JSON.parse(await readFile('config/runner-host.json', 'utf8'));
-  config.docker_socket_path = join(socketDir, 'docker.sock');
-  await writeFile(join(source, 'config', 'runner-host.json'), JSON.stringify(config));
-  const server = createServer();
-  await new Promise((resolve, reject) => { server.on('error', reject); server.listen(config.docker_socket_path, resolve); });
+  await writeFile(join(auth, 'auth.json'), '{"synthetic":true}\\n', { mode: 0o600 });
   const binary = join(install, 'bin', 'codex'), record = join(root, 'record');
-  await writeFile(binary, `#!/bin/bash\nset -eu\nprintf '%s\\n' "$CODEX_HOME" "$DOCKER_HOST" "$NPM_CONFIG_CACHE" "\${GITHUB_TOKEN-unset}" > '${record}'\nexit "\${1:-0}"\n`, { mode: 0o700 });
+  await writeFile(binary, `#!/bin/bash\nset -eu\nprintf '%s\\n' "$CODEX_HOME" "$NPM_CONFIG_CACHE" "\${GITHUB_TOKEN-unset}" > '${record}'\nexit "\${1:-0}"\n`, { mode: 0o700 });
   const env = { ...process.env, HOME: home, CODEX_RUNTIME_ROOT: state, CODEX_BINARY: binary,
     CODEX_HOME: auth, CODEX_INSTALL_ROOT: install, GITHUB_TOKEN: 'synthetic-github-token' };
-  return { root, source, home, auth, binary, install, state, record, env, server };
+  return { root, source, home, auth, binary, install, state, record, env };
 }
 async function run(f, env = f.env, args = []) {
   return await new Promise((resolve, reject) => {
@@ -38,7 +32,7 @@ async function run(f, env = f.env, args = []) {
     child.on('close', (code) => resolve({ code, stdout, stderr }));
   });
 }
-async function close(f) { await new Promise((resolve) => f.server.close(resolve)); await rm(f.root, { recursive: true, force: true }); }
+async function close(f) { await rm(f.root, { recursive: true, force: true }); }
 
 test('selected CLI runs without global Codex or persistent host login and cleans tool state', async () => {
   const f = await fixture();
@@ -47,9 +41,8 @@ test('selected CLI runs without global Codex or persistent host login and cleans
     assert.equal(result.code, 0, result.stderr);
     const record = (await readFile(f.record, 'utf8')).trim().split('\n');
     assert.equal(record[0], f.auth);
-    assert.equal(record[1], `unix://${join(f.root, 'socket', 'docker.sock')}`);
-    assert.ok(record[2].startsWith(`${f.state}/run.`));
-    assert.equal(record[3], 'unset');
+    assert.ok(record[1].startsWith(`${f.state}/run.`));
+    assert.equal(record[2], 'unset');
     assert.deepEqual(await readdir(f.state), []);
     assert.equal(await readFile(join(f.auth, 'auth.json'), 'utf8'), '{"synthetic":true}\n');
   } finally { await close(f); }

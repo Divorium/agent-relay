@@ -4,7 +4,6 @@ import { chmod, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
-import { createServer } from "node:net";
 
 function runProcess(command: string, args: string[], options: Record<string, unknown>): Promise<{ status: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -35,19 +34,11 @@ async function createFakeCommand(directory: string, name: string, output?: strin
 async function copyToolchainProfile(targetDirectory: string): Promise<void> {
   await writeFile(join(targetDirectory, "toolchain-environment.sh"), await readFile(join(process.cwd(), "scripts", "toolchain-environment.sh"), "utf8"), { mode: 0o600 });
 }
-async function prepareLauncherRuntime(root: string): Promise<{ scripts: string; socketPath: string; closeSocket: () => Promise<void> }> {
-  const scripts = join(root, "scripts"), config = join(root, "config"), socketRoot = join(root, "docker-socket");
-  const socketPath = join(socketRoot, "docker.sock");
-  for (const directory of [scripts, config, socketRoot]) await mkdir(directory, { recursive: true });
+async function prepareLauncherRuntime(root: string): Promise<{ scripts: string }> {
+  const scripts = join(root, "scripts");
+  await mkdir(scripts, { recursive: true });
   await copyToolchainProfile(scripts);
-  await writeFile(join(scripts, "host-config.sh"), await readFile(join(process.cwd(), "scripts", "host-config.sh"), "utf8"), { mode: 0o600 });
-  const hostContract = JSON.parse(await readFile(join(process.cwd(), "config", "runner-host.json"), "utf8")) as Record<string, unknown>;
-  hostContract.base_root = root;
-  hostContract.docker_socket_path = socketPath;
-  await writeFile(join(config, "runner-host.json"), `${JSON.stringify(hostContract, null, 2)}\n`, { mode: 0o600 });
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socketPath, resolve); });
-  return { scripts, socketPath, closeSocket: () => new Promise<void>((resolve, reject) => { server.close((error) => error ? reject(error) : resolve()); }) };
+  return { scripts };
 }
 
 test("codex-run preserves real state and routes tool state into one private runtime", async () => {
@@ -61,7 +52,7 @@ test("codex-run preserves real state and routes tool state into one private runt
   await mkdir(jobHome, { mode: 0o700 });
   await writeFile(join(jobHome, "auth.json"), "job auth\n", { mode: 0o600 });
   await writeFile(auth, "auth\n"); await writeFile(runnerState, "runner\n"); await writeFile(sourceState, "source\n"); await writeFile(unrelatedWorkspace, "workspace\n");
-  const keys = ["HOME", "CODEX_HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "JAVA_HOME", "CARGO_HOME", "RUSTUP_HOME", "GOPATH", "GOCACHE", "NPM_CONFIG_CACHE", "PIP_CACHE_DIR", "GRADLE_USER_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "GIT_CONFIG_GLOBAL", "TMPDIR", "TMP", "TEMP", "DOCKER_CONFIG", "DOCKER_HOST", "TOKEN_MINIFY_RUN_LOG_DIR", "PATH", "GIT_OPTIONAL_LOCKS"];
+  const keys = ["HOME", "CODEX_HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "JAVA_HOME", "CARGO_HOME", "RUSTUP_HOME", "GOPATH", "GOCACHE", "NPM_CONFIG_CACHE", "PIP_CACHE_DIR", "GRADLE_USER_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "GIT_CONFIG_GLOBAL", "TMPDIR", "TMP", "TEMP", "DOCKER_CONFIG", "TOKEN_MINIFY_RUN_LOG_DIR", "PATH", "GIT_OPTIONAL_LOCKS"];
   const print = keys.map((key) => `  printf '${key}=%s\\n' "\${${key}:-}"`).join("\n");
   await writeFile(fakeCodex, `#!/bin/bash\nset -euo pipefail\n{\n${print}\n  printf 'LEAK=%s\\n' "\${LEAK_ME:-}"\n  printf 'ARGS=%s\\n' "$*"\n} > "${invocationLog}"\n`, { mode: 0o700 });
   await chmod(fakeCodex, 0o700);
@@ -88,10 +79,9 @@ test("codex-run preserves real state and routes tool state into one private runt
       assert.match(invocation, new RegExp(`${key}=.*\\/${directory}`));
     }
     assert.match(invocation, /GIT_CONFIG_GLOBAL=\/dev\/null/);
-    assert.match(invocation, new RegExp(`DOCKER_HOST=unix://${escapeRegExp(runtime.socketPath)}`));
     assert.match(invocation, /PATH=\/opt\/java\/openjdk\/bin:\/usr\/local\/go\/bin:\/opt\/rust\/cargo\/bin:\/usr\/local\/bin:\/usr\/bin:\/bin/);
     assert.match(invocation, /GIT_OPTIONAL_LOCKS=0/); assert.match(invocation, /LEAK=\n/); assert.match(invocation, /ARGS=--model test-model/);
-  } finally { await runtime.closeSocket(); await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("codex-run rejects missing authentication before launching Codex", async () => {
@@ -108,7 +98,7 @@ test("codex-run rejects missing authentication before launching Codex", async ()
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Codex authentication must be a private regular file/);
     await assert.rejects(readFile(marker, "utf8"));
-  } finally { await runtime.closeSocket(); await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("host toolchain smoke validates the complete environment without global Codex", async () => {

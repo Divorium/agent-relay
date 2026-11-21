@@ -11,6 +11,6 @@ Agent Relay runs on a dedicated Debian 13 (Trixie) x86-64 systemd host with an o
 
 Codex runs natively through the existing restricted launcher. A workflow selects a pinned CLI version and calls `scripts/run-job-codex` with `CODEX_VERSION`, `CODEX_CACHE_ROOT`, `RUNNER_TEMP` and a step-scoped `CODEX_TOKEN`. Installation is cached outside runner HOME; authentication is never cached. The wrapper passes `CODEX_BINARY`, `CODEX_INSTALL_ROOT` and private `CODEX_HOME` to the launcher. No global CLI or persistent host login is required.
 
-Docker remains at `/srv/github-runner/storage/docker-socket/docker.sock`; `/run/docker.sock` remains available to operators. Users and daemon privileges are unchanged. Access to this daemon remains privileged host trust, not strong isolation.
+Docker Engine remains on the host for independent container-oriented CI, but the native Codex launcher has no Docker socket prerequisite or dedicated socket permission. Agent Relay no longer provisions a second Docker socket. Existing runner account and host Docker group membership are unchanged.
 
 Codex output is normalized into Actions-safe `[codex]` lines, redacted and streamed. `${GITHUB_OUTPUT}` carries workflow outputs only. Exit zero requires at least one completed command or non-empty file-change event. Trusted finalization owns commits and pushes. No public artifact upload is added.

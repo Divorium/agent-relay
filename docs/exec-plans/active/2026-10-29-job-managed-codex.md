@@ -1,11 +1,11 @@
 # Run the existing native Codex launcher with a job-selected CLI
 
-This living ExecPlan follows `.agent/PLANS.md`. The user approved native execution on the existing self-hosted runner, workflow-owned installation, reusable CLI cache, temporary authentication, existing Docker access and trusted finalization. No new service or coordinator is authorized.
+This living ExecPlan follows `.agent/PLANS.md`. The user approved native execution on the existing self-hosted runner, workflow-owned installation, reusable CLI cache, temporary authentication and trusted finalization. The 2026-11-21 user decision supersedes the former Docker-socket requirement. No new service or coordinator is authorized.
 
 ## Purpose / Big Picture
 
 
-A workflow selects Codex without an Ansible deployment or persistent host login. The existing Agent Relay CLI runs it natively with the previous filesystem policy, Docker endpoint, output normalization and timeout handling. The workflow chooses version/credentials; the setup helper implements their bounded cache and authentication lifecycle. Monify integrates that formal CLI in its separate dependent PR.
+A workflow selects Codex without an Ansible deployment or persistent host login. The existing Agent Relay CLI runs it natively with the non-Docker filesystem policy, output normalization and timeout handling. The workflow chooses version/credentials; the setup helper implements their bounded cache and authentication lifecycle. Monify integrates that formal CLI in its separate dependent PR.
 
 ## Progress
 
@@ -24,6 +24,8 @@ A workflow selects Codex without an Ansible deployment or persistent host login.
 ## Surprises & Discoveries
 
 
+2026-11-21: The native CLI still contained a socket preflight, a sandbox socket-directory grant, and Ansible provisioning for an extra listener. The user rejected that dependency. The corresponding implementation, fixtures and current documentation are being reconciled; live acceptance and CI remain open.
+
 The original launcher hard-coded `/usr/local/bin/codex` and host HOME authentication; the environment factory discarded job inputs. Both layers now use an explicit workflow contract. The prior detached process also needed signal handling to prevent abandoned execution on runner cancellation.
 
 The first live consumer proof failed because the cache was below sandbox-denied HOME; RUNNER_TOOL_CACHE works without relaxing that denial. Security review exposed cache substitution and PR-selected credentialed helper risks, followed by inherited interpreter PATH. Trusted hash validation and immutable helper selection address the first two; the latest workflow explicitly selects its shell and resets interpreter environment.
@@ -37,7 +39,9 @@ The previously recorded `0.164.0/linux-x64` SHA-256 tree digest had 66 hexadecim
 ## Decision Log
 
 
-Retain the existing runner account and Docker privileges. This is not a new host isolation design. Workflow inputs select a reviewed runtime, pinned CLI and private authentication; no model output selects executable trust. The supported setup helper is an existing-runtime CLI boundary, not a new service. Installation ownership remains with workflow configuration, not Ansible.
+2026-11-21 user decision: Codex is installed per workflow, authenticates using `CODEX_TOKEN` as an access token, and runs natively on a self-hosted runner without a Docker socket dependency. Retire the dedicated Agent Relay socket override; leave Docker Engine for independent CI workloads. No API-key fallback is authorized.
+
+Retain the existing runner account and Docker Engine for independent CI jobs, but remove the dedicated socket configuration from the native Codex launcher and host role. This is not a new host isolation design. Workflow inputs select a reviewed runtime, pinned CLI and private authentication; no model output selects executable trust. The supported setup helper is an existing-runtime CLI boundary, not a new service. Installation ownership remains with workflow configuration, not Ansible.
 
 Integrity pins are reviewed with the runtime and stored outside the writable binary cache. Version output is not authentication of an executable. Credentialed steps must use absolute shells, a fixed trusted PATH and no inherited BASH_ENV/ENV/NODE_OPTIONS. Do not broaden user/sudo/Docker permissions or expose GitHub write tokens to model commands.
 
@@ -51,21 +55,21 @@ Native execution, warm cache, real Docker and synthetic sandbox denials were obs
 ## Context and Orientation
 
 
-`runner/run-codex.mjs` invokes compiled `src/run-codex.ts`; `src/execution/codex-executor.ts` owns clean environment, permissions and process lifecycle. `scripts/codex-run` validates inputs/socket and removes private tool state. `scripts/run-job-codex` owns versioned cache, leases, login and authentication cleanup. `scripts/codex-cache-digest.mjs` checks installations against `config/codex-integrity.json`. Host provisioning remains in `ansible/roles/agent_relay_host/tasks/toolchains.yml`; `runner/finalize.sh` remains the trusted Git writer.
+`runner/run-codex.mjs` invokes compiled `src/run-codex.ts`; `src/execution/codex-executor.ts` owns clean environment, permissions and process lifecycle. `scripts/codex-run` validates job-selected inputs without checking for Docker sockets and removes private tool state. `scripts/run-job-codex` owns versioned cache, leases, login and authentication cleanup. `scripts/codex-cache-digest.mjs` checks installations against `config/codex-integrity.json`. Host provisioning remains in `ansible/roles/agent_relay_host/tasks/toolchains.yml`; `runner/finalize.sh` remains the trusted Git writer.
 
 ## Plan of Work
 
 
-P1 implements and tests the explicit native CLI/environment contract in `src/run-codex.ts`, `src/execution/codex-executor.ts`, `scripts/codex-run` and `scripts/run-job-codex`. Preserve previous sandbox rules and no raw credentials in the child environment. Cache only installed software, not authentication. Validate integrity before any cached execution; scope cleanup to owned paths and hold leases around active versions.
+P1 implements and tests the explicit native CLI/environment contract in `src/run-codex.ts`, `src/execution/codex-executor.ts`, `scripts/codex-run` and `scripts/run-job-codex`. Preserve non-Docker sandbox rules and no raw credentials in the child environment. Cache only installed software, not authentication. Validate integrity before any cached execution; scope cleanup to owned paths and hold leases around active versions.
 
-P2 removes only global Codex installation and corresponding host smoke expectations from Ansible and tests. Do not uninstall arbitrary existing packages, change users, daemon/socket settings, runner registration or other toolchains.
+P2 removes only global Codex installation and corresponding host smoke expectations from Ansible and tests. Do not uninstall arbitrary existing packages, change users, unrelated Docker Engine/containerd settings, runner registration or other toolchains. Retire only the legacy dedicated socket override.
 
 P3 reconciles README, operations/specification and both workflow consumers. Incoming PR code is validated without Codex credentials; credentialed execution uses an immutable independent runtime. Protected interpreter environment is checked directly in tests. Retain failure reporting and never add public artifact uploads.
 
 ## Concrete Steps
 
 
-Working directory: the dedicated Agent Relay feature checkout. Execute `npm ci`, `npm run typecheck`, `npm test`, `npm run check:runtime`, `npm run check:shell`, `npm run check:node-scripts`, and `npm run check:toolchain`. Run `node --test test-system/job-codex-*.test.mjs` for detailed lifecycle diagnostics. Run `npm run check:toolchain` separately for host provisioning diagnosis; do not suppress its Rust failure or let it block the unrelated Codex/application CI gates. Consumer acceptance uses a pinned runtime and real model/Docker commands; report input/runtime hashes, command results and cleanup.
+Working directory: the dedicated Agent Relay feature checkout. Execute `npm ci`, `npm run typecheck`, `npm test`, `npm run check:runtime`, `npm run check:shell`, `npm run check:node-scripts`, and `npm run check:toolchain`. Run `node --test test-system/job-codex-*.test.mjs` for detailed lifecycle diagnostics. Run `npm run check:toolchain` separately for host provisioning diagnosis; do not suppress its Rust failure or let it block the unrelated Codex/application CI gates. Consumer acceptance uses a pinned runtime and real native Codex commands without a Docker socket prerequisite; report input/runtime hashes, command results and cleanup.
 
 P4 removes `check:toolchain` from the Node.js `check` aggregate and its PR-CI job, retaining all actual code/coverage/runtime/shell/Node validation. Add a separate manual `host-toolchain.yml` for complete host diagnostics and a regression test proving both the separation and continued accessibility. Do not modify host settings, toolchain path expectations, or unrelated consumer workflows.
 

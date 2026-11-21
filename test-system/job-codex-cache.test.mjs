@@ -25,7 +25,7 @@ p=prefix/'bin'/'codex'
 p.write_text("""#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1" == --version ]]; then echo "codex-cli VERSION"; exit 0; fi
-if [[ "$1" == login ]]; then IFS= read -r token || true; echo '{}' > "$CODEX_HOME/auth.json"; exit 0; fi
+if [[ "$1" == login ]]; then [[ "$2" == --with-access-token ]] || exit 89; IFS= read -r token || true; echo '{}' > "$CODEX_HOME/auth.json"; exit 0; fi
 exit 99
 """.replace('VERSION',version))
 p.chmod(0o700)
@@ -43,7 +43,7 @@ p.chmod(0o700)
     await writeFile(join(golden, 'bin/codex'), `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1" == --version ]]; then echo "codex-cli ${version}"; exit 0; fi
-if [[ "$1" == login ]]; then IFS= read -r token || true; echo '{}' > "$CODEX_HOME/auth.json"; exit 0; fi
+if [[ "$1" == login ]]; then [[ "$2" == --with-access-token ]] || exit 89; IFS= read -r token || true; echo '{}' > "$CODEX_HOME/auth.json"; exit 0; fi
 exit 99
 `, { mode: 0o700 });
     pins[version] = { [`${process.platform}-${process.arch}`]: await cacheDigest(golden) };

@@ -27,7 +27,7 @@ ansible-playbook \
   "$PWD/playbooks/host.yml"
 ```
 
-The host playbook does not require or read `AGENT_RELAY_GITHUB_CREDENTIAL`. It owns Python bootstrap, system packages/repositories, administrator/runner/builder accounts, secure filesystem roots, Docker/containerd and both sockets, pinned host toolchains, official runner binaries, systemd, managed source checkout, staged runtime compilation/revision marker/atomic activation, and listener lifecycle. It does not install, update, authenticate or uninstall Codex CLI.
+The host playbook does not require or read `AGENT_RELAY_GITHUB_CREDENTIAL`. It owns Python bootstrap, system packages/repositories, administrator/runner/builder accounts, secure filesystem roots, Docker/containerd, pinned host toolchains, official runner binaries, systemd, managed source checkout, staged runtime compilation/revision marker/atomic activation, and listener lifecycle. It does not install, update, authenticate or uninstall Codex CLI.
 
 All host deployment behavior is expressed as Ansible tasks and templates. The host role does not execute an installer script, perform runner registration, call the GitHub runner API, reconcile GitHub labels, or consume a PAT. Ansible owns the checkout and deployment lifecycle; do not manually change managed host paths or Docker systemd drop-ins.
 
@@ -70,13 +70,13 @@ Consumer workflows use [the native job contract](../job-managed-codex.md). Selec
 
 The setup helper installs missing versions atomically, reuses warm versions and retains active-version leases. Job authentication lives in a private temporary `CODEX_HOME`. The restricted launcher receives the selected executable and home without inheriting raw GitHub credentials. Normal failure and handled interruption remove the job's login/tool state. CLI cache remains intentionally; machine loss or SIGKILL may require trusted cleanup of confirmed abandoned state.
 
-The existing dedicated Docker socket remains privileged access to the host daemon. Do not represent the sandbox as full protection against daemon-mediated access. Test scripts must address and clean only their own resources. No global Docker prune is part of CLI setup.
+The native Codex launcher does not require or configure a Docker socket or `DOCKER_HOST`. Docker Engine remains separately managed for other CI jobs. No global Docker prune is part of CLI setup.
 
 ## Deployment behavior
 
 A host reconciliation stops the registered listener before changing packages, container services, toolchains, runner files or runtime files, then waits for `Runner.Worker` to exit. Build/import failure leaves the active runtime unchanged. Activation failure restores `dist.previous` when safe. Runner updates use a checksum-verified stage and temporary backup, preserving `_work` and registration. A handled failure restarts a previously valid listener; a later run retries failed reconciliation. An unregistered host remains stopped.
 
-The host role declares `runner/_work` as a real `github-runner:github-runner` mode `0700` directory. It does not contain compatibility cleanup for the previous symlink layout. Docker keeps `/run/docker.sock` and `/srv/github-runner/storage/docker-socket/docker.sock`; socket changes stop Docker, restart containerd/socket listeners and then restart Docker so `dockerd -H fd://` receives both descriptors.
+The host role declares `runner/_work` as a real `github-runner:github-runner` mode `0700` directory. It does not contain compatibility cleanup for the previous symlink layout. Ansible removes the previous Agent Relay-specific Docker socket override and restarts the packaged Docker socket/service if the drop-in existed. Standard Docker Engine operation for other CI workloads is unchanged.
 
 The Docker storage parent and containerd root remain `root:root` mode `0711`; Docker's data root remains mode `0710`. Per-execution `worker-run` logs live inside the launcher's private runtime, so `/var/lib/codex-token-minify` need not become writable in the model sandbox.
 
@@ -88,15 +88,10 @@ Normally `dist.previous` exists only between rename operations and is deleted af
 
 ```bash
 sudo systemctl status actions.runner.Divorium.gh-runner.service
-sudo systemctl status docker.socket docker.service
-sudo test -S /run/docker.sock
-sudo test -S /srv/github-runner/storage/docker-socket/docker.sock
-sudo -u github-runner -H env \
-  DOCKER_HOST=unix:///srv/github-runner/storage/docker-socket/docker.sock \
-  docker info
+sudo systemctl status docker.service
 ```
 
-Both sockets must exist. The dedicated directory is runner-owned, the socket is `root:docker` mode `0660`, and the runner account belongs to `docker`. When missing or stale, reconcile through `host.yml`; do not symlink `/run/docker.sock`, grant write access to `/run` or edit systemd manually.
+Codex does not require a Docker socket to start. Host Docker problems affecting independent container-oriented CI should be reconciled through `host.yml`, not manual systemd edits.
 
 ## Filesystem layout
 
@@ -109,7 +104,6 @@ Both sockets must exist. The dedicated directory is runner-owned, the socket is 
 /srv/github-runner/storage/build-home
 /srv/github-runner/storage/docker/engine
 /srv/github-runner/storage/docker/containerd
-/srv/github-runner/storage/docker-socket/docker.sock
 /srv/github-runner/storage/.agent-relay-dist-stage
 ```
 

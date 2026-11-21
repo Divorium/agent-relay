@@ -61,13 +61,13 @@ ansible-playbook \
   "$PWD/playbooks/host.yml"
 ```
 
-The playbook connects as `runneradmin` and uses sudo only for host provisioning. `--ask-become-pass` (`-K`) prompts for the sudo password; `-k` prompts for SSH password. No GitHub PAT is required. Host reconciliation directly bootstraps Python, installs packages and pinned host toolchains, creates administrator/runner/builder accounts, configures Docker/containerd and both sockets, drains active workers, stages verified runner binaries and runtime, preserves rollback state, installs systemd, builds as the unprivileged builder and restarts only a registered listener.
+The playbook connects as `runneradmin` and uses sudo only for host provisioning. `--ask-become-pass` (`-K`) prompts for the sudo password; `-k` prompts for SSH password. No GitHub PAT is required. Host reconciliation directly bootstraps Python, installs packages and pinned host toolchains, creates administrator/runner/builder accounts, configures Docker/containerd, removes the legacy Codex socket override, drains active workers, stages verified runner binaries and runtime, preserves rollback state, installs systemd, builds as the unprivileged builder and restarts only a registered listener.
 
 Codex is not installed, updated, authenticated or removed by host provisioning. Existing global installations left by an older release are unused by the new workflow contract. CLI upgrades are made by changing the workflow's exact version, without another host deployment.
 
 Every host run creates one maintenance window on a registered runner: stop the listener, wait for active `Runner.Worker`, reconcile and restart. Handled activation failure restores prior valid state; an interrupted activation is recovered by the next run. `host.yml` does not invoke `install.sh`, read `AGENT_RELAY_GITHUB_CREDENTIAL`, request a registration token, call `config.sh` or reconcile GitHub labels.
 
-Docker keeps `/run/docker.sock` and also receives `/srv/github-runner/storage/docker-socket/docker.sock`. The directory is runner-owned, the socket is `root:docker` mode `0660`; the Codex sandbox allows the dedicated directory but does not turn daemon access into an unprivileged boundary. Docker/containerd storage modes remain unchanged.
+Docker Engine and containerd remain for other CI workloads. Host reconciliation removes the legacy Agent Relay-specific socket override. Native Codex needs neither a Docker socket prerequisite nor `DOCKER_HOST`. Docker/containerd storage modes remain unchanged.
 
 ## Step 2: connect the prepared runner to GitHub
 

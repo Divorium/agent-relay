@@ -19,7 +19,7 @@ There is no Relay HTTP service, polling daemon, separate updater, host installer
 - creates `agent-relay-admin`, `github-runner`, and `agent-relay-builder`;
 - creates and reconciles declared secure directories;
 - configures Docker Engine and containerd data roots;
-- configures `/run/docker.sock` and the dedicated Codex Docker socket;
+- retires the legacy Agent Relay-specific socket override while preserving Docker Engine for other CI jobs;
 - downloads and verifies official GitHub Runner binaries;
 - installs the runner systemd unit from a template;
 - clones or updates the configured repository revision with `umask 0022`;
@@ -56,7 +56,6 @@ A fine-grained PAT needs `Self-hosted runners: Read and write`. A classic PAT ne
 /srv/github-runner/storage/build-home   builder home and temporary build state
 /srv/github-runner/storage/docker/engine
 /srv/github-runner/storage/docker/containerd
-/srv/github-runner/storage/docker-socket/docker.sock
 /srv/github-runner/storage/.agent-relay-dist-stage
 ```
 
@@ -74,24 +73,11 @@ The Docker storage parent and containerd root are `root:root` mode `0711`. The d
 
 Ansible changes only declared host paths and checkout permissions. It declares `/srv/github-runner/storage/runner/_work` as a real runner-owned directory and does not recursively rewrite runner-generated workspace contents, registration state, runner home, Docker data, or activated runtime contents.
 
-## Docker socket boundary
+## Docker Engine and native Codex
 
-Docker starts through `dockerd -H fd://`. The managed `docker.socket` listener set contains:
+The host role retains Docker Engine and containerd for independent CI jobs. On reconciliation it removes the legacy systemd drop-in `/etc/systemd/system/docker.socket.d/agent-relay.conf` and restarts the packaged Docker socket/service if necessary. It no longer configures an Agent Relay-owned dedicated Docker socket.
 
-```text
-/run/docker.sock
-/srv/github-runner/storage/docker-socket/docker.sock
-```
-
-The dedicated directory is `github-runner`-owned mode `0700`. The socket is `root:docker` mode `0660`. When the socket drop-in changes, Ansible stops Docker, restarts the socket unit, and starts Docker so the old daemon cannot retain inherited descriptors during rebinding.
-
-`scripts/codex-run` validates the directory and socket without following symlinks, exposes only the directory as a writable Codex filesystem root, and sets:
-
-```text
-DOCKER_HOST=unix:///srv/github-runner/storage/docker-socket/docker.sock
-```
-
-The launcher also sets `TOKEN_MINIFY_RUN_LOG_DIR` to a `worker-run` directory inside the per-execution private runtime. Neither `/run` nor either socket file is a writable Codex root. Docker-mediated host access is nevertheless outside this filesystem sandbox boundary.
+Codex runs as a native host process. `scripts/codex-run` neither checks for a Docker socket nor configures `DOCKER_HOST`. The Codex filesystem policy does not grant dedicated socket-directory access. The `worker-run` log directory remains private to each invocation.
 
 ## Host toolchains
 
@@ -125,10 +111,10 @@ Codex receives no GitHub push token and must not mutate Git metadata. Activity a
 
 ## Codex boundary
 
-The launcher refuses root execution, validates workflow-selected `CODEX_BINARY`, `CODEX_INSTALL_ROOT` and private `CODEX_HOME`, uses a clean environment, denies host HOME/trusted runtime/general temporary paths to model commands, grants the CLI installation read-only access, keeps authentication denied to model commands and `.git` read-only, and retains selected workspace/tool-state writes, Docker access and network access. Memories are disabled. Exact lifecycle and failure semantics are in [job-managed-codex.md](job-managed-codex.md).
+The launcher refuses root execution, validates workflow-selected `CODEX_BINARY`, `CODEX_INSTALL_ROOT` and private `CODEX_HOME`, uses a clean environment, denies host HOME/trusted runtime/general temporary paths to model commands, grants the CLI installation read-only access, keeps authentication denied to model commands and `.git` read-only, and retains selected workspace/tool-state writes and network access. Memories are disabled. Exact lifecycle and failure semantics are in [job-managed-codex.md](job-managed-codex.md).
 
 ## Validation contract
 
 Self-hosted application CI retains strict TypeScript checking, mandatory 100 percent production line/branch/function coverage, runtime compilation, shell/Node checks, and deployment/connection/activation/PAT-isolation contracts. The complete host toolchain validation remains available as a separate manual diagnostic and is not part of the Codex prerequisite gate. Native cache and launcher tests additionally exercise failure, concurrency, cancellation and cleanup.
 
-Post-deployment acceptance still requires PAT-free host installation, both Docker sockets, Docker access as `github-runner`, correct inventory labels and consumer execution. The native job additionally proves real Codex execution with Docker/Compose, a warm CLI cache, synthetic permission denials and cleaned private state. Successful changed/no-change finalization and exact-SHA application validation remain separate requirements; no host deployment or full E2E pass is inferred from source tests.
+Post-deployment acceptance requires PAT-free host installation, correct inventory labels and consumer execution. Native Codex acceptance proves successful execution without a Docker socket prerequisite, a warm CLI cache, permission boundaries and cleaned private state. Docker-dependent application CI remains a separate concern. Successful changed/no-change finalization and exact-SHA application validation remain separate requirements; no host deployment or full E2E pass is inferred from source tests.

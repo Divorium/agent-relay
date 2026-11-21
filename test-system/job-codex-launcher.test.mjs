@@ -15,7 +15,7 @@ async function fixture() {
   const install = join(root, 'tools'), state = join(root, 'state');
   for (const directory of [home, auth, install, state]) await mkdir(directory, { mode: 0o700 });
   await mkdir(join(install, 'bin'));
-  await writeFile(join(auth, 'auth.json'), '{"synthetic":true}\\n', { mode: 0o600 });
+  await writeFile(join(auth, 'auth.json'), '{"synthetic":true}\n', { mode: 0o600 });
   const binary = join(install, 'bin', 'codex'), record = join(root, 'record');
   await writeFile(binary, `#!/bin/bash\nset -eu\nprintf '%s\\n' "$CODEX_HOME" "$NPM_CONFIG_CACHE" "\${GITHUB_TOKEN-unset}" > '${record}'\nexit "\${1:-0}"\n`, { mode: 0o700 });
   const env = { ...process.env, HOME: home, CODEX_RUNTIME_ROOT: state, CODEX_BINARY: binary,

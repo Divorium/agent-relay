@@ -120,7 +120,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Divorium/agent-relay
-          ref: a564da45155a19c3899c162a4a530807d945e8be
+          ref: 1f798237b50d3c5c42a15a34bc1010a9487a4e39
           path: .trusted-codex-runtime
           persist-credentials: false
       - name: Preserve trusted execution runtime

@@ -100,35 +100,19 @@ test("a pull request with multiple active ExecPlans remains an error", async () 
   }
 });
 
-test("the Codex workflow bypasses the deployed resolver only for a diff-proven missing plan", async () => {
+test("the Codex workflow skips only a diff-proven missing plan and keeps failure cleanup", async () => {
   const workflow = await readFile(join(repositoryRoot, ".github", "workflows", "codex.yml"), "utf8");
   assert.match(workflow, /No active ExecPlan was found in this pull request\. Codex execution was skipped\./u);
-  assert.match(
-    workflow,
-    /- name: Detect missing pull-request ExecPlan[\s\S]*git diff --name-only --diff-filter=AM[\s\S]*docs\/exec-plans\/active\/\*\.md/u,
-  );
-  assert.match(
-    workflow,
-    /if: github\.event_name != 'pull_request' \|\| steps\.plan_diff\.outputs\.plan_found != 'false'/u,
-  );
-  assert.match(
-    workflow,
-    /if: steps\.plan_diff\.outputs\.plan_found == 'false' \|\| steps\.plan\.outputs\.plan_found == 'false'/u,
-  );
-  assert.match(
-    workflow,
-    /if: steps\.plan_diff\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != ''\n        continue-on-error: true/u,
-  );
-  assert.match(
-    workflow,
-    /always\(\) && steps\.plan_diff\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != ''/u,
-  );
-  assert.match(
-    workflow,
-    /steps\.plan_diff\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != '' && steps\.codex\.outcome == 'failure'/u,
-  );
-  assert.match(
-    workflow,
-    /steps\.plan_diff\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != '' && steps\.codex\.outcome == 'success'/u,
-  );
+  assert.match(workflow, /- name: Detect missing pull-request ExecPlan[\s\S]*git diff --name-only --diff-filter=AM[\s\S]*docs\/exec-plans\/active\/\*\.md/u);
+  assert.match(workflow, /if: github\.event_name != 'pull_request' \|\| steps\.plan_diff\.outputs\.plan_found != 'false'/u);
+  assert.match(workflow, /if: steps\.plan_diff\.outputs\.plan_found == 'false' \|\| steps\.plan\.outputs\.plan_found == 'false'/u);
+  assert.match(workflow, /if: steps\.plan_diff\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != ''\n        continue-on-error: true/u);
+  assert.match(workflow, /- name: Fail when Codex failed\n        if: \$\{\{ steps\.codex\.outcome == 'failure' \}\}\n        run: exit 1/u);
+  assert.match(workflow, /steps\.plan_diff\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_found != 'false' && steps\.plan\.outputs\.plan_path != '' && steps\.codex\.outcome == 'success'/u);
+  const cleanup = workflow.split('- name: Remove owned execution state')[1]?.split('- name: Fail when finalization failed')[0] ?? '';
+  assert.match(cleanup, /if: always\(\)/u);
+  assert.match(cleanup, /\[\[ -n "\$owned" \]\] \|\| continue/u);
+  assert.match(cleanup, /\[\[ ! -L "\$owned" \]\] \|\| exit 1/u);
+  assert.match(cleanup, /Refusing unexpected cleanup path/u);
+  assert.doesNotMatch(workflow, /upload-artifact/u);
 });

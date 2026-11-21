@@ -39,7 +39,7 @@ for state_directory in "${TOOLCHAIN_STATE_SUBDIRECTORIES[@]}"; do
 done
 
 for command in \
-  node npm java javac go rustc cargo rustup tsc codex \
+  node npm java javac go rustc cargo rustup tsc \
   python3 git gcc g++ clang make cmake pkg-config bash curl wget jq \
   zip unzip tar gzip xz zstd file find diff; do
   command -v "${command}" >/dev/null 2>&1 || {
@@ -99,24 +99,3 @@ RUSTUP_HOME="${TOOLCHAIN_RUSTUP_HOME}" CARGO_HOME="${TOOLCHAIN_RUST_CARGO_HOME}"
 git lfs version >/dev/null
 python3 -m pip --version >/dev/null
 python3 -m venv --help >/dev/null
-
-codex --ask-for-approval never exec --help >/dev/null
-smoke_root="$(/usr/bin/mktemp -d "${TMPDIR}/agent-relay-smoke.XXXXXX")"
-cleanup_smoke() {
-  /usr/bin/rm -rf -- "${smoke_root}"
-}
-trap cleanup_smoke EXIT
-
-codex \
-  --ask-for-approval never \
-  -c 'features.memories=false' \
-  -c 'default_permissions="agent"' \
-  -c 'permissions.agent.extends=":workspace"' \
-  -c "permissions.agent.filesystem={\"/tmp\"=\"deny\",\"${smoke_root}\"=\"write\"}" \
-  -c 'permissions.agent.network.enabled=true' \
-  exec --cd "${smoke_root}" --help >/dev/null
-
-codex \
-  --ask-for-approval never \
-  -c "projects={\"${smoke_root}\"={trust_level=\"trusted\"}}" \
-  exec --cd "${smoke_root}" --help >/dev/null

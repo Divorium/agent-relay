@@ -9,7 +9,6 @@
   loop:
     - /etc/docker
     - /etc/containerd
-    - /etc/systemd/system/docker.socket.d
 
 - name: Configure Docker daemon
   ansible.builtin.template:
@@ -33,13 +32,10 @@
     - agent_relay_host restart containerd
     - agent_relay_host restart Docker
 
-- name: Configure Docker sockets
-  ansible.builtin.template:
-    src: docker-socket.conf.j2
-    dest: /etc/systemd/system/docker.socket.d/agent-relay.conf
-    owner: root
-    group: root
-    mode: "0644"
+- name: Remove obsolete Agent Relay Docker socket override
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.socket.d/agent-relay.conf
+    state: absent
   notify: agent_relay_host restart Docker socket
 
 - name: Enable and start containerd

@@ -1,0 +1,113 @@
+# Run the existing native Codex launcher with a job-selected CLI
+
+This living ExecPlan follows `.agent/PLANS.md`. The user approved native execution on the existing self-hosted runner, workflow-owned installation, reusable CLI cache, temporary authentication and trusted finalization. The 2026-11-21 user decision supersedes the former Docker-socket requirement. No new service or coordinator is authorized.
+
+## Purpose / Big Picture
+
+
+A workflow selects Codex without an Ansible deployment or persistent host login. The existing Agent Relay CLI runs it natively with the non-Docker filesystem policy, output normalization and timeout handling. The workflow chooses version/credentials; the setup helper implements their bounded cache and authentication lifecycle. Monify integrates that formal CLI in its separate dependent PR.
+
+## Progress
+
+
+- [x] (2026-10-29 03:10Z) P1 launcher: job-selected executable/home/install root pass through environment sanitization, authentication and CLI permissions are explicit, and cleanup/cancellation tests pass on self-hosted.
+- [x] (2026-10-29 03:10Z) P1 cache: atomic version installation, concurrent reuse, active leases, bounded retention and failure cleanup are implemented. A fake correct-version substituted executable is rejected by a trusted tree digest before execution/login.
+- [x] (2026-10-29 03:10Z) P2: Ansible and host checks no longer install or require global Codex; other host-toolchain checks remain unchanged. CI 40808202330 passes typecheck, unit/coverage, runtime build, shell lifecycle and Node gates, then fails the managed Rust PATH gate.
+- [x] (2026-10-29 03:10Z) P3 documentation/consumers: current host documentation and examples describe workflow-owned Codex; credentialed execution uses an immutable separate runtime, not incoming PR code.
+- [x] (2026-11-21) P3 final review: current-head CI 44868992679 passed TypeScript, coverage, Node, runtime and shell/lifecycle gates; credentialed workflows use absolute Bash, controlled PATH and a reviewed immutable runtime. Final read-only Codex review on `36695188c4663789cd2280b9f52ff8644a387a4a` found no new major issues; all review threads are dispositioned. The surviving-process risk is explicitly owner-accepted, **not technically fixed**.
+- [x] (2026-11-21) Final live acceptance for this launcher prerequisite: dependent Monify #280 at `6e199db552fff7a65605ba68a2294af3e076369b` passed real native model/sandbox, warm cache, credential/Git denials, owned cleanup and browser acceptance in run 44868858596, without requiring Docker socket access. Its pinned Relay runtime `1f798237b50d3c5c42a15a34bc1010a9487a4e39` has identical launcher, executor, runner, digest helper and pin blobs to this PR's implementation head. This is not evidence of Monify's later production finalizer publication or full application Tests.
+
+- [x] (2026-10-31 03:05Z) P4 follow-up: host toolchain smoke is separate from Node.js/Codex CI and remains manually runnable; CI 41162581103 passed at d05f863895e13606e7b700f9cb8bb0005da05538 (134 TypeScript tests, 12 job lifecycle tests, typecheck, runtime build, shell and Node validation). Rust-requiring consumer jobs continue to install their declared toolchain themselves.
+
+- [x] (2026-11-21) P5 verified cache recovery: the retained installer disables package lifecycle scripts and verifies the staged tree digest before `--version` or login; poison-cache, failed install/recovery, active-lease and concurrent-use tests passed in exact-head CI 44868992679. The independent double-install distribution probe passed with expected digest in run 44868992598. Monify native acceptance 44868858596 exercised the pinned runtime with a verified cache hit and real model probe.
+
+## Surprises & Discoveries
+
+
+2026-11-21: The native CLI still contained a socket preflight, a sandbox socket-directory grant, and Ansible provisioning for an extra listener. The user rejected that dependency. The corresponding implementation, fixtures and current documentation are being reconciled; live acceptance and CI remain open.
+
+The original launcher hard-coded `/usr/local/bin/codex` and host HOME authentication; the environment factory discarded job inputs. Both layers now use an explicit workflow contract. The prior detached process also needed signal handling to prevent abandoned execution on runner cancellation.
+
+The first live consumer proof failed because the cache was below sandbox-denied HOME; RUNNER_TOOL_CACHE works without relaxing that denial. Security review exposed cache substitution and PR-selected credentialed helper risks, followed by inherited interpreter PATH. Trusted hash validation and immutable helper selection address the first two; the latest workflow explicitly selects its shell and resets interpreter environment.
+
+Open PR #69 independently removes Codex with Antigravity work; do not import or edit its unrelated changes. The managed Rust gate remains failing on the host and has not been waived or repaired by this feature.
+
+The 2026-10-31 follow-up identified the exact unwanted dependency: `package.json`'s `check` invokes `check:toolchain`; both `.github/workflows/ci.yml` and the Codex preflight consequently fail for a host Rust PATH mismatch although the Agent Relay app is Node.js/TypeScript. The regression test first failed on run 41162168023 for both the combined gate and the missing independent diagnostic.
+
+The previously recorded `0.164.0/linux-x64` SHA-256 tree digest had 66 hexadecimal characters, so the verifier correctly rejected it as a missing trusted pin. On run 41564031016, two credential-free, independent npm installs of the exact `@openai/codex@0.164.0` package on `linux-x64` both produced `62733b1e3e1860df3462f50d3dbc0d20b24cfc5558a7a5dc64230db7991fd9a1`, after `codex --version` verification; the existing cache on Monify runner `gh-runner-02` yielded a different digest (`be9d45aaa1601bf8c52a6a20e11c057983a6c9bedaef9c2e0ea2405b22b54c77`). The pin is now set from the two independent clean installations. Treat the existing cache as invalid, not as an accepted alternate package.
+
+## Decision Log
+
+
+2026-11-21 owner-approved residual risk: untrusted PR validation code may leave a same-principal process on the persistent self-hosted runner and interfere with a later `CODEX_TOKEN`-bearing runtime. The owner **accepts** this exposure and explicitly declines a separate-principal runner, an ephemeral runner, new security architecture or increased host privileges. This P1 is **risk accepted, not fixed**, as recorded in PR conversation comment 7057731337 and review thread PRRT_kwDOTWkJFc66RvUT. Never characterize immutable checkout or SHA pinning as process isolation. All other token, integrity and exact-head validation requirements remain active.
+
+2026-11-21 user decision: Codex is installed per workflow, authenticates using `CODEX_TOKEN` as an access token, and runs natively on a self-hosted runner without a Docker socket dependency. Retire the dedicated Agent Relay socket override; leave Docker Engine for independent CI workloads. No API-key fallback is authorized.
+
+Retain the existing runner account and Docker Engine for independent CI jobs, but remove the dedicated socket configuration from the native Codex launcher and host role. This is not a new host isolation design. Workflow inputs select a reviewed runtime, pinned CLI and private authentication; no model output selects executable trust. The supported setup helper is an existing-runtime CLI boundary, not a new service. Installation ownership remains with workflow configuration, not Ansible.
+
+Integrity pins are reviewed with the runtime and stored outside the writable binary cache. Version output is not authentication of an executable. Credentialed steps must use absolute shells, a fixed trusted PATH and no inherited BASH_ENV/ENV/NODE_OPTIONS. Do not broaden user/sudo/Docker permissions or expose GitHub write tokens to model commands.
+
+The user authorized detaching host-wide Rust/Java/Go diagnostics from Codex validation, while keeping language installation in each consuming application's build/test jobs. Preserve the host smoke script and its tests rather than disabling or weakening it. The manually dispatched host diagnostic remains honest about the provisioned VM, and Monify already installs its Rust toolchain in Rust-dependent jobs.
+
+## Outcomes & Retrospective
+
+
+2026-11-21 execution closure review (Agent Relay launcher prerequisite): exact-head CI 44868992679 and distribution integrity 44868992598 PASS; no unresolved red-team thread; native consumer model and Controls browser acceptance PASS in Monify run 44868858596, pinned to the same runtime file blobs. Retained implementation meets the accepted non-root workflow-managed Codex, access-token-only, socket-free launcher, pinned digest and protected child/runtime contracts. Accepted shared-runner process risk remains, and this closure does **not** validate Monify production finalizer publication or full Tests (separate PR #280). Agent Relay does not currently define a standalone Secret scan workflow: **no Secret scan PASS is claimed**, and any independently required PR-level scan/merge gate must still be satisfied or explicitly scoped before merging. Closing this plan is not a claim that PR #70 has merged or deployed.
+
+Native execution, warm cache, real Docker and synthetic sandbox denials were observed in Monify runs 40804598116 and 40805358355 on earlier runtime revisions. Controls browser E2E also passed separately. Final security-patched acceptance, the complete host gate and final review remain unresolved. Main and the managed host installation have not been changed.
+
+## Context and Orientation
+
+
+`runner/run-codex.mjs` invokes compiled `src/run-codex.ts`; `src/execution/codex-executor.ts` owns clean environment, permissions and process lifecycle. `scripts/codex-run` validates job-selected inputs without checking for Docker sockets and removes private tool state. `scripts/run-job-codex` owns versioned cache, leases, login and authentication cleanup. `scripts/codex-cache-digest.mjs` checks installations against `config/codex-integrity.json`. Host provisioning remains in `ansible/roles/agent_relay_host/tasks/toolchains.yml`; `runner/finalize.sh` remains the trusted Git writer.
+
+## Plan of Work
+
+
+P1 implements and tests the explicit native CLI/environment contract in `src/run-codex.ts`, `src/execution/codex-executor.ts`, `scripts/codex-run` and `scripts/run-job-codex`. Preserve non-Docker sandbox rules and no raw credentials in the child environment. Cache only installed software, not authentication. Validate integrity before any cached execution; scope cleanup to owned paths and hold leases around active versions.
+
+P2 removes only global Codex installation and corresponding host smoke expectations from Ansible and tests. Do not uninstall arbitrary existing packages, change users, unrelated Docker Engine/containerd settings, runner registration or other toolchains. Retire only the legacy dedicated socket override.
+
+P3 reconciles README, operations/specification and both workflow consumers. Incoming PR code is validated without Codex credentials; credentialed execution uses an immutable independent runtime. Protected interpreter environment is checked directly in tests. Retain failure reporting and never add public artifact uploads.
+
+## Concrete Steps
+
+
+Working directory: the dedicated Agent Relay feature checkout. Execute `npm ci`, `npm run typecheck`, `npm test`, `npm run check:runtime`, `npm run check:shell`, `npm run check:node-scripts`, and `npm run check:toolchain`. Run `node --test test-system/job-codex-*.test.mjs` for detailed lifecycle diagnostics. Run `npm run check:toolchain` separately for host provisioning diagnosis; do not suppress its Rust failure or let it block the unrelated Codex/application CI gates. Consumer acceptance uses a pinned runtime and real native Codex commands without a Docker socket prerequisite; report input/runtime hashes, command results and cleanup.
+
+P4 removes `check:toolchain` from the Node.js `check` aggregate and its PR-CI job, retaining all actual code/coverage/runtime/shell/Node validation. Add a separate manual `host-toolchain.yml` for complete host diagnostics and a regression test proving both the separation and continued accessibility. Do not modify host settings, toolchain path expectations, or unrelated consumer workflows.
+
+## Validation and Acceptance
+
+
+Require a non-global CLI through the existing entrypoint, job-local login, preserved model permissions, actual child exit codes, cleaned private state, no Ansible reinstall, trusted integrity checks and credentialed shell selection. Fake-CLI tests establish local boundaries, not model success. A real application browser run and exact consumer SHA must be identified separately. Final acceptance of the combined change is recorded in Monify, not inferred from Relay CI.
+
+## Idempotence and Recovery
+
+
+Write only `feat/job-managed-native-codex`; preserve main and unrelated PR #69. Use expected heads/blob identities for mutations. Cleanup removes only invocation-owned state. Cache retention may remove idle versions only after an exclusive lease, never active versions. No daemon-wide prune or system mutation is permitted. Unhandled machine loss is not guaranteed cleanup; report remaining artifacts truthfully.
+
+## Artifacts and Notes
+
+
+Base: `7ab13b761c81b6efa3004ab2f9d08b03bc6d4cd0`. Relay CI 40805205876 first passed 130 TypeScript tests with 100 percent production coverage and 11 shell lifecycle tests before the known host Rust failure. CI 40808202330 revalidated later code after stale workflow assertions were corrected. Cache-integrity reference was obtained from a clean credential-free installation in run 40806852517. The local poison-cache regression failed before and passed after the digest fix. Final review and live security-patched acceptance remain pending.
+
+The 2026-10-31 CI boundary follow-up passed its focused and complete Node.js CI at `d05f863895e13606e7b700f9cb8bb0005da05538` in run 41162581103. It did not run the independent host diagnostic, which intentionally retains its strict checks and may still report the previously observed managed Rust PATH mismatch. Earlier P3 runtime/security review and Monify downstream acceptance remain independently open.
+
+## Interfaces and Dependencies
+
+
+Workflow setup inputs are CODEX_VERSION, CODEX_CACHE_ROOT, CODEX_TOKEN and RUNNER_TEMP. The launcher receives CODEX_BINARY, CODEX_INSTALL_ROOT and private CODEX_HOME plus existing plan/workspace/transcript inputs. The workflow owns pins, credentials and invocation; Agent Relay supplies the setup/launcher CLI and normalization. Use existing Node, Bash, filesystem/process primitives and flock; add no npm runtime dependency or service.
+
+## Plan Revision Notes
+
+2026-11-03: Follow-up found the independent integrity probe originally used the default process umask, while `scripts/run-job-codex` uses `umask 0077`. File executable mode bits are part of the tree digest, so the default-umask value 62733b1e... was not production-equivalent. The probe now reproduces `umask 0077`, private installation staging and temporary npm cache inside the stage. Run 41565105131 independently installed `@openai/codex@0.164.0` twice and both produced be9d45aaa1601bf8c52a6a20e11c057983a6c9bedaef9c2e0ea2405b22b54c77, matching the native runner cache. The trusted pin has been updated to this verified production-mode digest. The old value remains historical evidence, not an accepted alternate pin; final Monify model/Docker validation remains required.
+
+2026-11-03: A live Monify test revealed a 66-character SHA-256 pin rather than a missing platform. Independent, secret-free double installation in Agent Relay run 41564031016 verified the replacement digest. Added P5 for automatic safe recovery of invalid per-version caches; a pin mismatch must never expose credentials or compromise active leases. No relaxation of the integrity requirement is authorized.
+
+2026-10-31: User-approved follow-up corrects the previously accepted dependency of Codex on the provisioned host Rust PATH. Diagnostic remains intact and separately runnable; Node.js validation and optional application Rust setup are explicitly independent. The prior failed toolchain runs remain valid historical evidence.
+
+
+2026-10-29: Reconciled retained implementation and observed test evidence. Explicitly recorded cache ownership, review corrections and remaining host/final-revision gates without claiming deployment or completion.
+
+2026-11-21: Independent evidence-bound execution review accepted retained launcher implementation with living-state corrections only. Marked final review, cache recovery, and final dependent native acceptance checked with exact run IDs and pinned runtime blob parity. Archived the completed Agent Relay ExecPlan without changing the accepted implementation scope or invoking Codex. Residual risk is recorded as owner-accepted rather than fixed. Secret scan remains unverified at PR level and merger gating is separate.

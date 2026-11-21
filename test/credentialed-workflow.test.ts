@@ -21,7 +21,7 @@ for (const path of [".github/workflows/codex.yml", "examples/github-actions/code
   });
 }
 
-const pinnedRuntimeSha = "1eab0015b834fe3e03d28503dc51b4c717a95aec";
+const pinnedRuntimeSha = "a564da45155a19c3899c162a4a530807d945e8be";
 
 for (const path of [".github/workflows/codex.yml", "examples/github-actions/codex.yml"]) {
   test(`${path} isolates untrusted setup from the credentialed job`, async () => {

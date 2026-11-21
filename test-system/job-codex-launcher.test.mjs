@@ -24,7 +24,7 @@ async function fixture() {
 }
 async function run(f, env = f.env, args = []) {
   return await new Promise((resolve, reject) => {
-    const child = spawn('bash', [join(f.source, 'scripts', 'codex-run'), ...args], { env });
+    const child = spawn(join(f.source, 'scripts', 'codex-run'), args, { env });
     let stdout = '', stderr = '';
     child.stdout.on('data', (data) => { stdout += data; });
     child.stderr.on('data', (data) => { stderr += data; });

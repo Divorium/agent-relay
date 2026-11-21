@@ -77,7 +77,7 @@ if [[ ! -e "$prefix" && ! -L "$prefix" ]]; then
   staging="$(mktemp -d "$cache/.stage-XXXXXXXX")"
   env -i PATH="$PATH" HOME="$job_root/home" \
     npm install --global --prefix "$staging" --cache "$staging/npm-cache" \
-    --no-audit --no-fund "@openai/codex@$CODEX_VERSION"
+    --no-audit --no-fund --ignore-scripts "@openai/codex@$CODEX_VERSION"
   rm -rf -- "$staging/npm-cache"
   node "$script_root/codex-cache-digest.mjs" "$staging" "$CODEX_VERSION" "$platform" >/dev/null
   [[ "$("$staging/bin/codex" --version)" == "codex-cli $CODEX_VERSION" ]] || {

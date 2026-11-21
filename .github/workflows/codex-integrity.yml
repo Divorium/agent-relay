@@ -33,7 +33,7 @@ jobs:
             staging="$root/$attempt"
             mkdir -m 0700 "$staging"
             npm install --global --prefix "$staging" --cache "$staging/npm-cache" \
-              --no-audit --no-fund "@openai/codex@$version"
+              --no-audit --no-fund --ignore-scripts "@openai/codex@$version"
             rm -rf -- "$staging/npm-cache"
             test "$("$staging/bin/codex" --version)" = "codex-cli $version"
             node scripts/codex-cache-digest.mjs "$staging" > "$root/$attempt.sha256"

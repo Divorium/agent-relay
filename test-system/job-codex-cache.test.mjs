@@ -15,7 +15,7 @@ async function fixture() {
   await writeFile(npm, `#!/usr/bin/env python3
 import os, pathlib, sys
 args=sys.argv[1:]
-assert '--global' in args and '--prefix' in args
+assert '--global' in args and '--prefix' in args and '--ignore-scripts' in args
 assert 'CODEX_TOKEN' not in os.environ and 'GITHUB_TOKEN' not in os.environ
 prefix=pathlib.Path(args[args.index('--prefix')+1])
 version=[a for a in args if a.startswith('@openai/codex@')][0].split('@')[-1]

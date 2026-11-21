@@ -21,7 +21,7 @@ for (const path of [".github/workflows/codex.yml", "examples/github-actions/code
   });
 }
 
-const reviewedRuntimeSha = "ea856ecbd2d9787efe513add6de49bf90337694b";
+const pinnedRuntimeSha = "1eab0015b834fe3e03d28503dc51b4c717a95aec";
 
 for (const path of [".github/workflows/codex.yml", "examples/github-actions/codex.yml"]) {
   test(`${path} isolates untrusted setup from the credentialed job`, async () => {
@@ -37,7 +37,7 @@ for (const path of [".github/workflows/codex.yml", "examples/github-actions/code
 
     const beforeTrustedCheckout = codex.split("- name: Checkout reviewed execution runtime")[0] ?? "";
     assert.doesNotMatch(beforeTrustedCheckout, /npm (?:ci|install|run build)/);
-    assert.match(codex, new RegExp(`repository: Divorium/agent-relay\\n          ref: ${reviewedRuntimeSha}`));
+    assert.match(codex, new RegExp(`repository: Divorium/agent-relay\\n          ref: ${pinnedRuntimeSha}`));
 
     const trustedBuild = codex.split("- name: Preserve trusted execution runtime")[1]?.split("- name: Run Codex directly")[0] ?? "";
     assert.match(trustedBuild, /cp -a \.trusted-codex-runtime\/\. "\$runtime\/"/);

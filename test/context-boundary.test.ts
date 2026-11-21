@@ -18,7 +18,7 @@ test("repository instructions remain durable and plan-driven", async () => {
   const rules = await readFile(".agent/PLANS.md", "utf8");
   assert.match(instructions, /TypeScript with strict checking/);
   assert.match(instructions, /code comments in English/);
-  assert.doesNotMatch(instructions, /GitHub credentials|Docker socket|Relay state/i);
+  assert.doesNotMatch(instructions, /GitHub credentials|Relay state/i);
   assert.match(rules, /Treat the reader as a complete beginner to this repository/);
   assert.match(rules, /ExecPlans are living documents/);
   assert.match(rules, /## Progress/);

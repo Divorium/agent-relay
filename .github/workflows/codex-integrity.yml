@@ -35,6 +35,7 @@ jobs:
             npm install --global --prefix "$staging" --cache "$staging/npm-cache" \
               --no-audit --no-fund --ignore-scripts "@openai/codex@$version"
             rm -rf -- "$staging/npm-cache"
+            node scripts/codex-cache-digest.mjs "$staging" "$version" "$platform" >/dev/null
             test "$("$staging/bin/codex" --version)" = "codex-cli $version"
             node scripts/codex-cache-digest.mjs "$staging" > "$root/$attempt.sha256"
             printf 'FRESH_CODEX_SHA256 version=%s platform=%s attempt=%s digest=%s\n' \

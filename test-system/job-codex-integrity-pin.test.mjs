@@ -14,3 +14,13 @@ test('trusted Codex pins are 64-character SHA-256 values for supported platforms
     }
   }
 });
+
+
+test('fresh distribution execution follows trusted integrity verification', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/codex-integrity.yml', import.meta.url), 'utf8');
+  const verification = workflow.indexOf('node scripts/codex-cache-digest.mjs "$staging" "$version" "$platform" >/dev/null');
+  const execution = workflow.indexOf('test "$("$staging/bin/codex" --version)" = "codex-cli $version"');
+  assert.ok(verification >= 0);
+  assert.ok(execution > verification);
+  assert.match(workflow, /--ignore-scripts/);
+});

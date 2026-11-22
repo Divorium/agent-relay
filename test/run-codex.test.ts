@@ -9,7 +9,7 @@ import { deriveCommitMessage, main } from "../src/run-codex.js";
 import { CodexExecutionError } from "../src/execution/errors.js";
 
 const ENVIRONMENT_NAMES = [
-  "GITHUB_WORKSPACE", "GITHUB_OUTPUT", "CODEX_PLAN_PATH", "CODEX_WORKSPACE_ROOT",
+  "CODEX_ALLOW_DOCKER", "GITHUB_WORKSPACE", "GITHUB_OUTPUT", "CODEX_PLAN_PATH", "CODEX_WORKSPACE_ROOT",
   "CODEX_TIMEOUT_MS", "MAX_OUTPUT_BYTES", "MAX_JSONL_RECORD_BYTES", "HOME", "RUNNER_TEMP", "CODEX_TRANSCRIPT_PATH",
 ] as const;
 

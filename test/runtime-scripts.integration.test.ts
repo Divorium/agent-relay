@@ -60,7 +60,7 @@ test("codex-run preserves real state and routes tool state into one private runt
   await chmod(launcher, 0o700);
   try {
     const result = await runProcess("/bin/bash", [launcher, "--model", "test-model"], {
-      cwd: root, env: { ...process.env, HOME: home, CODEX_RUNTIME_ROOT: runtimeRoot, CODEX_BINARY: fakeCodex, CODEX_HOME: jobHome, CODEX_INSTALL_ROOT: root, LEAK_ME: "must-not-cross-boundary" }, stdio: ["ignore", "pipe", "pipe"],
+      cwd: root, env: { ...process.env, CODEX_ALLOW_DOCKER: "", HOME: home, CODEX_RUNTIME_ROOT: runtimeRoot, CODEX_BINARY: fakeCodex, CODEX_HOME: jobHome, CODEX_INSTALL_ROOT: root, LEAK_ME: "must-not-cross-boundary" }, stdio: ["ignore", "pipe", "pipe"],
     });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(await readFile(auth, "utf8"), "auth\n");
@@ -94,7 +94,7 @@ test("codex-run rejects missing authentication before launching Codex", async ()
   await writeFile(launcher, await readFile(join(process.cwd(), "scripts", "codex-run"), "utf8"), { mode: 0o700 });
   await chmod(launcher, 0o700);
   try {
-    const result = await runProcess("/bin/bash", [launcher], { cwd: root, env: { ...process.env, HOME: home, CODEX_RUNTIME_ROOT: runtimeRoot, CODEX_BINARY: fakeCodex, CODEX_HOME: jobHome, CODEX_INSTALL_ROOT: root }, stdio: ["ignore", "pipe", "pipe"] });
+    const result = await runProcess("/bin/bash", [launcher], { cwd: root, env: { ...process.env, CODEX_ALLOW_DOCKER: "", HOME: home, CODEX_RUNTIME_ROOT: runtimeRoot, CODEX_BINARY: fakeCodex, CODEX_HOME: jobHome, CODEX_INSTALL_ROOT: root }, stdio: ["ignore", "pipe", "pipe"] });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Codex authentication must be a private regular file/);
     await assert.rejects(readFile(marker, "utf8"));

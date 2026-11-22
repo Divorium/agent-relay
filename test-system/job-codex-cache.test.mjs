@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
+import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -50,7 +52,7 @@ exit 99
   }
   await writeFile(join(root, 'relay/config/codex-integrity.json'), JSON.stringify(pins));
   await rm(golden, { recursive: true, force: true });
-  const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: temp,
+  const env = { ...process.env, CODEX_ALLOW_DOCKER: '', HOME: home, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: temp,
     CODEX_VERSION: '0.164.0', CODEX_CACHE_ROOT: join(root, 'cache'), CODEX_TOKEN: 'at-synthetic-fixture', GITHUB_TOKEN: 'synthetic-gh' };
   delete env.GITHUB_OUTPUT;
   return { root, bin, temp, home, count, npm, env, wrapper };
@@ -247,4 +249,35 @@ test('failed recovery of an invalid version leaves no runnable cache or job auth
     assert.ok(entries.every((name) => !name.startsWith('.stage-')));
     assert.deepEqual(await readdir(f.temp), []);
   } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+
+test('trusted job boundary rejects invalid Docker access before login and cleans enabled failures', async () => {
+  const f = await fixture();
+  const socketRoot = await mkdtemp(join(process.cwd(), '.d-'));
+  const socketPath = join(socketRoot, 's');
+  const server = createServer((socket) => socket.end());
+  try {
+    const original = await readFile(f.wrapper, 'utf8');
+    assert.ok(original.includes('const path = "/run/docker.sock";'));
+    await writeFile(f.wrapper, original.replace('const path = "/run/docker.sock";', `const path = ${JSON.stringify(socketPath)};`));
+    for (const value of ['0', 'true', ' 1', '1\n', '1']) {
+      const result = await run(f, 'exit 98', { ...f.env, CODEX_ALLOW_DOCKER: value });
+      assert.notEqual(result.code, 0);
+      assert.notEqual(result.code, 98);
+      assert.match(result.stderr, /CODEX_ALLOW_DOCKER|Packaged Docker socket/);
+      await assert.rejects(readFile(f.count));
+      assert.deepEqual(await readdir(f.temp), []);
+    }
+    const disabled = await run(f, 'test -z "\${DOCKER_HOST-}"; test -z "\${CODEX_ALLOW_DOCKER-}"', { ...f.env, CODEX_ALLOW_DOCKER: '', DOCKER_HOST: 'tcp://untrusted:2375' });
+    assert.equal(disabled.code, 0, disabled.stderr);
+    server.listen(socketPath); await once(server, 'listening');
+    const enabled = await run(f, 'test "$DOCKER_HOST" = unix:///run/docker.sock; test "$CODEX_ALLOW_DOCKER" = 1; exit 17', { ...f.env, CODEX_ALLOW_DOCKER: '1', DOCKER_HOST: 'tcp://untrusted:2375' });
+    assert.equal(enabled.code, 17, enabled.stderr);
+    assert.deepEqual(await readdir(f.temp), []);
+  } finally {
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+    await rm(socketRoot, { recursive: true, force: true });
+    await rm(f.root, { recursive: true, force: true });
+  }
 });

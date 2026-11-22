@@ -16,6 +16,9 @@ export function deriveCommitMessage(plan: string): string { const heading = plan
 export async function main(command = CODEX_RUN_COMMAND): Promise<void> {
   const workspaceInput = requiredEnvironment("GITHUB_WORKSPACE"); const githubOutput = requiredEnvironment("GITHUB_OUTPUT"); const planPath = requiredEnvironment("CODEX_PLAN_PATH"); const workspaceRoot = requiredEnvironment("CODEX_WORKSPACE_ROOT"); const home = requiredEnvironment("HOME"); const runnerTemp = requiredEnvironment("RUNNER_TEMP"); const transcriptPath = requiredEnvironment("CODEX_TRANSCRIPT_PATH");
   if (!ACTIVE_PLAN_PATH.test(planPath)) throw new CodexExecutionError("INVALID_PLAN", "CODEX_PLAN_PATH must identify a Markdown file directly under docs/exec-plans/active");
+  const dockerInput = process.env.CODEX_ALLOW_DOCKER;
+  if (dockerInput !== undefined && dockerInput !== "" && dockerInput !== "1") throw new CodexExecutionError("INVALID_CONFIGURATION", "CODEX_ALLOW_DOCKER must be 1 or empty");
+  const allowDocker = dockerInput === "1";
   const timeoutMs = positiveInteger("CODEX_TIMEOUT_MS", 21_600_000); const maxOutputBytes = positiveInteger("MAX_OUTPUT_BYTES", 10_000_000);
   const configuredJsonlBytes = process.env.MAX_JSONL_RECORD_BYTES === undefined ? undefined : positiveInteger("MAX_JSONL_RECORD_BYTES", MIN_JSONL_RECORD_BYTES);
   if (configuredJsonlBytes !== undefined && (configuredJsonlBytes < MIN_JSONL_RECORD_BYTES || configuredJsonlBytes > MAX_JSONL_RECORD_BYTES_HARD_LIMIT)) throw new CodexExecutionError("INVALID_CONFIGURATION", `MAX_JSONL_RECORD_BYTES must be between ${MIN_JSONL_RECORD_BYTES} and ${MAX_JSONL_RECORD_BYTES_HARD_LIMIT}`);
@@ -28,7 +31,7 @@ export async function main(command = CODEX_RUN_COMMAND): Promise<void> {
   await chmod(runtimeRoot, 0o700);
   try {
     const transcript = await createTranscriptSink(runnerTemp, transcriptPath);
-    const executor = new CodexExecutor(command, timeoutMs, maxOutputBytes, home, runtimeRoot, dirname(dirname(command)), 5_000, maxJsonlRecordBytes, job);
+    const executor = new CodexExecutor(command, timeoutMs, maxOutputBytes, home, runtimeRoot, dirname(dirname(command)), 5_000, maxJsonlRecordBytes, job, allowDocker);
     await executor.run(planPath, workspace, transcript);
     await appendFile(githubOutput, `commit_message=${commitMessage}\n`, "utf8");
   } finally {

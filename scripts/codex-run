@@ -49,6 +49,30 @@ if [[ ! -f "$codex_auth" || -L "$codex_auth" \
   exit 1
 fi
 
+# This capability comes only from the trusted workflow, never repository configuration.
+case "${CODEX_ALLOW_DOCKER:-}" in
+  '') unset CODEX_ALLOW_DOCKER DOCKER_HOST ;;
+  1)
+    node --input-type=module -e '
+      import { lstatSync, accessSync, constants } from "node:fs";
+      import { createConnection } from "node:net";
+      const path = "/run/docker.sock";
+      try {
+        if (!lstatSync(path).isSocket()) throw new Error("not a non-symlink Unix socket");
+        accessSync(path, constants.R_OK | constants.W_OK);
+        const socket = createConnection(path);
+        socket.setTimeout(5000);
+        const fail = () => { console.error("Packaged Docker socket is inaccessible"); socket.destroy(); process.exitCode = 2; };
+        socket.once("error", fail);
+        socket.once("timeout", fail);
+        socket.once("connect", () => socket.destroy());
+      } catch { console.error("Packaged Docker socket must be an accessible non-symlink Unix socket"); process.exitCode = 2; }
+    '
+    export CODEX_ALLOW_DOCKER=1 DOCKER_HOST=unix:///run/docker.sock
+    ;;
+  *) echo 'CODEX_ALLOW_DOCKER must be 1 or empty' >&2; exit 2 ;;
+esac
+
 mkdir -p "${CODEX_RUNTIME_ROOT}"
 chmod 0700 "${CODEX_RUNTIME_ROOT}"
 runtime_dir="$(mktemp -d "${CODEX_RUNTIME_ROOT}/run.XXXXXX")"
@@ -64,6 +88,10 @@ toolchain_env+=(
   "TOKEN_MINIFY_RUN_LOG_DIR=${runtime_dir}/worker-run"
   "CODEX_HOME=${CODEX_HOME}"
 )
+
+if [[ "${CODEX_ALLOW_DOCKER:-}" == 1 ]]; then
+  toolchain_env+=("CODEX_ALLOW_DOCKER=1" "DOCKER_HOST=unix:///run/docker.sock")
+fi
 
 child_pid=""
 forward_signal() {

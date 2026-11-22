@@ -70,7 +70,7 @@ Consumer workflows use [the native job contract](../job-managed-codex.md). Selec
 
 The setup helper installs missing versions atomically, reuses warm versions and retains active-version leases. Job authentication lives in a private temporary `CODEX_HOME`. The restricted launcher receives the selected executable and home without inheriting raw GitHub credentials. Normal failure and handled interruption remove the job's login/tool state. CLI cache remains intentionally; machine loss or SIGKILL may require trusted cleanup of confirmed abandoned state.
 
-The native Codex launcher does not require or configure a Docker socket or `DOCKER_HOST`. Docker Engine remains separately managed for other CI jobs. No global Docker prune is part of CLI setup.
+By default the native Codex launcher does not require a Docker socket or configure `DOCKER_HOST`. The checked-out `CODEX_ALLOW_DOCKER=1` opt-in remains pending exact-revision consumer acceptance; its packaged `/run/docker.sock` validation, `/run` permission and root-equivalent authority are documented in [the native job contract](../job-managed-codex.md#optional-docker-access-live-acceptance-pending). Docker Engine remains separately managed for other CI jobs. No global Docker prune is part of CLI setup.
 
 ## Deployment behavior
 
@@ -91,7 +91,7 @@ sudo systemctl status actions.runner.Divorium.gh-runner.service
 sudo systemctl status docker.service
 ```
 
-Codex does not require a Docker socket to start. Host Docker problems affecting independent container-oriented CI should be reconciled through `host.yml`, not manual systemd edits.
+Default Codex startup does not require a Docker socket. Opted-in launches fail before model execution if the packaged socket is unavailable. Host Docker problems should be reconciled through `host.yml`, not manual systemd edits.
 
 ## Filesystem layout
 

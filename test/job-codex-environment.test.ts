@@ -35,3 +35,20 @@ test("job authentication is denied and installed CLI is read-only to commands", 
   assert.ok(policy.includes('"/runner/work/repo/.git"="read"'));
   assert.ok(!args.includes("--dangerously-bypass-approvals-and-sandbox"));
 });
+
+
+test("Docker is absent by default and explicitly enables only the packaged socket parent", () => {
+  for (const enabled of [false, true]) {
+    const env = Reflect.apply(createCodexEnvironment, undefined, ["/runner/home", "/runner/temp/run", job, enabled]);
+    assert.equal(env.DOCKER_HOST, enabled ? "unix:///run/docker.sock" : undefined);
+    assert.equal(env.CODEX_ALLOW_DOCKER, enabled ? "1" : undefined);
+    const args: string[] = Reflect.apply(createCodexArgs, undefined, [
+      "/runner/work/repo", "task", "/runner/home", "/runner/temp/run", "/trusted/relay", job, enabled,
+    ]);
+    const policy = args.find((value) => value.startsWith("permissions.agent.filesystem=")) ?? "";
+    assert.equal(policy.includes('"/run"="write"'), enabled);
+    assert.ok(!policy.includes('"/run/docker.sock"='));
+    assert.ok(policy.includes('"/runner/work/repo/.git"="read"'));
+    assert.ok(policy.includes('"/runner/temp/codex-auth"="deny"'));
+  }
+});

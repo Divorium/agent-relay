@@ -17,7 +17,13 @@ The setup wrapper publishes `CODEX_BINARY`, `CODEX_INSTALL_ROOT` and a private p
 
 ## Cache and temporary state
 
-The CLI cache is native-platform and version scoped. Installation holds a file lock, uses a private staging directory, verifies the exact version and publishes atomically. A warm run verifies and uses the installed executable without npm installation. A shared per-version lease prevents pruning an active installation; retain the selected and one other idle version. An installation failure removes its partial stage.
+The CLI cache is native-platform and version scoped. An exact stable version is necessary but not sufficient: the selected version and platform must have a trusted SHA-256 distribution digest in [`config/codex-integrity.json`](../config/codex-integrity.json) from the reviewed runtime revision. A missing pin fails closed. The currently supported pins are listed in that file; the wrapper recognizes Linux x64 and arm64, but recognizing a platform does not make an unpinned distribution trusted.
+
+Installation holds a file lock, uses a private staging directory and installs with npm lifecycle scripts disabled (`--ignore-scripts`). [`scripts/codex-cache-digest.mjs`](../scripts/codex-cache-digest.mjs) checks the distribution tree against the trusted digest before executing the CLI version check and publishing atomically. The digest includes sorted paths, file contents, executable bits and contained symlink targets; it excludes `.last-used` and npm's installation-local `.package-lock.json`. The wrapper rechecks the digest and version before login, including on a warm cache hit. A cache hit does not perform npm installation.
+
+If an existing installation fails integrity verification, the wrapper acquires an exclusive per-version lease before removing it and attempting a fresh, independently verified installation. If the lease is held, recovery is deferred and the job fails rather than executing or deleting an active untrusted installation. Successful replacement emits `CODEX_CACHE_RECOVERED`; failed installation removes its partial stage. Shared leases prevent pruning active versions; the wrapper retains the selected version and one other recent version and skips removal of leased versions.
+
+The [distribution integrity workflow](../.github/workflows/codex-integrity.yml) verifies two fresh installations against the reviewed pin and compares their digests. A CLI version or platform change needs a corresponding reviewed trusted pin in the selected runtime revision; an observed digest from a failed job is not automatically trusted.
 
 Use `RUNNER_TOOL_CACHE`, not a directory below runner HOME: the existing sandbox denies the latter and may prevent its executable from starting. Authentication, helper logs, package-manager state and private runtime directories are per-execution. The CLI installation is deliberately persistent. Do not cache `auth.json` or a model session alongside the executable.
 

@@ -34,10 +34,10 @@ The host role contains no GitHub credential variable, makes no GitHub runner API
 `playbooks/github-connect.yml` applies `agent_relay_github_connection`. The role:
 
 - requires `AGENT_RELAY_GITHUB_CREDENTIAL` on the control machine;
-- verifies that host installation already produced runner binaries, runtime, and the systemd unit;
+- requires prior successful host installation; the required preflight covers runner binaries, runtime, and the systemd unit, but its current host-preparation check covers only the prepared runner `_work` directory before registration;
 - obtains a short-lived organization registration token through `ansible.builtin.uri`;
 - invokes the official runner `config.sh` as `github-runner`;
-- registers the organization runner only when registration is absent;
+- registers the organization runner when the `.runner` marker is absent;
 - enables and starts the runner listener;
 - reconciles the inventory-selected custom runner labels without changing GitHub-managed labels.
 
@@ -59,7 +59,7 @@ A fine-grained PAT needs `Self-hosted runners: Read and write`. A classic PAT ne
 /srv/github-runner/storage/.agent-relay-dist-stage
 ```
 
-`/srv/github-runner/storage/runner/_work` is a real directory, not a symlink. Runner payload updates use a verified staging directory and a temporary backup while preserving `_work` and registration files. `dist.previous` exists only during a successful swap or interrupted recovery. The runtime revision marker contains the exact 40-character source commit used to build the active `dist` tree.
+`/srv/github-runner/storage/runner/_work` is a real directory, not a symlink. Runner payload updates use a verified staging directory and a temporary backup while preserving `_work` and registration files. `dist.previous` preserves the previous runtime during activation and may remain after interruption; its recovery and cleanup follow the [runtime deployment conditions](#runtime-activation). The runtime revision marker contains the exact 40-character source commit used to build the active `dist` tree.
 
 The Docker storage parent and containerd root are `root:root` mode `0711`. The daemon-owned Docker data root is `root:root` mode `0710`; Ansible declares this post-startup state rather than restoring a conflicting pre-startup mode.
 
@@ -83,19 +83,25 @@ Codex runs as a native host process. `scripts/codex-run` neither checks for a Do
 
 The host role owns Node.js 22, Java 21 under `/opt/java/openjdk`, Go under `/usr/local/go`, Rust under `/opt/rust`, TypeScript, Docker Engine, containerd, Buildx, Compose, Git LFS and native runner dependencies. Pinned values remain in `config/runner-host.json`. Codex is not a host toolchain prerequisite: each workflow selects its exact cached CLI version.
 
-`scripts/toolchain-environment.sh` defines the trusted runtime path layout. GitHub Actions runs on the managed self-hosted runner. The complete provisioned-host diagnostic, `npm run check:toolchain`, runs independently through the manually dispatched `.github/workflows/host-toolchain.yml`. It is not a prerequisite for Codex execution or Agent Relay's Node.js/TypeScript CI. Host provisioning relies on the Ansible installation tasks themselves. When an application requires Rust, its own build/test job installs the repository-selected Rust toolchain (the Monify Rust jobs use `dtolnay/rust-toolchain` with `rust-toolchain.toml`), rather than requiring the Codex launcher to provision a compiler. Host diagnostic failures remain visible when that diagnostic is executed.
+`scripts/toolchain-environment.sh` defines the trusted runtime path layout. GitHub Actions runs on the managed self-hosted runner. The complete provisioned-host diagnostic, `npm run check:toolchain`, runs independently through the manually dispatched `.github/workflows/host-toolchain.yml`. It is not a prerequisite for Codex execution or Agent Relay's Node.js/TypeScript CI. Host provisioning relies on the Ansible installation tasks themselves. When an application requires Rust, its own build/test job installs the repository-selected Rust toolchain, rather than requiring the Codex launcher to provision a compiler. Host diagnostic failures remain visible when that diagnostic is executed.
 
 ## Runner binary and registration state
 
-Runner binary state is independent from GitHub registration state. The host role inspects required executables and reads the installed version through `Runner.Listener --version`. Missing files, unsafe types, ownership drift or a version mismatch cause reconciliation from the checksum-verified archive. A non-directory or symlinked `bin` path is rejected before extraction.
+Runner binary state is independent from GitHub registration state. The required contract checks all required executables, ownership, and version: missing files, unsafe payload types, ownership drift, or a version mismatch require reconciliation from the checksum-verified archive. A non-directory or symlinked `bin` path must be rejected before extraction.
 
-Registration state is absent when `.runner`, `.credentials` and `.credentials_rsaparams` are all absent; complete when all three are runner-owned regular files mode `0600`; otherwise unsafe or partial and rejected without mutation. This permits host preparation before credentials exist and later releases without a PAT.
+The current host role checks `bin/Runner.Listener` as a regular, non-symlink executable and reads its version with `--version` when those checks pass. A missing or unusable listener, a failed version command, or a version mismatch selects runner payload reconciliation. The broader payload/ownership checks and unsafe `bin` rejection are implementation gaps; they are not established by a successful listener version check.
+
+The required registration-state contract is that `.runner`, `.credentials`, and `.credentials_rsaparams` are either all absent or all runner-owned regular files mode `0600`; unsafe or partial state must be rejected without mutation.
+
+Current host preparation uses `.runner` as the marker: it rejects an unsafe marker and, when present, requires both credential files to be regular non-symlink files, then reconciles ownership and mode. It does not inspect orphan credential files when `.runner` is absent. The connection role registers when the marker is absent, then checks all three file types and sets their ownership and mode. Complete absence detection and rejection rather than normalization of unsafe ownership/modes remain implementation gaps. Host preparation and later releases do not require a PAT.
+
+The current checks are defined in [`deploy.yml`](../ansible/roles/agent_relay_host/tasks/deploy.yml), [`deployment-prepare.yml`](../ansible/roles/agent_relay_host/tasks/deployment-prepare.yml), and the [connection role](../ansible/roles/agent_relay_github_connection/tasks/main.yml).
 
 ## Runtime activation
 
 The reconciled checkout commit is compared with the active runtime revision marker. A missing, unsafe or mismatched marker requires a rebuild even when the checkout already points at the desired commit.
 
-On a required deployment, the host role stops an active listener and waits for `Runner.Worker`, reconciles runner payloads, recovers `dist.previous`, removes stale staging, compiles `tsconfig.runtime.json` as `agent-relay-builder`, records the source revision, imports the staged entrypoint without invoking `main`, finalizes root-owned read-only runtime files and atomically swaps `dist`. Failed activation restores the preserved runtime when safe; success removes `dist.previous`. The listener starts only with complete registration.
+After Python bootstrap, the host role stops a registered listener and waits for `Runner.Worker` before its package, toolchain, runner payload, and runtime reconciliation. Runner payload reconciliation is selected by the listener/version checks above. Runtime deployment runs when the entrypoint or revision marker is missing or invalid, or the marker differs from the reconciled source commit. That deployment recovers `dist.previous`, removes stale staging, compiles `tsconfig.runtime.json` as `agent-relay-builder`, records the source revision, imports the staged entrypoint without invoking `main`, finalizes root-owned read-only runtime files and promotes the staged `dist` tree. If the active runtime already matches, the runtime recovery and cleanup tasks are not invoked. Failed activation restores the preserved runtime when safe; success removes `dist.previous`. The listener starts only with complete registration.
 
 Build/import failure leaves the active runtime unchanged. A previously active registered listener is restarted after failure when the old runtime remains valid. An unregistered host remains ready for `github-connect.yml` without an active listener. A workflow may separately use an exact pinned temporary runtime without claiming that the managed host deployment changed.
 

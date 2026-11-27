@@ -65,7 +65,7 @@ The playbook connects as `runneradmin` and uses sudo only for host provisioning.
 
 Codex is not installed, updated, authenticated or removed by host provisioning. Existing global installations left by an older release are unused by the new workflow contract. CLI upgrades require the workflow's exact version and a reviewed runtime revision with the corresponding trusted version/platform digest in `config/codex-integrity.json`, without another host deployment.
 
-Every host run creates one maintenance window on a registered runner: stop the listener, wait for active `Runner.Worker`, reconcile and restart. Handled activation failure restores prior valid state; an interrupted activation is recovered by the next run. `host.yml` does not invoke `install.sh`, read `AGENT_RELAY_GITHUB_CREDENTIAL`, request a registration token, call `config.sh` or reconcile GitHub labels.
+Every host run creates one maintenance window on a registered runner: stop the listener, wait for active `Runner.Worker`, reconcile and restart. Handled activation failure restores prior valid state. Interrupted runtime recovery and cleanup run only when runtime deployment is selected; see [interrupted runtime swap](../docs/operations/README.md#interrupted-runtime-swap). `host.yml` does not invoke `install.sh`, read `AGENT_RELAY_GITHUB_CREDENTIAL`, request a registration token, call `config.sh` or reconcile GitHub labels.
 
 Docker Engine and containerd remain for other CI workloads. Host reconciliation removes the legacy Agent Relay-specific socket override. Native Codex needs neither a Docker socket prerequisite nor `DOCKER_HOST`. Docker/containerd storage modes remain unchanged.
 
@@ -85,7 +85,7 @@ ansible-playbook \
 unset AGENT_RELAY_GITHUB_CREDENTIAL
 ```
 
-A fine-grained token needs organization `Self-hosted runners: Read and write`; a classic PAT needs `admin:org`. The connection role verifies prepared state, validates public inputs, obtains a registration token, invokes the official runner configuration as `github-runner`, starts its listener and reconciles the inventory-owned custom-label set while preserving GitHub-managed labels. API calls use `no_log` and execute on the control machine; no PAT is stored on the target.
+A fine-grained token needs organization `Self-hosted runners: Read and write`; a classic PAT needs `admin:org`. The connection role requires prior successful host preparation and currently checks the runner `_work` directory before registration; it does not separately preflight the binaries, runtime, or systemd unit. It validates public inputs, obtains a registration token, invokes the official runner configuration as `github-runner`, starts its listener and reconciles the inventory-owned custom-label set while preserving GitHub-managed labels. The required preflight and registration-state guarantees, including current implementation gaps, are documented in the [native specification](../docs/native-github-runner-specification.md#runner-binary-and-registration-state). API calls use `no_log` and execute on the control machine; no PAT is stored on the target.
 
 This playbook does not install host components, source, toolchains or runtime and never invokes `host.yml`. Later releases run only `host.yml` without a PAT. Existing registration is preserved.
 

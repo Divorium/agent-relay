@@ -46,7 +46,7 @@ ansible-playbook \
 unset AGENT_RELAY_GITHUB_CREDENTIAL
 ```
 
-A fine-grained PAT needs `Self-hosted runners: Read and write`; a classic PAT needs `admin:org`. This separate playbook verifies prepared host state, obtains a short-lived registration token, registers an absent runner, enables its listener and reconciles inventory-owned labels. It does not install host/runtime components or invoke `host.yml`. API calls are delegated to the control machine and use `no_log`; the PAT and registration token are not stored on the target. Rerun only for connection or label recovery.
+A fine-grained PAT needs `Self-hosted runners: Read and write`; a classic PAT needs `admin:org`. This separate playbook requires prior successful host preparation and currently checks the runner `_work` directory before registration; it does not separately preflight the binaries, runtime, or systemd unit. It obtains a short-lived registration token, registers when the `.runner` marker is absent, enables the listener and reconciles inventory-owned labels. Required registration-state guarantees and current enforcement gaps are described in the [native specification](../native-github-runner-specification.md#runner-binary-and-registration-state). It does not install host/runtime components or invoke `host.yml`. API calls are delegated to the control machine and use `no_log`; the PAT and registration token are not stored on the target. Rerun only for connection or label recovery.
 
 ## Later release sequence
 
@@ -74,7 +74,7 @@ The native Codex launcher does not require or configure a Docker socket or `DOCK
 
 ## Deployment behavior
 
-A host reconciliation stops the registered listener before changing packages, container services, toolchains, runner files or runtime files, then waits for `Runner.Worker` to exit. Build/import failure leaves the active runtime unchanged. Activation failure restores `dist.previous` when safe. Runner updates use a checksum-verified stage and temporary backup, preserving `_work` and registration. A handled failure restarts a previously valid listener; a later run retries failed reconciliation. An unregistered host remains stopped.
+After its Python bootstrap pre-tasks, the host role stops the registered listener and waits for `Runner.Worker` to exit before changing packages, container services, toolchains, runner payloads or runtime files. Build/import failure leaves the active runtime unchanged. Activation failure restores `dist.previous` when safe. Runner updates use a checksum-verified stage and temporary backup, preserving `_work` and registration. A handled failure restarts a previously valid listener; a later run retries failed reconciliation. An unregistered host remains stopped.
 
 The host role declares `runner/_work` as a real `github-runner:github-runner` mode `0700` directory. It does not contain compatibility cleanup for the previous symlink layout. Ansible removes the previous Agent Relay-specific Docker socket override and restarts the packaged Docker socket/service if the drop-in existed. Standard Docker Engine operation for other CI workloads is unchanged.
 
@@ -82,7 +82,7 @@ The Docker storage parent and containerd root remain `root:root` mode `0711`; Do
 
 ## Interrupted runtime swap
 
-Normally `dist.previous` exists only between rename operations and is deleted after successful activation. A later `host.yml` restores it when `dist` is absent or removes it when `dist` exists. Unsafe file types stop recovery rather than widening cleanup.
+Normally `dist.previous` exists only between rename operations and is deleted after successful activation. When `host.yml` selects runtime deployment because the entrypoint or revision marker is missing or invalid, or the source revision changed, the recovery tasks restore `dist.previous` if `dist` is absent or remove it if `dist` exists. If the active runtime already matches, these tasks do not run and a leftover `dist.previous` is not cleaned merely by rerunning `host.yml`. Unsafe directory types stop the recovery tasks rather than widening cleanup.
 
 ## Status
 

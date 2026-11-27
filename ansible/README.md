@@ -63,7 +63,7 @@ ansible-playbook \
 
 The playbook connects as `runneradmin` and uses sudo only for host provisioning. `--ask-become-pass` (`-K`) prompts for the sudo password; `-k` prompts for SSH password. No GitHub PAT is required. Host reconciliation directly bootstraps Python, installs packages and pinned host toolchains, creates administrator/runner/builder accounts, configures Docker/containerd, removes the legacy Codex socket override, drains active workers, stages verified runner binaries and runtime, preserves rollback state, installs systemd, builds as the unprivileged builder and restarts only a registered listener.
 
-Codex is not installed, updated, authenticated or removed by host provisioning. Existing global installations left by an older release are unused by the new workflow contract. CLI upgrades are made by changing the workflow's exact version, without another host deployment.
+Codex is not installed, updated, authenticated or removed by host provisioning. Existing global installations left by an older release are unused by the new workflow contract. CLI upgrades require the workflow's exact version and a reviewed runtime revision with the corresponding trusted version/platform digest in `config/codex-integrity.json`, without another host deployment.
 
 Every host run creates one maintenance window on a registered runner: stop the listener, wait for active `Runner.Worker`, reconcile and restart. Handled activation failure restores prior valid state; an interrupted activation is recovered by the next run. `host.yml` does not invoke `install.sh`, read `AGENT_RELAY_GITHUB_CREDENTIAL`, request a registration token, call `config.sh` or reconcile GitHub labels.
 

@@ -12,7 +12,7 @@ cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml
 $EDITOR inventory/example.ini inventory/group_vars/all.yml
 ```
 
-Replace `inventory/runners.ini` below with the configured inventory filename when different. Use `ansible-core >= 2.18`; SSH host-key checking remains enabled. The host playbook connects as `runneradmin` and asks for the sudo password with `-K`.
+Replace `inventory/example.ini` below with the configured inventory filename when different. Use `ansible-core >= 2.18`; SSH host-key checking remains enabled. The host playbook connects as `runneradmin` and asks for the sudo password with `-K`.
 
 ## Host lifecycle
 
@@ -22,7 +22,7 @@ Replace `inventory/runners.ini` below with the configured inventory filename whe
 ANSIBLE_CONFIG="$PWD/ansible.cfg" \
 ANSIBLE_ROLES_PATH="$PWD/roles" \
 ansible-playbook \
-  --inventory "$PWD/inventory/runners.ini" \
+  --inventory "$PWD/inventory/example.ini" \
   --ask-become-pass \
   "$PWD/playbooks/host.yml"
 ```
@@ -40,7 +40,7 @@ export AGENT_RELAY_GITHUB_CREDENTIAL='github_pat_...'
 ANSIBLE_CONFIG="$PWD/ansible.cfg" \
 ANSIBLE_ROLES_PATH="$PWD/roles" \
 ansible-playbook \
-  --inventory "$PWD/inventory/runners.ini" \
+  --inventory "$PWD/inventory/example.ini" \
   --ask-become-pass \
   "$PWD/playbooks/github-connect.yml"
 unset AGENT_RELAY_GITHUB_CREDENTIAL
@@ -66,9 +66,9 @@ Pass `ANSIBLE_CONFIG` and `ANSIBLE_ROLES_PATH` inline as shown. Do not commit pr
 
 ## Codex installation and authentication
 
-Consumer workflows use [the native job contract](../job-managed-codex.md). Select an exact `CODEX_VERSION`, a reviewed runtime revision and `${RUNNER_TOOL_CACHE}/codex-cli`; pass the existing `CODEX_TOKEN` only to the setup step. No operator `codex login` or global `/usr/local/bin/codex` is needed. A global CLI left by an older deployment is not used and is not destructively removed by a PR test.
+Consumer workflows use [the native job contract](../job-managed-codex.md). Select an exact `CODEX_VERSION`, a reviewed runtime revision containing its trusted distribution digest for the selected platform in `config/codex-integrity.json`, and `${RUNNER_TOOL_CACHE}/codex-cli`; pass the existing `CODEX_TOKEN` only to the setup step. No operator `codex login` or global `/usr/local/bin/codex` is needed. A global CLI left by an older deployment is not used and is not destructively removed by a PR test.
 
-The setup helper installs missing versions atomically, reuses warm versions and retains active-version leases. Job authentication lives in a private temporary `CODEX_HOME`. The restricted launcher receives the selected executable and home without inheriting raw GitHub credentials. Normal failure and handled interruption remove the job's login/tool state. CLI cache remains intentionally; machine loss or SIGKILL may require trusted cleanup of confirmed abandoned state.
+The setup helper verifies the distribution against the reviewed pin before execution, installs missing versions atomically, reuses verified warm versions and retains active-version leases. Job authentication lives in a private temporary `CODEX_HOME`. The restricted launcher receives the selected executable and home without inheriting raw GitHub credentials. Normal failure and handled interruption remove the job's login/tool state. CLI cache remains intentionally; machine loss or SIGKILL may require trusted cleanup of confirmed abandoned state.
 
 The native Codex launcher does not require or configure a Docker socket or `DOCKER_HOST`. Docker Engine remains separately managed for other CI jobs. No global Docker prune is part of CLI setup.
 

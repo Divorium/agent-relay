@@ -101,7 +101,7 @@ Build/import failure leaves the active runtime unchanged. A previously active re
 
 ## Operational sequence
 
-First installation is `host.yml`, then `github-connect.yml`, then consumer acceptance with a workflow-provided `CODEX_TOKEN`. No persistent `codex login` is required. Later host releases run only `host.yml`; `github-connect.yml` is rerun solely for connection/label recovery. CLI upgrades change the consumer's `CODEX_VERSION`, not host provisioning.
+First installation is `host.yml`, then `github-connect.yml`, then consumer acceptance with a workflow-provided `CODEX_TOKEN`. No persistent `codex login` is required. Later host releases run only `host.yml`; `github-connect.yml` is rerun solely for connection/label recovery. CLI upgrades change the consumer's `CODEX_VERSION` and require a reviewed runtime revision with a corresponding trusted version/platform digest in `config/codex-integrity.json`, not host provisioning.
 
 ## GitHub request flow
 
